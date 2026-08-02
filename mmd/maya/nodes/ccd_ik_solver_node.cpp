@@ -6,34 +6,34 @@
 
 #include "ccd_ik_solver_node.h"
 
-#include <maya/MFnIkJoint.h>
-#include <maya/MFnIkHandle.h>
-#include <maya/MFnIkEffector.h>
-#include <maya/MIkHandleGroup.h>
-#include <maya/MFnNumericAttribute.h>
-#include <maya/MFnCompoundAttribute.h>
+#include <maya/MArrayDataBuilder.h>
+#include <maya/MArrayDataHandle.h>
+#include <maya/MDagPath.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
-#include <maya/MGlobal.h>
-#include <maya/MDagPath.h>
+#include <maya/MEulerRotation.h>
+#include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDagNode.h>
-#include <maya/MPlug.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MArrayDataHandle.h>
-#include <maya/MArrayDataBuilder.h>
+#include <maya/MFnIkEffector.h>
+#include <maya/MFnIkHandle.h>
+#include <maya/MFnIkJoint.h>
+#include <maya/MFnNumericAttribute.h>
+#include <maya/MGlobal.h>
+#include <maya/MIkHandleGroup.h>
 #include <maya/MMatrix.h>
+#include <maya/MPlug.h>
+#include <maya/MPoint.h>
+#include <maya/MQuaternion.h>
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
-#include <maya/MQuaternion.h>
-#include <maya/MEulerRotation.h>
-#include <maya/MPoint.h>
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <vector>
-#include <string>
 
 // ===========================================================================
 // Static member definitions
@@ -46,6 +46,26 @@ MObject CCDIKSolverNode::aIkLinkBoneIndex;
 MObject CCDIKSolverNode::aHasIkLinkLimits;
 MObject CCDIKSolverNode::aIkLinkLimitMin;
 MObject CCDIKSolverNode::aIkLinkLimitMax;
+
+// ===========================================================================
+// Fold-boost tuning
+//
+// Pure angular CCD makes only glacial progress when the target is nearly in
+// line with the chain (the classic "straight leg" singularity): the alignment
+// angle per iteration is tiny even when the positional error is large.  In
+// that regime we drive each constrained joint's clamped state toward the fold
+// angle that places the effector at the target's radius from the chain root,
+// so the chain can start folding and CCD takes over once the geometry opens up.
+// ===========================================================================
+namespace
+{
+// Alignment angles (radians) below this are treated as near-degenerate.
+constexpr double kFoldBoostThreshold = 0.035; // ~2.0 deg
+// Only boost while the positional error exceeds this (Maya units).
+constexpr double kFoldMinDistErr = 0.03;
+// Ease this fraction of the way toward the target fold angle per iteration.
+constexpr double kFoldBoostFraction = 0.25;
+} // namespace
 
 // ===========================================================================
 // Constructor / Destructor
@@ -78,7 +98,7 @@ MStatus CCDIKSolverNode::doSolve()
     double maxAngleRad = (limitRadian > 0.0) ? limitRadian : M_PI / 2.0;
 
     // ── Get handle group ─────────────────────────────────────────────
-    MIkHandleGroup *handleGroup = this->handleGroup();
+    MIkHandleGroup* handleGroup = this->handleGroup();
     if (!handleGroup)
         return MS::kSuccess;
 
@@ -93,6 +113,10 @@ MStatus CCDIKSolverNode::doSolve()
     MDagPath startJoint;
     fnHandle.getStartJoint(startJoint);
     MString startJointName = startJoint.fullPathName();
+
+    // ── Chain root position (used by the fold boost) ─────────────────
+    MFnIkJoint startJointFn(startJoint);
+    MPoint startJointPos = startJointFn.rotatePivot(MSpace::kWorld);
 
     // ── Target position ──────────────────────────────────────────────
     MPoint handlePos = fnHandle.rotatePivot(MSpace::kWorld);
@@ -116,7 +140,7 @@ MStatus CCDIKSolverNode::doSolve()
 
     // ── Cache bone indices ───────────────────────────────────────────
     std::unordered_map<std::string, int> boneIdxCache;
-    for (auto &jp : jointPaths)
+    for (auto& jp : jointPaths)
     {
         int bi = getJointPmxBoneIndex(jp);
         boneIdxCache[jp.partialPathName().asChar()] = bi;
@@ -124,6 +148,29 @@ MStatus CCDIKSolverNode::doSolve()
 
     // ── Per-joint plane angle state ──────────────────────────────────
     std::unordered_map<std::string, double> planeAngleState;
+
+    // Initialise the accumulated-angle state from each constrained joint's
+    // CURRENT rotation.  Without this, repeated doSolve() calls (e.g. while
+    // dragging an IK handle, which triggers a fresh solve per move) assume
+    // every joint starts at rest, so the clamped state and the joint's real
+    // rotation drift apart after the first solve — causing the effector to
+    // overshoot the target and, as the drift grows, the hinge to flip and
+    // bend in the wrong direction.
+    for (auto& jp : jointPaths)
+    {
+        int bi = -1;
+        auto itBI = boneIdxCache.find(jp.partialPathName().asChar());
+        if (itBI != boneIdxCache.end())
+            bi = itBI->second;
+        auto limitsIt = limitsMap.find(bi);
+        const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
+        int limitAxis = getSingleAxisIndex(limits);
+        if (limitAxis >= 0)
+        {
+            MFnIkJoint jfn(jp);
+            planeAngleState[jp.partialPathName().asChar()] = getCurrentAxisAngle(jfn, limitAxis);
+        }
+    }
 
     // ── Best-distance tracking ───────────────────────────────────────
     double bestDistance = std::numeric_limits<double>::infinity();
@@ -138,7 +185,7 @@ MStatus CCDIKSolverNode::doSolve()
         if (currDist < tolerance)
             break;
 
-        for (auto &jointPath : jointPaths)
+        for (auto& jointPath : jointPaths)
         {
             MFnIkJoint jfn(jointPath);
             MPoint jpos = jfn.rotatePivot(MSpace::kWorld);
@@ -165,7 +212,7 @@ MStatus CCDIKSolverNode::doSolve()
                 bi = itBI->second;
 
             auto limitsIt = limitsMap.find(bi);
-            const LinkLimit *limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
+            const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
             int limitAxis = getSingleAxisIndex(limits);
 
             if (limitAxis >= 0)
@@ -214,9 +261,33 @@ MStatus CCDIKSolverNode::doSolve()
                         signedAngle = -signedAngle;
                 }
 
-                // Accumulate angle
+                // ── Fold boost (near "straight leg" singularity) ─────
+                // When the alignment angle is tiny but the effector is still
+                // far from the target, the target is nearly in line with the
+                // chain and pure angular CCD only inches forward each pass.
+                // Drive the clamped state toward the fold angle that places
+                // the effector at the target's radius from the chain root so
+                // the chain can start folding; normal CCD takes over once the
+                // geometry opens up (angle grows past the threshold).
                 std::string jpName = jointPath.partialPathName().asChar();
                 double prevAngle = planeAngleState[jpName];
+
+                if (angle < kFoldBoostThreshold && limits)
+                {
+                    MVector distErrVec = effectorPos - handlePos;
+                    if (distErrVec.length() > kFoldMinDistErr)
+                    {
+                        double loMmd = limits->lo[limitAxis];
+                        double hiMmd = limits->hi[limitAxis];
+                        double loMaya = -hiMmd;
+                        double hiMaya = -loMmd;
+                        double tReq = computeFoldAngle(startJointPos, jpos, effectorPos, handlePos);
+                        tReq = std::max(loMaya, std::min(hiMaya, tReq));
+                        signedAngle = (tReq - prevAngle) * kFoldBoostFraction;
+                    }
+                }
+
+                // Accumulate angle
                 double newAngle = prevAngle + signedAngle;
 
                 // Resolve sign ambiguity on first iteration
@@ -310,7 +381,7 @@ MStatus CCDIKSolverNode::doSolve()
 // ===========================================================================
 // Static helpers
 // ===========================================================================
-int CCDIKSolverNode::getJointPmxBoneIndex(const MDagPath &jointPath)
+int CCDIKSolverNode::getJointPmxBoneIndex(const MDagPath& jointPath)
 {
     try
     {
@@ -325,7 +396,7 @@ int CCDIKSolverNode::getJointPmxBoneIndex(const MDagPath &jointPath)
 }
 
 std::unordered_map<int, CCDIKSolverNode::LinkLimit>
-CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode &fnDep)
+CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
 {
     std::unordered_map<int, LinkLimit> result;
     try
@@ -368,7 +439,7 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode &fnDep)
     return result;
 }
 
-int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit *limits)
+int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
 {
     if (!limits)
         return -1;
@@ -400,10 +471,74 @@ int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit *limits)
     return -1;
 }
 
+double CCDIKSolverNode::getCurrentAxisAngle(MFnIkJoint& jfn, int axis)
+{
+    // The solver accumulates rotation into the joint's local rotation via
+    // rotateBy(..., kTransform), so the joint's current rotation around the
+    // constraint axis IS the accumulated angle.  PMX plain bones keep
+    // jointOrient = 0, so the local (parent) frame matches the constraint
+    // frame used by the solver.
+    try
+    {
+        MQuaternion localQuat;
+        jfn.getRotation(localQuat, MSpace::kTransform);
+
+        // Extract the signed angle around the constraint axis.  Because the
+        // constrained joint only ever rotates around its constraint axis,
+        // its local rotation axis is (anti-)parallel to that axis, and
+        // getAxisAngle() gives the rotation angle (radians).
+        MVector quatAxis;
+        double quatAngle;
+        localQuat.getAxisAngle(quatAxis, quatAngle);
+
+        MVector axisDir;
+        if (axis == 0)
+            axisDir = MVector(1.0, 0.0, 0.0);
+        else if (axis == 1)
+            axisDir = MVector(0.0, 1.0, 0.0);
+        else
+            axisDir = MVector(0.0, 0.0, 1.0);
+
+        double ang = (quatAxis * axisDir >= 0.0) ? quatAngle : -quatAngle;
+        // Normalise to [-pi, pi] so the state stays bounded.
+        while (ang > M_PI)
+            ang -= 2.0 * M_PI;
+        while (ang < -M_PI)
+            ang += 2.0 * M_PI;
+        return ang;
+    }
+    catch (...)
+    {
+        return 0.0;
+    }
+}
+
+double CCDIKSolverNode::computeFoldAngle(const MPoint& root, const MPoint& joint,
+                                         const MPoint& effector, const MPoint& target)
+{
+    // Bend angle (0 = straight) that places the effector at the same radius
+    // from the chain root as the target, via the law of cosines on the
+    // root-joint-effector triangle.  Used only as a convergence boost inside
+    // the near-"straight leg" regime; the angular CCD still resolves the
+    // actual direction the effector must swing.
+    const double eps = 1.0e-10;
+    MVector vJoint = joint - root;
+    MVector vShin = effector - joint;
+    double lf = vJoint.length();
+    double ls = vShin.length();
+    if (lf < eps || ls < eps)
+        return 0.0;
+    MVector vTarget = target - root;
+    double dt = vTarget.length();
+    double c = (dt * dt - lf * lf - ls * ls) / (2.0 * lf * ls);
+    c = std::max(-1.0, std::min(1.0, c));
+    return acos(c);
+}
+
 // ===========================================================================
 // Creator / Initializer
 // ===========================================================================
-void *CCDIKSolverNode::creator()
+void* CCDIKSolverNode::creator()
 {
     return new CCDIKSolverNode();
 }

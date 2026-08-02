@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CCD IK solver reliability** — `ccdIKSolverNode` no longer overshoots the IK
+  target or bends hinge joints (e.g. the knee) the wrong way when the target is
+  moved incrementally:
+  - The per-joint angle-limit state is now initialised from each constrained
+    joint's current rotation at the start of every solve, so repeated solves
+    (e.g. dragging an IK handle) no longer drift from the joint's real rotation
+    and accumulate past the angle limits.
+  - A "fold boost" resolves the near-*straight-leg* singularity — when the
+    target is nearly in line with the chain, pure angular CCD stalls and the
+    effector never quite reaches. The solver now folds the chain toward the
+    target's radius from the chain root so it converges even for small raises.
+- Added a regression test reproducing the real leg IK setup
+  (bones 14/15/16 and the model's knee limit) that verifies the knee bends
+  forward, tracks the target, and never overshoots across a full raise sweep.
+
 ## [0.1.0] - 2026-08-01
 
 ### Added
