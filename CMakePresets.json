@@ -1,0 +1,147 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "BUILD_NATIVE_MODULE": "ON"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI (no Maya SDK, tests only)",
+      "description": "Cross-platform CI — builds only unit tests, no Maya SDK needed",
+      "inherits": "base",
+      "cacheVariables": {
+        "BUILD_NATIVE_MODULE": "OFF",
+        "BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "maya2024-debug",
+      "displayName": "Maya 2024 — Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2024",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "maya2024-release",
+      "displayName": "Maya 2024 — Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2024",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "maya2025-debug",
+      "displayName": "Maya 2025 — Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2025",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "maya2025-release",
+      "displayName": "Maya 2025 — Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2025",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "maya2026-debug",
+      "displayName": "Maya 2026 — Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2026",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "maya2026-release",
+      "displayName": "Maya 2026 — Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2026",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "maya2027-debug",
+      "displayName": "Maya 2027 — Debug",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2027",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "maya2027-release",
+      "displayName": "Maya 2027 — Release",
+      "inherits": "base",
+      "cacheVariables": {
+        "MAYA_VERSION": "2027",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ci",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "maya2024-debug",
+      "configurePreset": "maya2024-debug"
+    },
+    {
+      "name": "maya2024-release",
+      "configurePreset": "maya2024-release"
+    },
+    {
+      "name": "maya2025-debug",
+      "configurePreset": "maya2025-debug"
+    },
+    {
+      "name": "maya2025-release",
+      "configurePreset": "maya2025-release"
+    },
+    {
+      "name": "maya2026-debug",
+      "configurePreset": "maya2026-debug"
+    },
+    {
+      "name": "maya2026-release",
+      "configurePreset": "maya2026-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "maya2027-debug",
+      "configurePreset": "maya2027-debug"
+    },
+    {
+      "name": "maya2027-release",
+      "configurePreset": "maya2027-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "maya2026-release",
+      "configuration": "Release",
+      "output": {
+        "verbosity": "verbose",
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

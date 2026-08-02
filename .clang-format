@@ -1,0 +1,35 @@
+# MayaMMD — C++ code formatting configuration
+# LLVM base style with 4-space indent (matching existing code).
+#
+# Usage:
+#   hatch run format-cpp        # format in-place
+#   hatch run format-cpp-check  # dry-run check (CI)
+
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+# Break before braces: attach to namespace/class/function opening
+BreakBeforeBraces: Allman
+
+# Pointer alignment: left (int *ptr)
+PointerAlignment: Left
+
+# Include sorting
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+
+# Spacing
+SpaceAfterCStyleCast: true
+SpaceBeforeAssignmentOperators: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Align trailing comments
+AlignTrailingComments: true
+
+# Allow short functions/lambdas on a single line
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All

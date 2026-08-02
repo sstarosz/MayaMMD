@@ -1,0 +1,309 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Python tests — run the full Python test suite before building
+  # ---------------------------------------------------------------------------
+  test-python:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+      - name: Install system Qt libraries (PySide6 runtime deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0
+
+      - name: Install dev dependencies
+        run: pip install ".[dev]"
+      - name: Check formatting
+        run: ruff format --check mmd tests
+      - name: Check linting
+        run: |
+          if ! ruff check mmd tests; then
+            echo "::warning::Linting issues detected (optional)"
+          fi
+        continue-on-error: true
+      - name: Check types
+        run: |
+          if ! mypy mmd tests; then
+            echo "::warning::Type checking issues detected (optional)"
+          fi
+        continue-on-error: true
+      - name: Run unit tests
+        run: pytest tests/unit_tests tests/integration/core/ --ignore=scripts --ignore=tests/integration/maya
+      - name: Validate version
+        run: |
+          VERSION=$(git describe --tags --match "v[0-9]*" --always --abbrev=7)
+          echo "✓ Version: $VERSION"
+          [ -n "$VERSION" ] || { echo "::error::git describe returned empty"; exit 1; }
+        shell: bash
+      - name: Validate build scripts syntax
+        run: |
+          python -c "import ast; ast.parse(open('scripts/release/build_release.py').read()); print('✓ build_release.py')"
+          python -c "import ast; ast.parse(open('scripts/release/package_release.py').read()); print('✓ package_release.py')"
+          python -c "import ast; ast.parse(open('scripts/release/install.py').read()); print('✓ install.py')"
+        shell: bash
+
+  # ---------------------------------------------------------------------------
+  # Build — one job per Maya version × OS (12 variants)
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (Maya ${{ matrix.maya }}, ${{ matrix.os }})
+    needs: [test-python]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        maya: [2024, 2025, 2026, 2027]
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python build tools
+        run: pip install PySide6
+        shell: bash
+
+      - name: Configure (release preset)
+        run: cmake --preset maya${{ matrix.maya }}-release -DBUILD_PACKAGE=ON
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Build (.mll + assemble release)
+        run: cmake --build out/build/maya${{ matrix.maya }}-release --config Release
+        shell: bash
+
+      - name: Install (assemble release directory)
+        run: cmake --install out/build/maya${{ matrix.maya }}-release --config Release
+        shell: bash
+
+      - name: Upload release variant
+        uses: actions/upload-artifact@v7
+        with:
+          name: variant-maya${{ matrix.maya }}-${{ runner.os }}
+          path: out/install/maya${{ matrix.maya }}-release/MayaMMD-Maya${{ matrix.maya }}-*/
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Package — assemble all 12 variants into a single cross-platform zip
+  # ---------------------------------------------------------------------------
+  package:
+    name: Package release zip
+    needs: build
+    if: always() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Download all build variants
+        uses: actions/download-artifact@v8
+        with:
+          pattern: variant-maya*
+          path: out/install/
+          merge-multiple: true
+
+      - name: List downloaded builds
+        run: find out/install/ -maxdepth 2 -type d | sort
+        shell: bash
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(git describe --tags --match 'v[0-9]*' --always --abbrev=7)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Assemble release zip
+        run: python scripts/release/package_release.py --build-root out/install
+        shell: bash
+
+      - name: Verify release zip
+        run: python scripts/release/verify_artifact.py dist/*.zip
+        shell: bash
+
+      - name: Upload release zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: mayammd-v${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # Dry-run validation (manual dispatch only)
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: Dry-run validation
+    needs: package
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="$(git describe --tags --match 'v[0-9]*' --always --abbrev=7 2>/dev/null || echo 'dev')"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Download release zip
+        uses: actions/download-artifact@v8
+        with:
+          name: mayammd-v${{ steps.version.outputs.version }}
+          path: dist/
+        continue-on-error: true
+
+      - name: Check if zip exists
+        id: check
+        run: |
+          if ls dist/*.zip 2>/dev/null; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Validate release zip
+        if: steps.check.outputs.found == 'true'
+        run: python scripts/release/verify_artifact.py dist/*.zip
+        shell: bash
+
+      - name: Validate release scripts
+        if: steps.check.outputs.found == 'true'
+        run: |
+          for script in build_release package_release install verify_artifact extract_release_notes; do
+            python -c "import ast; ast.parse(open('scripts/release/${script}.py').read()); print('✓ ${script}.py')"
+          done
+        shell: bash
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.check.outputs.found }}" = "true" ]; then
+            echo "✅ Dry-run complete. All builds, packaging, and validation passed."
+          else
+            echo "⚠ Dry-run partial — some builds failed, no zip produced."
+            echo "Check build jobs above for errors."
+          fi
+        shell: bash
+
+  # -------------------------------------------------------------------------
+  # Publish — create GitHub Release and attach the zip
+  # -------------------------------------------------------------------------
+  publish:
+    name: Publish GitHub Release
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Download release zip
+        uses: actions/download-artifact@v8
+        with:
+          name: mayammd-v${{ steps.version.outputs.version }}
+          path: dist/
+        continue-on-error: true
+
+      - name: Check if zip exists
+        id: check
+        run: |
+          if ls dist/*.zip 2>/dev/null; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "::error::Release zip not found — build jobs may have failed"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Check pre-release
+        if: steps.check.outputs.found == 'true'
+        id: prerelease
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Generate release notes
+        if: steps.check.outputs.found == 'true'
+        run: |
+          python scripts/release/extract_release_notes.py "${{ steps.version.outputs.version }}" > release_notes.md
+          echo "Release notes generated"
+        shell: bash
+
+      - name: Create Release
+        if: steps.check.outputs.found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MayaMMD v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            dist/*.zip
+          draft: false
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          generate_release_notes: false

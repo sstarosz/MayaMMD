@@ -1,0 +1,424 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        // ── C++ build ──────────────────────────────────────────────────────
+        {
+            "label": "Build: MayaMMD.mll",
+            "type": "shell",
+            "command": "cmake --build out/build/maya2026-release --config Release --target MayaMMD && cmake --install out/build/maya2026-release --config Release",
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        // ── Maya integration tests via CTest ──────────────────────────────
+        {
+            "label": "Test: All",
+            "type": "shell",
+            "command": "ctest --preset default -L maya",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Bone",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-bone",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Import",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-import",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Morph",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-morph",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: VMD",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-vmd",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: VPD",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-vpd",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Node",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-node",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: CCD",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-ccd",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: CMD",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-cmd",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Multi",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-multi",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Context",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-context",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Pose Tree",
+            "type": "shell",
+            "command": "ctest --preset default -R maya-integration-pose-tree",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        // ── Build + test compound ─────────────────────────────────────────
+        {
+            "label": "Build + Test: All",
+            "type": "shell",
+            "command": "cmake --build out/build/maya2026-release --config Release && cmake --install out/build/maya2026-release --config Release && ctest --preset default -L maya",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        // ── Benchmarks (uses run_benchmarks.py) ─────────────────────────
+        {
+            "label": "Benchmark: Run (prompt suite)",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                ".\\tests\\benchmarks\\run_benchmarks.py",
+                "${input:benchmarkSuite}"
+            ],
+            "group": "test",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Benchmark: Plot Results",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                ".\\scripts\\plot_benchmarks.py",
+                "--output",
+                "test-logs\\benchmarks\\benchmark_report.png"
+            ],
+            "group": "test",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        // ── Maya standalone / debug ───────────────────────────────────────
+        {
+            "label": "Maya: Run standalone test",
+            "type": "shell",
+            "command": "\"C:\\Program Files\\Autodesk\\Maya2026\\bin\\mayapy.exe\" scripts\\maya_standalone_test.py",
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Maya: Run script (prompt)",
+            "type": "shell",
+            "command": "\"C:\\Program Files\\Autodesk\\Maya2026\\bin\\mayapy.exe\"",
+            "args": [
+                "${input:mayapyScriptPath}"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        // ── Python dev tooling ────────────────────────────────────────────
+        {
+            "label": "Format: Python (ruff)",
+            "type": "shell",
+            "command": "ruff format mmd tests",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Format Check: Python (ruff)",
+            "type": "shell",
+            "command": "ruff format --check mmd tests",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint: Python (ruff)",
+            "type": "shell",
+            "command": "ruff check mmd tests",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint Fix: Python (ruff)",
+            "type": "shell",
+            "command": "ruff check --fix mmd tests",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Type Check: Python (mypy)",
+            "type": "shell",
+            "command": "mypy mmd tests",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Python Unit",
+            "type": "shell",
+            "command": "pytest tests/unit_tests tests/integration/core/ --ignore=scripts --ignore=tests/integration/maya",
+            "group": "test",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: Pose Tree (Python)",
+            "type": "shell",
+            "command": "pytest tests/unit_tests/ui/ -v",
+            "group": "test",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Check All: Python",
+            "type": "shell",
+            "command": "ruff format --check mmd tests && ruff check mmd tests && mypy mmd tests && pytest tests/unit_tests tests/integration/core/ --ignore=scripts --ignore=tests/integration/maya",
+            "group": "none",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "focus": true
+            },
+            "problemMatcher": []
+        },
+        // ── C++ dev tooling (requires clang-format / clang-tidy) ──────────
+        {
+            "label": "Format: C++ (clang-format)",
+            "type": "shell",
+            "command": "clang-format -i mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h",
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Format Check: C++ (clang-format)",
+            "type": "shell",
+            "command": "clang-format --dry-run --Werror mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h",
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Lint: C++ (clang-tidy)",
+            "type": "shell",
+            "command": "clang-tidy mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp -- -std=c++17",
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "mayapyScriptPath",
+            "type": "promptString",
+            "description": "Path to the Python script to run with mayapy"
+        },
+        {
+            "id": "benchmarkSuite",
+            "type": "pickString",
+            "description": "Select the benchmark suite to run",
+            "options": [
+                "all",
+                "parse",
+                "pmx-load",
+                "vmd-load",
+                "vmd-parse",
+                "vpd-load",
+                "vpd-parse"
+            ],
+            "default": "all"
+        }
+    ]
+}

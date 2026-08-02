@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting the issue!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: |
+        Describe the problem.
+        If possible include:
+        - Steps to reproduce
+        - What you expected to happen
+        - Screenshots or videos
+    validations:
+      required: true
+
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: Can you reproduce the issue?
+      options:
+        - Always
+        - Sometimes
+        - Only once
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Environment
+
+  - type: input
+    id: maya-version
+    attributes:
+      label: Maya version
+      placeholder: "2024, 2025, 2026, 2027"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Run `MayaMMD()` in the Script Editor.
+      placeholder: "v0.1.0"
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11, Ubuntu 24.04, macOS 15"
+
+  - type: textarea
+    id: file
+    attributes:
+      label: Model or file (if applicable)
+      description: |
+        What file were you loading?
+        If possible, attach it or provide a download link.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages or logs
+      description: Paste any errors from the Script Editor or terminal.
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional information
+      description: Anything else that may help reproduce the issue.

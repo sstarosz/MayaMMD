@@ -1,0 +1,70 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Maya Python: Attach Debugger",
+            "type": "python",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "${workspaceFolder}"
+                }
+            ],
+            "justMyCode": true
+        },
+        {
+            "name": "Maya: Debug standalone test (mayapy)",
+            "type": "python",
+            "request": "launch",
+            "python": "C:\\Program Files\\Autodesk\\Maya2026\\bin\\mayapy.exe",
+            "program": "${workspaceFolder}/scripts/maya/maya_standalone_test.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Maya: Debug current file (mayapy)",
+            "type": "python",
+            "request": "launch",
+            "python": "C:\\Program Files\\Autodesk\\Maya2026\\bin\\mayapy.exe",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Maya: Integration Tests (all)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/tests/integration/run_integration_tests.py",
+            "args": ["all"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Maya: Integration Tests (prompt suite)",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/tests/integration/run_integration_tests.py",
+            "args": ["${input:integrationSuite}"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        }
+    ],
+    "inputs": [
+        {
+            "id": "integrationSuite",
+            "type": "pickString",
+            "description": "Select the Maya integration test suite to run",
+            "options": ["all", "import", "bone", "morph", "vmd", "vpd", "node", "ccd", "cmd", "multi", "context"],
+            "default": "all"
+        }
+    ]
+}

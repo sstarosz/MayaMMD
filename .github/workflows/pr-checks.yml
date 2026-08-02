@@ -1,0 +1,111 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Python — formatting, linting, type checking, unit tests
+  # ---------------------------------------------------------------------------
+  test-python:
+    name: Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system Qt libraries (PySide6 runtime deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0
+
+      - name: Install dev dependencies
+        run: pip install ".[dev]"
+
+      - name: Format check
+        run: ruff format --check mmd tests
+
+      - name: Lint check
+        run: |
+          if ! ruff check mmd tests; then
+            echo "::warning::Linting issues detected (optional)"
+          fi
+        continue-on-error: true
+
+      - name: Type check
+        run: |
+          if ! mypy mmd tests; then
+            echo "::warning::Type checking issues detected (optional)"
+          fi
+        continue-on-error: true
+
+      - name: Unit tests
+        run: pytest tests/unit_tests tests/integration/core/ --ignore=scripts --ignore=tests/integration/maya
+
+      - name: Validate version
+        run: |
+          VERSION=$(git describe --tags --match "v[0-9]*" --always --abbrev=7)
+          echo "✓ Version: $VERSION"
+          [ -n "$VERSION" ] || { echo "::error::git describe returned empty"; exit 1; }
+        shell: bash
+
+      - name: Validate release scripts
+        run: |
+          for script in install build_release package_release; do
+            python -c "import ast; ast.parse(open('scripts/release/${script}.py').read()); print('✓ ${script}.py')"
+          done
+        shell: bash
+
+  # ---------------------------------------------------------------------------
+  # C++ — compile the .mll plugin (no Maya required for compilation)
+  # ---------------------------------------------------------------------------
+  build-cpp:
+    name: C++ Build (${{ matrix.os }})
+    needs: [test-python]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        #Temporary disabled macOS and windows to fix the ci
+        #os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Configure (Maya 2026 SDK)
+        run: |
+          echo "SDK cache: ${MAYAMMD_SDK_CACHE_URL:-(not set)}"
+          cmake --preset maya2026-release
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Build .mll
+        run: cmake --build out/build/maya2026-release --config Release
+        shell: bash

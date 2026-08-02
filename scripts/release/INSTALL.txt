@@ -1,0 +1,138 @@
+MayaMMD — Installation Guide
+===============================
+
+MayaMMD is packaged as a Maya Module. There are two ways to install it.
+
+
+METHOD 1: Drag-and-Drop (Recommended)
+--------------------------------------
+
+1. Locate install.py inside the extracted zip.
+2. Drag install.py onto the Maya viewport.
+3. Click "Install" in the confirmation dialog.
+4. The installer will:
+   - Detect your Maya version and platform.
+   - Copy the module files into the correct modules/ directory.
+   - Write the .mod module description file.
+   - Load the plugin automatically.
+
+That's it! On next Maya restart the plugin will load automatically.
+
+
+METHOD 2: Manual Module Install
+-------------------------------
+
+If the drag-and-drop method doesn't work (e.g. due to security restrictions),
+you can install manually:
+
+1. Inside the zip, find the folder matching your Maya version and OS, e.g.:
+     MayaMMD-Maya2027-Windows/
+
+   Note: Maya 2025 and 2026 share the same package.
+   Look for MayaMMD-Maya2025-2026-<Platform>/ if you're on Maya 2025 or 2026.
+
+2. Copy both of these into your Maya modules directory:
+
+     Source (in zip)                      Destination
+     ─────────────────────────────        ─────────────────────────────────────
+     MayaMMD-Maya2027-Windows/           ~/Documents/maya/2027/modules/
+       ├── MayaMMD.mod            →        (place directly in modules/)
+       └── MayaMMD/               →        (place directly in modules/)
+
+   After copying, your modules/ directory should look like:
+
+     ~/Documents/maya/2027/modules/
+       ├── MayaMMD.mod
+       └── MayaMMD/
+           ├── plug-ins/
+           │   ├── MayaMMD.mll   (C++ native entry point)
+           │   └── mmd/          (Python plugin modules)
+           ├── scripts/          (ready for future use)
+           ├── icons/            (ready for future use)
+           ├── CHANGELOG.md
+           ├── LICENSE.txt
+           └── README.md
+
+3. Restart Maya.
+
+4. Open Windows → Settings/Preferences → Plugin Manager.
+   Find "MayaMMD" in the list and check "Loaded".
+   (It should already appear if the module was installed correctly.)
+
+
+Platform Paths
+--------------
+
+The modules directory location depends on your OS:
+
+  Windows:  C:/Users/<username>/Documents/maya/<version>/modules/
+  Linux:    ~/maya/<version>/modules/
+  macOS:    ~/Library/Preferences/Autodesk/maya/<version>/modules/
+
+Replace <version> with your Maya version (2024, 2025, 2026, 2027, etc.).
+
+
+First-Time Security Warning
+---------------------------
+
+On first install, Maya may show a security warning like:
+
+  "The plug-in 'MayaMMD.mll' has not been added to the trusted
+   plug-in list. Do you want to trust this plug-in?"
+
+Click "Allow" or "Trust". This warning only appears once — after restarting
+Maya it will not show again because the module path is automatically trusted.
+
+
+Troubleshooting
+---------------
+
+  • Plugin doesn't appear in Plugin Manager?
+    → Restart Maya. The module is discovered at startup.
+
+  • "Module not found" or plugin won't load?
+    → Verify that MayaMMD.mod and the MayaMMD/ folder are both present
+      in the correct modules/ directory (see paths above).
+    → Check that MayaMMD.mod contains:
+        + MayaMMD <version> MayaMMD
+      The path "MayaMMD" is relative to the .mod file's location.
+
+  • Maya says the plugin is untrusted?
+    → Open Windows → Settings/Preferences → Plugin Manager,
+      find MayaMMD, and click "Allow" (or add the modules/ path
+      to MAYA_PLUG_IN_PATH in your Maya.env).
+
+  • Plugin loaded but no UI appears?
+    → In the Script Editor, run:
+        from mmd.plugin import show_dockable_widget
+        show_dockable_widget()
+
+  • Other issues?
+    → Restart Maya. This solves most problems after installation.
+
+
+Updating
+--------
+
+To update to a newer version:
+
+  Drag-and-drop method:
+    Drag the new install.py onto Maya. It will automatically replace
+    the old module files and reload the plugin.
+
+  Manual method:
+    1. Delete the old MayaMMD/ folder from your modules/ directory.
+    2. Copy the new MayaMMD/ folder and MayaMMD.mod from the new zip.
+    3. Restart Maya.
+
+  Your user settings and shelf button are preserved across updates.
+
+
+Supported Versions
+------------------
+
+  Maya 2024, 2025, 2026, 2027
+  Windows, Linux, macOS
+
+For more information visit:
+  https://github.com/sstarosz/MayaMMD
