@@ -11,7 +11,6 @@
 # NOTE: No C++ unit tests exist yet. When they are added:
 #   1. Place .cpp test files in tests/
 #   2. Uncomment the add_executable + catch_discover_tests block below
-#   3. Re-enable the CI preset (ci) in CMakePresets.json
 # =========================================================================
 if(BUILD_TESTS)
     include(FetchContent)
@@ -37,9 +36,8 @@ endif()
 # =========================================================================
 # Maya integration tests via CTest (requires Maya SDK + mayapy)
 # =========================================================================
-# Only registered when the native .mll plugin is being built and mayapy
-# can be found alongside the Maya SDK.
-if(BUILD_NATIVE_MODULE AND Maya_FOUND)
+# Only registered when mayapy can be found alongside the Maya SDK.
+if(Maya_FOUND)
     # Find mayapy — the Maya SDK (build/.sdk/) is stripped and doesn't
     # include mayapy, so we also search the real Maya install directory
     # and the system PATH (which has Maya's bin/ via terminal config).
@@ -53,7 +51,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     if(MAYAPY_EXECUTABLE)
         message(STATUS "mayapy: ${MAYAPY_EXECUTABLE}")
         set(_MAYA_INTEGRATION_SUITES
-            import bone morph vmd vpd node ccd cmd multi context pose-tree
+            import bone morph vmd vpd node ccd cmd multi context pose-tree rigidbody
         )
 
         foreach(_suite ${_MAYA_INTEGRATION_SUITES})

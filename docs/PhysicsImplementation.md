@@ -362,7 +362,7 @@ every structural check.
 | `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                             |
 | `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                               |
 | `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                 |
-| `third_party/bullet3/`                                                  | Vendored Bullet 3.25 (static `Bullet` CMake target)                                 |
+| `vcpkg.json`                                                             | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain        |
 | `mmd/maya/pmx/rigid_body_builder.py`                                    | MMD→Maya coord conversion + collision-group color palette                           |
 | `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics builder                                     |
 | `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                               |

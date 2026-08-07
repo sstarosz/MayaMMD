@@ -23,8 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`MPxNode::getCacheSetup` → `MNodeCacheDisablingInfoHelper::setUnsafeNode`),
   so the evaluation manager always re-evaluates it every frame — the one thing
   mayaBullet's built-in solver could not do. Every PMX rigid body and joint is
-  written into the node's `bodies` / `joints` compound arrays; Bullet 3.25 is
-  vendored under `third_party/bullet3/` (static `Bullet` CMake target).
+  written into the node's `bodies` / `joints` compound arrays; Bullet 3.25
+  (float precision) is provided by **vcpkg** (`vcpkg.json`, package `bullet3`,
+  pinned via `builtin-baseline`).
+- **Bullet now comes from vcpkg instead of a vendored source tree.** The
+  ~7,500-file nested clone under `third_party/bullet3/` is gone. The native
+  build auto-activates the vcpkg toolchain from `VCPKG_ROOT` (bootstrap vcpkg
+  once, set `VCPKG_ROOT`) and links Bullet via `find_package(Bullet CONFIG)`
+  (`BulletDynamics` target) — no manual vendoring or `vcpkg install` steps.
+  CI uses `lukka/run-vcpkg` with GHA-cache-backed binary caching. The
+  `rigidbody`
+  integration suite is now registered in the CTest presets too.
 - **`mmd/maya/physics_builder.py` rewritten for the C++ node.** Each PMX rigid
   body is a **visible polygonal guide mesh** (sphere/box/capsule at the PMX rest
   pose, Z-flip + handedness, carrying
