@@ -22,6 +22,7 @@
 #include <maya/MString.h>
 
 #include "maya/nodes/ccd_ik_solver_node.h"
+#include "maya/nodes/mmd_physics_node.h"
 #include "version.hpp"
 
 // ===========================================================================
@@ -36,12 +37,11 @@ static MStatus _run_python_initialization()
     // importlib.reload ensures plugin.py source changes take effect
     // when the .mll is reloaded without restarting Maya (the bare
     // ``import mmd.plugin`` would be a no-op on a cached module).
-    MStatus stat = MGlobal::executePythonCommand(
-        "import sys; "
-        "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
-        "import importlib, mmd.plugin; "
-        "importlib.reload(mmd.plugin); "
-        "mmd.plugin.initializePlugin()");
+    MStatus stat = MGlobal::executePythonCommand("import sys; "
+                                                 "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
+                                                 "import importlib, mmd.plugin; "
+                                                 "importlib.reload(mmd.plugin); "
+                                                 "mmd.plugin.initializePlugin()");
     if (!stat)
     {
         MGlobal::displayWarning("  Python initialization failed — "
@@ -52,12 +52,11 @@ static MStatus _run_python_initialization()
 
 static MStatus _run_python_uninitialization()
 {
-    MGlobal::executePythonCommand(
-        "import sys; "
-        "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
-        "import importlib, mmd.plugin; "
-        "importlib.reload(mmd.plugin); "
-        "mmd.plugin.uninitializePlugin()");
+    MGlobal::executePythonCommand("import sys; "
+                                  "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
+                                  "import importlib, mmd.plugin; "
+                                  "importlib.reload(mmd.plugin); "
+                                  "mmd.plugin.uninitializePlugin()");
     return MS::kSuccess;
 }
 
@@ -80,6 +79,18 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ CCD IK solver registration failed");
 
+    // 1b. Register the native rigid-body physics node (embedded Bullet).
+    //     A normal MPxNode the evaluation manager steps on every time change —
+    //     this is the MMD secondary-movement engine that replaces mayaBullet.
+    {
+        MString classification(MMDPhysicsNode::kNodeClassify);
+        stat = plugin.registerNode(MMDPhysicsNode::kNodeName, MMDPhysicsNode::kTypeId,
+                                   MMDPhysicsNode::creator, MMDPhysicsNode::initialize,
+                                   MPxNode::kDependNode, &classification);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ mmdPhysicsNode registration failed");
+
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
     //    plugin loading, so mmd/ is already importable.
@@ -101,6 +112,7 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     _run_python_uninitialization();
 
     // 2. Deregister C++ nodes and commands
+    plugin.deregisterNode(MMDPhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
 
     return MS::kSuccess;

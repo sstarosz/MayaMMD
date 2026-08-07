@@ -59,6 +59,7 @@ _SUITE_CHOICES = [
     "import",
     "bone",
     "morph",
+    "rigidbody",
     "vmd",
     "vpd",
     "node",

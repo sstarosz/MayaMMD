@@ -114,6 +114,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "import",
             "bone",
             "morph",
+            "rigidbody",
             "vmd",
             "vpd",
             "node",
@@ -197,6 +198,13 @@ def get_morph_tests():
     from tests.integration.maya import test_pmx_morph_integration
 
     return test_pmx_morph_integration._TESTS
+
+
+def get_rigid_body_tests():
+    """Import test_pmx_rigid_body_integration and return its test list."""
+    from tests.integration.maya import test_pmx_rigid_body_integration
+
+    return test_pmx_rigid_body_integration._TESTS
 
 
 def get_node_tests():
@@ -324,6 +332,9 @@ TEST_SUITES: dict[str, SuiteInfo] = {
     ),
     "morph": SuiteInfo(
         "PMX Morph Integration Tests", get_morph_tests, supports_unified=True
+    ),
+    "rigidbody": SuiteInfo(
+        "PMX Rigid Body Tests", get_rigid_body_tests, supports_unified=True
     ),
     "vmd": SuiteInfo(
         "VMD Integration Tests",

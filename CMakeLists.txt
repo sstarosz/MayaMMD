@@ -154,14 +154,22 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     #   - mmd/MayaMMD.cpp               → entry point (initializePlugin/uninitializePlugin)
     #   - mmd/maya/nodes/ccd_ik_solver_node.h/cpp  → C++ CCD IK solver node
     # =====================================================================
+    # =====================================================================
+    # Vendored Bullet 3.25 (third_party/bullet3) — used by the native
+    # mmdPhysicsNode (rigid body simulation that runs inside the dependency
+    # graph, evaluated by the evaluation manager on every time step).
+    # =====================================================================
+    include("${CMAKE_SOURCE_DIR}/third_party/bullet3/BulletTarget.cmake")
+
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/mmd_physics_node.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
     )
-    target_link_libraries(MayaMMD PRIVATE Maya::Maya)
+    target_link_libraries(MayaMMD PRIVATE Maya::Maya Bullet)
 
     # Maya plugin extension — .mll (Windows), .so (Linux), .bundle (macOS)
     if(WIN32)

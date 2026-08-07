@@ -44,6 +44,9 @@ class MayaPmxData:
     ik_handles: List[str] = field(
         default_factory=list
     )  # Maya IK handle names for this model
+    physics_binding: Optional[object] = (
+        None  # mayaBullet PhysicsBinding (set when build_physics=True)
+    )
 
     def to_resolved(self) -> "ResolvedModelData":
         """Convert to a lightweight, serialisation-friendly snapshot.

@@ -20,7 +20,9 @@ All suffixes start with a capital letter for consistency.
 | Mesh transform            | DAG  | `{model}_Mesh`                         | `GirlsFrontline_TololoDefault_Mesh`              |
 | Mesh shape                | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
 | Geo group                 | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
-| RigidBodies group         | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
+| Physics group             | DAG  | `{model}_Physics`                      | `GirlsFrontline_TololoDefault_Physics`           |
+| Physics solver            | DAG  | `{model}_PhysicsSolver`                | `GirlsFrontline_TololoDefault_PhysicsSolver`     |
+| Bullet rigid body         | DAG  | `{model}_Physics_{rb_name}`            | `GirlsFrontline_TololoDefault_Physics_CapeL1`    | TODO: Consider renaming to `{model}_RigidBody_{rb_name}` for clarity |
 | rotScale (multiplyDivide) | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
 | ccdSolver                 | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
 | BoneMorph node            | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
