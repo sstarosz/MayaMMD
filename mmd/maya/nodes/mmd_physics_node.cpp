@@ -46,7 +46,7 @@
 // ===========================================================================
 // Constants
 // ===========================================================================
-const MTypeId MMDPhysicsNode::kTypeId(0x0011C105); // 0x87000 + 0x100 for mmdPhysicsNode
+const MTypeId MMDPhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for mmdPhysicsNode
 
 // PMX JointType -> Bullet constraint selection
 namespace
@@ -64,6 +64,12 @@ constexpr short kColliderSphere = 2;
 constexpr short kColliderCapsule = 3;
 
 constexpr double kPi = 3.14159265358979323846;
+
+// Simulation stepping constants (see buildWorld()/compute()).
+constexpr double kFixedDt = 1.0 / 60.0;  // MMD physics tick
+constexpr int kSolverIterations = 30;    // > Bullet's default 10 — long rigid chains need it
+constexpr int kMaxSubSteps = 8;          // max internal steps per compute()
+constexpr double kMaxStepTime = 0.5;     // clamp for huge time jumps (scrub/tab)
 
 double deg2rad(double d)
 {
@@ -528,7 +534,6 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.radius = 0.5;
         b.group = 1;
         b.mask = 0xFFFF;
-        b.solverBodyIndex = -1;
 
         auto read3 = [&](const MObject& attr, double out[3])
         {
@@ -610,7 +615,6 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     btVector3 gravity(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1],
                       gravHandle.asDouble3()[2]);
     const double fps = dataBlock.inputValue(aFps).asDouble();
-    const double fixedDt = 1.0 / 60.0;
 
     // World-level objects.  The world does NOT own the dispatcher / broadphase
     // / collision config / solver — keep them as members so they are freed
@@ -626,13 +630,9 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     // Long rigid chains (MMD skirt/hair/ponytail strands are 10-30 links) need
     // more constraint iterations than Bullet's default 10, or the tension never
     // propagates and the chain detaches from its kinematic anchor (free-falls).
-    mWorld->getSolverInfo().m_numIterations = 30;
-
-    // Store fps/fixedDt for stepping (node members).
-    (void) fixedDt;
+    mWorld->getSolverInfo().m_numIterations = kSolverIterations;
 
     // Create bodies
-    int kinematicCount = 0;
     mAnchorRest.clear();
     mAnchorCurrent.clear();
     for (size_t i = 0; i < mBodies.size(); ++i)
@@ -685,7 +685,6 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
                                     btCollisionObject::CF_KINEMATIC_OBJECT);
             body->setActivationState(DISABLE_DEACTIVATION);
             body->setGravity(btVector3(0, 0, 0));
-            mBodies[i].solverBodyIndex = kinematicCount; // anchor index
             // Record the anchor's REST pose (group-local) for scrub-back.
             mAnchorRest.emplace_back(AnchorPose());
             storeAnchorPose(mAnchorRest.back().pos, mAnchorRest.back().quat, start);
@@ -694,7 +693,6 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
             // scrub-back reset (empty would silently disable the rewind).
             mAnchorCurrent.emplace_back(AnchorPose());
             storeAnchorPose(mAnchorCurrent.back().pos, mAnchorCurrent.back().quat, start);
-            ++kinematicCount;
         }
         else
         {
@@ -1046,7 +1044,7 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
             dt = 0.0;
             rewound = true;
         }
-        dt = std::min(dt, 0.5); // guard against huge jumps
+        dt = std::min(dt, kMaxStepTime); // guard against huge jumps
         // Anchor-only movement at a fixed time (a bone dragged in the
         // viewport, no rewind): still run one solver step so the chains are
         // pulled to follow the moved bone (a zero dt makes Bullet skip the
@@ -1055,17 +1053,13 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
         // solver step right after a big teleport yanks the chains away from
         // their reset pose (catastrophic one-step correction).
         if (!rewound && anchorsMoved && dt <= 0.0)
-            dt = 1.0 / 60.0;
-        mWorld->stepSimulation(btScalar(dt), 8, btScalar(1.0 / 60.0));
+            dt = kFixedDt;
+        mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
         mLastTime = now;
     }
 
     writeOutputs(dataBlock);
 
-    if (plug == aOutTranslate || plug.isElement() || plug.isChild())
-    {
-        // mark translate output clean (already handled by writeOutputs)
-    }
     dataBlock.outputValue(aOutTranslate).setClean();
     dataBlock.outputValue(aOutRotate).setClean();
     return MS::kSuccess;

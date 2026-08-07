@@ -152,7 +152,6 @@ class MMDPhysicsNode : public MPxNode
         long group;
         long mask;
         bool kinematic;
-        int solverBodyIndex; // -1 until built
         // Scrub-back reset: index of the kinematic ANCHOR whose current pose
         // drives this body's reset (or -1), plus the constant offset
         // (anchorRest^-1 * bodyRest) captured at build time.
