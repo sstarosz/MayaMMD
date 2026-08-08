@@ -295,7 +295,7 @@ and constraints).
 
 ## Implementation Details
 
-### Binding layer (`mmd/maya/physics_builder.py`)
+### Binding layer (`mmd/maya/pmx/rigid_body_builder.py`)
 
 `PhysicsBinding.create()`:
 
@@ -358,13 +358,12 @@ every structural check.
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                     |
 | `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                         |
-| `mmd/maya/physics_builder.py`                                           | Binding layer: node + guides + anchors + outputs + write-back (replaces mayaBullet) |
+| `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + palette + `PhysicsBinding` (node + guides + anchors + outputs + write-back) |
 | `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                             |
 | `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                               |
 | `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                 |
 | `vcpkg.json`                                                             | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain        |
-| `mmd/maya/pmx/rigid_body_builder.py`                                    | MMD→Maya coord conversion + collision-group color palette                           |
-| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics builder                                     |
+| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics binding                                    |
 | `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                               |
 | `assets/models_database/GirlsFrontline/TololoDefault/rigid_bodies.json` | Real rigid-body test data                                                           |
 

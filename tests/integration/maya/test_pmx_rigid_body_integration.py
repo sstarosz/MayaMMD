@@ -42,6 +42,7 @@ from maya import cmds
 
 from mmd.core.data_types import PmxModel
 from mmd.maya.pmx.rigid_body_builder import (
+    PhysicsBinding,
     _RIGID_BODY_GROUP_COLORS,
     mmd_euler_to_maya_degrees,
 )
@@ -68,8 +69,8 @@ def _find_physics_group(maya_pmx_data):
 
 
 def _get_binding(maya_pmx_data):
-    """Return the model's physics binding (or None)."""
-    return getattr(maya_pmx_data, "physics_binding", None)
+    """Reconstruct the model's physics binding from the scene (or None)."""
+    return PhysicsBinding.from_scene(maya_pmx_data.root_name)
 
 
 def _iter_guides(maya_pmx_data):

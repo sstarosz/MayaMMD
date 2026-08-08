@@ -21,6 +21,7 @@ from __future__ import annotations
 import maya.api.OpenMaya as om  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
 from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
+from mmd.maya.pmx.rigid_body_builder import PhysicsBinding  # noqa: E402
 
 # ── Project imports ─────────────────────────────────────────────────────────
 from mmd.core.data_types import PMXBoneFlagBits, PmxModel  # noqa: E402
@@ -93,7 +94,7 @@ def _world_position(joint_obj: om.MObject) -> tuple[float, float, float]:
     return (tx, ty, tz)
 
 
-def _physics_driven_bone_indices(maya_pmx_data) -> set[int]:
+def _physics_driven_bone_indices(maya_pmx_data, pmx_data) -> set[int]:
     """Return the set of bone indices driven by the physics write-back.
 
     Milestone 2: dynamic rigid bodies (PHYSICS / PHYSICS_BONE) write their
@@ -107,11 +108,8 @@ def _physics_driven_bone_indices(maya_pmx_data) -> set[int]:
     pmxRest*`` therefore exempt physics-driven bones — their rotation is owned
     by the simulation, not by the skeleton builder.
     """
-    binding = getattr(maya_pmx_data, "physics_binding", None)
-    if binding is None:
-        return set()
-    pmx_data = getattr(binding, "pmx_data", None)
-    if pmx_data is None:
+    binding = PhysicsBinding.from_scene(maya_pmx_data.root_name, pmx_data=pmx_data)
+    if binding.node is None:
         return set()
     driven: set[int] = set()
     for rb_idx in binding.constraints:
@@ -1070,7 +1068,7 @@ def test_zero_initial_rotation_bones(pmx_data: PmxModel, maya_pmx_data) -> bool:
     """
     joints = maya_pmx_data.joints
     errors = []
-    driven = _physics_driven_bone_indices(maya_pmx_data)
+    driven = _physics_driven_bone_indices(maya_pmx_data, pmx_data)
 
     for bone_idx, jobj in enumerate(joints):
         if bone_idx in driven:
@@ -1212,7 +1210,7 @@ def test_pmx_rest_pose_attributes_populated(pmx_data: PmxModel, maya_pmx_data) -
 
     missing_attr_joints: list[str] = []
     wrong_value_joints: list[str] = []
-    driven = _physics_driven_bone_indices(maya_pmx_data)
+    driven = _physics_driven_bone_indices(maya_pmx_data, pmx_data)
 
     for bone_idx, jobj in enumerate(joints):
         name = _joint_name(jobj)

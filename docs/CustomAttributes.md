@@ -152,7 +152,7 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 
 **Stored on:** Each mayaBullet rigid body transform under `{model}_Physics`
 (or parented under its joint for `FOLLOW_BONE` bodies).  
-**Added by:** `physics_builder.py:PhysicsBinding._create_body()`
+**Added by:** `mmd/maya/pmx/rigid_body_builder.py:PhysicsBinding._create_guide()`
 
 | Long name            | Type   | Description                                 |
 | -------------------- | ------ | ------------------------------------------- |

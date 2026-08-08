@@ -10,7 +10,7 @@ import maya.cmds as cmds
 from mmd.core.data_types import PmxModel
 from mmd.maya.maya_data_types import MayaPmxData
 from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones  # noqa: F401
-from mmd.maya.physics_builder import create_physics_from_pmx_data  # noqa: F401
+from mmd.maya.pmx.rigid_body_builder import create_physics_from_pmx_data  # noqa: F401
 from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data  # noqa: F401
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
@@ -777,19 +777,26 @@ def build_pmx_scene(
     )
 
     # Rigid bodies are represented by the physics guide meshes created by
-    # physics_builder, which shades them per collision group with one unique
-    # Lambert material per group.  No separate mesh guides are created here.
+    # rigid_body_builder, which shades them per collision group with one
+    # unique material per group.  No separate mesh guides are created here.
     # See docs/PhysicsImplementation.md.
 
-    # Optional mayaBullet binding layer (physics Phase 4/5 — opt-in).
-    physics_binding = None
+    # Rigid bodies + joints via the native mmdPhysicsNode (embedded Bullet).
+    # The binding handle itself is NOT stored on MayaPmxData — the scene is
+    # the source of truth; reconstruct a handle with
+    # PhysicsBinding.from_scene(root_name) when needed (tests, editing, UI).
     if build_physics:
-        physics_binding = create_physics_from_pmx_data(
+        binding = create_physics_from_pmx_data(
             pmx_data,
             joints=joints,
             name_registry=name_registry,
             root_transform_obj=root_obj,
         )
+        # Stamp the solver on the root so from_scene() can find it directly.
+        if binding.node is not None:
+            if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
+                cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
+            cmds.setAttr(f"{root_name}.pmxPhysicsNode", binding.node, type="string")
 
     return MayaPmxData(
         root_obj=root_obj,
@@ -803,5 +810,4 @@ def build_pmx_scene(
         bone_morph_node_name=bone_morph_node_name or "",
         blend_shape_node_name=blend_shape_node_name or "",
         ik_handles=list(ik_bone_to_handle.values()),
-        physics_binding=physics_binding,
     )
