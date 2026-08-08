@@ -42,9 +42,15 @@ from maya import cmds
 
 from mmd.core.data_types import PmxModel
 from mmd.maya.pmx.rigid_body_builder import (
-    PhysicsBinding,
     _RIGID_BODY_GROUP_COLORS,
     mmd_euler_to_maya_degrees,
+    step_physics,
+    write_back_physics,
+)
+from mmd.maya.pmx_model_utils import (
+    find_physics_constraints,
+    find_physics_node,
+    find_physics_rigid_bodies,
 )
 from tests.integration.test_helpers import assert_eq, assert_true
 
@@ -68,9 +74,30 @@ def _find_physics_group(maya_pmx_data):
     return None
 
 
+class _PhysicsInfo:
+    """Test-local handle over the scene-discovered physics state.
+
+    The production module keeps no in-memory binding — the scene is the source
+    of truth.  This thin adapter bundles the discovery results
+    (``mmd.maya.pmx_model_utils``) with the headless ops
+    (``mmd.maya.pmx.rigid_body_builder``) so the tests keep a small handle.
+    """
+
+    def __init__(self, root_name: str) -> None:
+        self.node = find_physics_node(root_name)
+        self.bodies = find_physics_rigid_bodies(root_name)
+        self.constraints = find_physics_constraints(root_name)
+
+    def step(self) -> None:
+        step_physics(self.node)
+
+    def write_back(self) -> None:
+        write_back_physics(self.bodies, self.constraints)
+
+
 def _get_binding(maya_pmx_data):
-    """Reconstruct the model's physics binding from the scene (or None)."""
-    return PhysicsBinding.from_scene(maya_pmx_data.root_name)
+    """Reconstruct the model's physics state from the scene (or an empty handle)."""
+    return _PhysicsInfo(maya_pmx_data.root_name)
 
 
 def _iter_guides(maya_pmx_data):

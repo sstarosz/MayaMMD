@@ -152,7 +152,7 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 
 **Stored on:** Each mayaBullet rigid body transform under `{model}_Physics`
 (or parented under its joint for `FOLLOW_BONE` bodies).  
-**Added by:** `mmd/maya/pmx/rigid_body_builder.py:PhysicsBinding._create_guide()`
+**Added by:** `mmd/maya/pmx/rigid_body_builder.py:_create_rigid_body_guide()`
 
 | Long name            | Type   | Description                                 |
 | -------------------- | ------ | ------------------------------------------- |
@@ -160,8 +160,8 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 | `pmxGroupId`         | long   | Collision group id (byte, 0–15)             |
 | `pmxPhysicsMode`     | long   | `0`=FOLLOW_BONE, `1`=PHYSICS, `2`=PHYSICS_BONE |
 
-The collider metadata can be reconstructed from the scene alone, which is what the physics binding phase will
-use to pair bodies back to their `PMXRigidBody` records.
+The collider metadata can be reconstructed from the scene alone, which is what the discovery helpers in
+`mmd/maya/pmx_model_utils.py` use to pair bodies back to their `PMXRigidBody` records.
 
 ---
 

@@ -782,21 +782,21 @@ def build_pmx_scene(
     # See docs/PhysicsImplementation.md.
 
     # Rigid bodies + joints via the native mmdPhysicsNode (embedded Bullet).
-    # The binding handle itself is NOT stored on MayaPmxData — the scene is
-    # the source of truth; reconstruct a handle with
-    # PhysicsBinding.from_scene(root_name) when needed (tests, editing, UI).
+    # No handle is kept in memory — the scene is the source of truth; discover
+    # physics state later via mmd.maya.pmx_model_utils (wrapped by
+    # ModelContext.physics* getters).
     if build_physics:
-        binding = create_physics_from_pmx_data(
+        solver_node = create_physics_from_pmx_data(
             pmx_data,
             joints=joints,
             name_registry=name_registry,
             root_transform_obj=root_obj,
         )
-        # Stamp the solver on the root so from_scene() can find it directly.
-        if binding.node is not None:
+        # Stamp the solver on the root so discovery can find it directly.
+        if solver_node:
             if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
                 cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
-            cmds.setAttr(f"{root_name}.pmxPhysicsNode", binding.node, type="string")
+            cmds.setAttr(f"{root_name}.pmxPhysicsNode", solver_node, type="string")
 
     return MayaPmxData(
         root_obj=root_obj,

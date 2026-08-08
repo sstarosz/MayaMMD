@@ -287,17 +287,19 @@ pose == rest pose) every bone stays exactly at its PMX position — verified
 ### Headless stepping
 
 Interactive playback is pure DG (the node's output connections pull it each
-time step). Headless/batch use calls `binding.step()` (`dgdirty` + `dgeval` on
-the node) then `binding.write_back()` (propagate solved pose through the guides
-and constraints).
+time step). Headless/batch use calls `step_physics(node)` (`dgdirty` + `dgeval` on
+the node) then `write_back_physics(bodies, constraints)` (propagate solved pose
+through the guides and constraints).
 
 ---
 
 ## Implementation Details
 
-### Binding layer (`mmd/maya/pmx/rigid_body_builder.py`)
+### Rigid-body build layer (`mmd/maya/pmx/rigid_body_builder.py`)
 
-`PhysicsBinding.create()`:
+`create_physics_from_pmx_data()` (pure functions, no in-memory binding; the
+scene is the source of truth — discover physics state later with
+`mmd/maya/pmx_model_utils.py`, wrapped by `ModelContext.physics*` getters):
 
 1. Create the `{model}_Physics` group and the `mmdPhysicsNode`
    (`{model}_PhysicsSolver`); connect `time1.outTime → node.time`, set
@@ -354,18 +356,19 @@ every structural check.
 
 ## Key Source Files
 
-| File                                                                    | Purpose                                                                             |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                     |
-| `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                         |
-| `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + palette + `PhysicsBinding` (node + guides + anchors + outputs + write-back) |
-| `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                             |
-| `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                               |
-| `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                 |
-| `vcpkg.json`                                                             | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain        |
-| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics binding                                    |
-| `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                               |
-| `assets/models_database/GirlsFrontline/TololoDefault/rigid_bodies.json` | Real rigid-body test data                                                           |
+| File                                                                    | Purpose                                                                                                     |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                                             |
+| `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                                                 |
+| `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + palette + build functions (node + guides + anchors + outputs + write-back) |
+| `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                     |
+| `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                       |
+| `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                         |
+| `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                         |
+| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics build                                                               |
+| `mmd/maya/pmx_model_utils.py`                                           | Scene discovery: physics group / node / rigid bodies / constraints                                          |
+| `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                                                       |
+| `assets/models_database/GirlsFrontline/TololoDefault/rigid_bodies.json` | Real rigid-body test data                                                                                   |
 
 ---
 

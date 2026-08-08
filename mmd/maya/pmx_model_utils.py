@@ -352,6 +352,89 @@ def find_ik_handles(root_name: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Physics discovery — the scene is the source of truth.  These mirror the
+# bone/morph reconstruction helpers: they read self-describing attributes
+# stamped at import (the ``{model}_Physics`` group, the root's
+# ``pmxPhysicsNode`` attr, per-guide ``pmxRigidBodyIndex``) so a binding can
+# be reconstructed from any saved scene.  ModelContext wraps these as lazy
+# getters (see mmd/maya/model_context.py).
+# ---------------------------------------------------------------------------
+
+
+def find_physics_group(root_name: str) -> Optional[str]:
+    """Return the physics group transform for a PMX model root, or ``None``.
+
+    The physics group is the first child transform of *root_name* whose name
+    ends in ``_Physics`` (created by
+    ``mmd.maya.pmx.rigid_body_builder.create_physics_from_pmx_data``).
+    """
+    for child in cmds.listRelatives(root_name, children=True, type="transform") or []:
+        if child.endswith("_Physics"):
+            return child
+    return None
+
+
+def find_physics_node(root_name: str) -> Optional[str]:
+    """Return the ``mmdPhysicsNode`` solver for a PMX model root, or ``None``.
+
+    Prefers the ``pmxPhysicsNode`` attribute stamped on the root at import;
+    falls back to tracing a guide's connection to the solver (scenes imported
+    before the attribute existed).
+    """
+    if cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
+        node = cmds.getAttr(f"{root_name}.pmxPhysicsNode")
+        if node and cmds.objExists(node):
+            return node
+    group = find_physics_group(root_name)
+    if group is None:
+        return None
+    for child in cmds.listRelatives(group, children=True, type="transform") or []:
+        links = cmds.listConnections(child, type="mmdPhysicsNode") or []
+        if links:
+            return links[0]
+    return None
+
+
+def find_physics_rigid_bodies(root_name: str) -> Dict[int, str]:
+    """Return ``{pmx_rigid_body_index: guide_name}`` for a model root.
+
+    Guides are the physics group's child transforms carrying the
+    ``pmxRigidBodyIndex`` metadata attribute (stamped at import).
+    """
+    group = find_physics_group(root_name)
+    if group is None:
+        return {}
+    bodies: Dict[int, str] = {}
+    for child in cmds.listRelatives(group, children=True, type="transform") or []:
+        if not cmds.attributeQuery("pmxRigidBodyIndex", node=child, exists=True):
+            continue
+        try:
+            rb_idx = int(cmds.getAttr(f"{child}.pmxRigidBodyIndex"))
+        except Exception:
+            continue
+        bodies[rb_idx] = child
+    return bodies
+
+
+def find_physics_constraints(root_name: str) -> Dict[int, str]:
+    """Return ``{pmx_rigid_body_index: constraint_name}`` for a model root.
+
+    The DG constraint touching each guide (a ``parentConstraint`` or
+    ``orientConstraint`` binding the guide to its related bone).  This is what
+    the skeleton tests use to exempt physics-driven bones from rest-pose
+    assertions.
+    """
+    result: Dict[int, str] = {}
+    for rb_idx, guide in find_physics_rigid_bodies(root_name).items():
+        for ctype in ("parentConstraint", "orientConstraint"):
+            cons = cmds.listConnections(guide, type=ctype) or []
+            if cons:
+                result[rb_idx] = cons[0]
+                break
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Joint transform utilities
 # ---------------------------------------------------------------------------
 

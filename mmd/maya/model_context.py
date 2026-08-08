@@ -35,6 +35,10 @@ from mmd.maya.pmx_model_utils import (
     find_bone_morph_node,
     find_ik_handles,
     find_model_root_from_selection,
+    find_physics_constraints,
+    find_physics_group,
+    find_physics_node,
+    find_physics_rigid_bodies,
 )
 
 # Sentinel used to distinguish "failed to resolve" from "empty result" in the
@@ -203,6 +207,74 @@ class ModelContext(QObject):
                 self._cache["ik_handles"] = _SENTINEL
         result = self._cache.get("ik_handles", [])
         return [] if result is _SENTINEL else result
+
+    def physicsGroup(self) -> str:
+        """Name of the active model's physics group transform ("" if none)."""
+        if "physics_group" not in self._cache and self._root_name:
+            try:
+                self._cache["physics_group"] = (
+                    find_physics_group(self._root_name) or ""
+                )
+            except Exception as exc:
+                log.error(
+                    "Failed to find physics group for %s: %s", self._root_name, exc
+                )
+                self._cache["physics_group"] = _SENTINEL
+        result = self._cache.get("physics_group", "")
+        return "" if result is _SENTINEL else result
+
+    def physicsNode(self) -> str:
+        """Name of the active model's ``mmdPhysicsNode`` solver ("" if none)."""
+        if "physics_node" not in self._cache and self._root_name:
+            try:
+                self._cache["physics_node"] = (
+                    find_physics_node(self._root_name) or ""
+                )
+            except Exception as exc:
+                log.error(
+                    "Failed to find physics node for %s: %s", self._root_name, exc
+                )
+                self._cache["physics_node"] = _SENTINEL
+        result = self._cache.get("physics_node", "")
+        return "" if result is _SENTINEL else result
+
+    def physicsRigidBodies(self) -> Dict[int, str]:
+        """Map of PMX rigid-body index -> guide transform for the active model.
+
+        Returns ``{}`` if the model has no physics.
+        """
+        if "physics_bodies" not in self._cache and self._root_name:
+            try:
+                self._cache["physics_bodies"] = find_physics_rigid_bodies(
+                    self._root_name
+                )
+            except Exception as exc:
+                log.error(
+                    "Failed to find physics bodies for %s: %s", self._root_name, exc
+                )
+                self._cache["physics_bodies"] = _SENTINEL
+        result = self._cache.get("physics_bodies", {})
+        return {} if result is _SENTINEL else result
+
+    def physicsConstraints(self) -> Dict[int, str]:
+        """Map of PMX rigid-body index -> DG constraint for the active model.
+
+        Returns ``{}`` if the model has no physics.
+        """
+        if "physics_constraints" not in self._cache and self._root_name:
+            try:
+                self._cache["physics_constraints"] = find_physics_constraints(
+                    self._root_name
+                )
+            except Exception as exc:
+                log.error(
+                    "Failed to find physics constraints for %s: %s",
+                    self._root_name,
+                    exc,
+                )
+                self._cache["physics_constraints"] = _SENTINEL
+        result = self._cache.get("physics_constraints", {})
+        return {} if result is _SENTINEL else result
 
     # ── Resolve ──────────────────────────────────────────────────────────
 

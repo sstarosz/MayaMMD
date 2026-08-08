@@ -21,7 +21,7 @@ from __future__ import annotations
 import maya.api.OpenMaya as om  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
 from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
-from mmd.maya.pmx.rigid_body_builder import PhysicsBinding  # noqa: E402
+from mmd.maya.pmx_model_utils import find_physics_constraints, find_physics_node  # noqa: E402
 
 # ── Project imports ─────────────────────────────────────────────────────────
 from mmd.core.data_types import PMXBoneFlagBits, PmxModel  # noqa: E402
@@ -108,11 +108,10 @@ def _physics_driven_bone_indices(maya_pmx_data, pmx_data) -> set[int]:
     pmxRest*`` therefore exempt physics-driven bones — their rotation is owned
     by the simulation, not by the skeleton builder.
     """
-    binding = PhysicsBinding.from_scene(maya_pmx_data.root_name, pmx_data=pmx_data)
-    if binding.node is None:
+    if find_physics_node(maya_pmx_data.root_name) is None:
         return set()
     driven: set[int] = set()
-    for rb_idx in binding.constraints:
+    for rb_idx in find_physics_constraints(maya_pmx_data.root_name):
         if 0 <= rb_idx < len(pmx_data.rigid_bodies):
             related = pmx_data.rigid_bodies[rb_idx].related_bone_index
             if related >= 0:
