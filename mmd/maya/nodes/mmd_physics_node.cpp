@@ -30,6 +30,7 @@
 #include <maya/MNodeCacheDisablingInfoHelper.h>
 #include <maya/MNodeCacheSetupInfo.h>
 #include <maya/MPlug.h>
+#include <maya/MPoint.h>
 #include <maya/MQuaternion.h>
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
@@ -39,9 +40,16 @@
 #include <btBulletCollisionCommon.h>
 #include <btBulletDynamicsCommon.h>
 
+#include "mmd_physics_math.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+
+// The pure math (Euler <-> quaternion, row/column matrix transpose) lives in
+// the Maya-free mmd_physics_math.h so it can be unit-tested without the Maya
+// SDK — see tests/test_mmd_physics_math.cpp.
+using namespace mmd_physics_math;
 
 // ===========================================================================
 // Constants
@@ -58,27 +66,11 @@ constexpr int kJointConeTwist = 3;
 constexpr int kJointSlider = 4;
 constexpr int kJointHinge = 5;
 
-// Collider types (match bulletRigidBodyShape + PMX ShapeType mapping)
-constexpr short kColliderBox = 1;
-constexpr short kColliderSphere = 2;
-constexpr short kColliderCapsule = 3;
-
-constexpr double kPi = 3.14159265358979323846;
-
 // Simulation stepping constants (see buildWorld()/compute()).
-constexpr double kFixedDt = 1.0 / 60.0;  // MMD physics tick
-constexpr int kSolverIterations = 30;    // > Bullet's default 10 — long rigid chains need it
-constexpr int kMaxSubSteps = 8;          // max internal steps per compute()
-constexpr double kMaxStepTime = 0.5;     // clamp for huge time jumps (scrub/tab)
-
-double deg2rad(double d)
-{
-    return d * kPi / 180.0;
-}
-double rad2deg(double r)
-{
-    return r * 180.0 / kPi;
-}
+constexpr double kFixedDt = 1.0 / 60.0; // MMD physics tick
+constexpr int kSolverIterations = 30;   // > Bullet's default 10 — long rigid chains need it
+constexpr int kMaxSubSteps = 8;         // max internal steps per compute()
+constexpr double kMaxStepTime = 0.5;    // clamp for huge time jumps (scrub/tab)
 } // namespace
 
 // ===========================================================================
@@ -126,73 +118,10 @@ MObject MMDPhysicsNode::aOutRotate;
 MObject MMDPhysicsNode::aOutRotateValue;
 
 // ===========================================================================
-// Euler helpers (Maya XYZ convention, degrees on attributes)
+// Maya-specific conversion (the shared pure math is in mmd_physics_math.h)
 // ===========================================================================
 namespace
 {
-
-btQuaternion eulerDegreesToQuat(double rx, double ry, double rz)
-{
-    // Maya's rotate-XYZ (rotateOrder 0) builds the row-vector matrix
-    //   M_row = (Rz * Ry * Rx)^T   (verified empirically against Maya 2026)
-    // so the equivalent Bullet (column-vector) matrix is M_col = Rz * Ry * Rx,
-    // whose quaternion is q = qz * qy * qx.
-    btQuaternion qx(btVector3(1, 0, 0), deg2rad(rx));
-    btQuaternion qy(btVector3(0, 1, 0), deg2rad(ry));
-    btQuaternion qz(btVector3(0, 0, 1), deg2rad(rz));
-    return qz * qy * qx; // M_col = Rz * Ry * Rx
-}
-
-// Extract XYZ euler (degrees) from a quaternion in the Maya rotate convention.
-// The Bullet matrix m = Rz * Ry * Rx (matches eulerDegreesToQuat = qz*qy*qx):
-//   sin(ry) = -m[2][0];  rx = atan2(m[2][1], m[2][2]);  rz = atan2(m[1][0], m[0][0])
-void quatToEulerXYZDegrees(const btQuaternion& q, double out[3])
-{
-    btMatrix3x3 m(q);
-    const double sy = -m[2][0]; // sin(ry)
-    const double epsilon = 1e-6;
-    if (sy < -1.0 + epsilon || sy > 1.0 - epsilon)
-    {
-        // Gimbal lock: ry = ±90°, rx/rz degenerate (only their combination is
-        // well-defined).  Set rx = 0 and solve the combined term:
-        //   ry=+90: m[0][1]=sin(rx-rz), m[0][2]=cos(rx-rz) -> rz = atan2(-m[0][1], m[0][2])
-        //   ry=-90: m[0][1]=-sin(rx+rz), m[1][1]=cos(rx+rz) -> rz = atan2(-m[0][1], m[1][1])
-        // (Earlier this extracted for M=Rx*Ry*Rz and flipped ry's sign, which
-        // rotated every gimbal-locked body 180° and displaced the bones.)
-        double ry;
-        double rz;
-        if (m[2][0] < 0.0)
-        {
-            ry = kPi / 2.0;
-            rz = std::atan2(-m[0][1], m[0][2]);
-        }
-        else
-        {
-            ry = -kPi / 2.0;
-            rz = std::atan2(-m[0][1], m[1][1]);
-        }
-        out[0] = 0.0;
-        out[1] = rad2deg(ry);
-        out[2] = rad2deg(rz);
-        return;
-    }
-    double rx = std::atan2(m[2][1], m[2][2]);
-    double ry = std::asin(sy);
-    double rz = std::atan2(m[1][0], m[0][0]);
-    out[0] = rad2deg(rx);
-    out[1] = rad2deg(ry);
-    out[2] = rad2deg(rz);
-}
-
-// Build a btTransform from rest position + Maya XYZ euler degrees.
-btTransform transformFromRest(const double pos[3], const double rotDeg[3])
-{
-    btTransform t;
-    t.setIdentity();
-    t.setOrigin(btVector3(pos[0], pos[1], pos[2]));
-    t.setBasis(btMatrix3x3(eulerDegreesToQuat(rotDeg[0], rotDeg[1], rotDeg[2])));
-    return t;
-}
 
 btTransform mayaMatrixToBtTransform(const MMatrix& m)
 {
@@ -201,39 +130,50 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
     // COLUMN-vector matrices (v' = M * v), so the same orientation's matrix is
     // the TRANSPOSE of Maya's.  Copying the row matrix directly (as done
     // before) gave every rotated anchor a transposed — i.e. wrong — basis,
-    // which yanked the attached rigid chains into a mess.
-    btTransform t;
-    btMatrix3x3 bm;
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c)
-            bm[c][r] = m(r, c); // transpose: Bullet column matrix = Maya row^T
-    t.setBasis(bm);
-    t.setOrigin(btVector3(m(3, 0), m(3, 1), m(3, 2)));
-    return t;
+    // which yanked the attached rigid chains into a mess.  The transpose
+    // itself is the (unit-tested) mmd_physics_math::doubleMatrixToBtTransform;
+    // this wrapper only adapts MMatrix's accessor.
+    double mm[4][4];
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            mm[r][c] = m(r, c);
+    return doubleMatrixToBtTransform(mm);
 }
 
-// Store a Bullet transform as pos + quat (no Bullet type in the node header).
-void storeAnchorPose(double pos[3], double quat[4], const btTransform& t)
+// Read one body element's attributes into a DrawBody.  Used by
+// collectDrawData to draw the REST guides even before the first compute()
+// (mBodies is only filled lazily on first evaluation) — so the colliders are
+// visible immediately after import and whenever the solver is not being pulled
+// by the DG.
+void readDrawBodyFromPlug(const MPlug& el, MMDPhysicsNode::DrawBody& db)
 {
-    const btVector3& o = t.getOrigin();
-    const btQuaternion& q = t.getRotation();
-    pos[0] = o.x();
-    pos[1] = o.y();
-    pos[2] = o.z();
-    quat[0] = q.x();
-    quat[1] = q.y();
-    quat[2] = q.z();
-    quat[3] = q.w();
-}
-
-btTransform anchorPoseToTransform(const double pos[3], const double quat[4])
-{
-    btTransform t;
-    t.setIdentity();
-    t.setOrigin(btVector3(btScalar(pos[0]), btScalar(pos[1]), btScalar(pos[2])));
-    t.setRotation(
-        btQuaternion(btScalar(quat[0]), btScalar(quat[1]), btScalar(quat[2]), btScalar(quat[3])));
-    return t;
+    db.colliderType = static_cast<short>(el.child(MMDPhysicsNode::aBodyColliderType).asShort());
+    db.radius = el.child(MMDPhysicsNode::aBodyRadius).asDouble();
+    const double* e = el.child(MMDPhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
+    db.extents[0] = e[0];
+    db.extents[1] = e[1];
+    db.extents[2] = e[2];
+    db.length = el.child(MMDPhysicsNode::aBodyLength).asDouble();
+    db.kinematic = el.child(MMDPhysicsNode::aBodyKinematic).asBool();
+    // group id from the collision group bit (group = 1 << id).
+    long g = el.child(MMDPhysicsNode::aBodyGroup).asInt();
+    int gid = 0;
+    while (g > 1)
+    {
+        g >>= 1;
+        ++gid;
+    }
+    db.groupId = gid;
+    const double* p = el.child(MMDPhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
+    db.pos[0] = p[0];
+    db.pos[1] = p[1];
+    db.pos[2] = p[2];
+    const double* r = el.child(MMDPhysicsNode::aBodyRestRotate).asMDataHandle().asDouble3();
+    const btQuaternion q = eulerDegreesToQuat(r[0], r[1], r[2]);
+    db.quat[0] = q.x();
+    db.quat[1] = q.y();
+    db.quat[2] = q.z();
+    db.quat[3] = q.w();
 }
 
 } // namespace
@@ -979,6 +919,101 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
     rOut.setAllClean();
 
     return true;
+}
+
+// ===========================================================================
+// Draw support
+// ===========================================================================
+void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
+{
+    out.clear();
+    // Before the first compute() the internal body state is empty — draw the
+    // REST guides straight from the node's attributes so the colliders are
+    // visible immediately after import (and whenever nothing pulls the DG).
+    if (mBodies.empty())
+    {
+        MPlug bodiesPlug(thisMObject(), aBodies);
+        const unsigned int n = bodiesPlug.evaluateNumElements();
+        for (unsigned int i = 0; i < n; ++i)
+        {
+            DrawBody db;
+            readDrawBodyFromPlug(bodiesPlug.elementByLogicalIndex(i), db);
+            out.push_back(db);
+        }
+        return;
+    }
+    out.reserve(mBodies.size());
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        const Body& b = mBodies[i];
+        DrawBody db;
+        db.colliderType = b.colliderType;
+        db.radius = b.radius;
+        db.extents[0] = b.extents[0];
+        db.extents[1] = b.extents[1];
+        db.extents[2] = b.extents[2];
+        db.length = b.length;
+        db.kinematic = b.kinematic;
+        // group id from the collision group bit (group = 1 << id).
+        long g = b.group;
+        int gid = 0;
+        while (g > 1)
+        {
+            g >>= 1;
+            ++gid;
+        }
+        db.groupId = gid;
+        if (mWorldBuilt && i < mRigidBodies.size() && mRigidBodies[i])
+        {
+            // Solved pose — what the simulation actually has right now.
+            const btTransform& t = mRigidBodies[i]->getWorldTransform();
+            const btVector3& o = t.getOrigin();
+            const btQuaternion& q = t.getRotation();
+            db.pos[0] = o.x();
+            db.pos[1] = o.y();
+            db.pos[2] = o.z();
+            db.quat[0] = q.x();
+            db.quat[1] = q.y();
+            db.quat[2] = q.z();
+            db.quat[3] = q.w();
+        }
+        else
+        {
+            // World not built yet — draw the PMX rest pose.
+            db.pos[0] = b.restPos[0];
+            db.pos[1] = b.restPos[1];
+            db.pos[2] = b.restPos[2];
+            const btQuaternion q = eulerDegreesToQuat(b.restRot[0], b.restRot[1], b.restRot[2]);
+            db.quat[0] = q.x();
+            db.quat[1] = q.y();
+            db.quat[2] = q.z();
+            db.quat[3] = q.w();
+        }
+        out.push_back(db);
+    }
+}
+
+MBoundingBox MMDPhysicsNode::boundingBox() const
+{
+    MBoundingBox box;
+    bool any = false;
+    for (const Body& b : mBodies)
+    {
+        double r;
+        if (b.colliderType == kColliderSphere)
+            r = b.radius;
+        else if (b.colliderType == kColliderBox)
+            r = std::max({b.extents[0], b.extents[1], b.extents[2]});
+        else
+            r = b.radius + b.length * 0.5;
+        r = std::max(r, 0.5);
+        box.expand(MPoint(b.restPos[0] - r, b.restPos[1] - r, b.restPos[2] - r));
+        box.expand(MPoint(b.restPos[0] + r, b.restPos[1] + r, b.restPos[2] + r));
+        any = true;
+    }
+    if (!any)
+        return MBoundingBox(MPoint(-1.0, -1.0, -1.0), MPoint(1.0, 1.0, 1.0));
+    return box;
 }
 
 // ===========================================================================

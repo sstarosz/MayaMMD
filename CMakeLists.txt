@@ -177,6 +177,7 @@ if(Maya_FOUND)
         mmd/MayaMMD.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
         mmd/maya/nodes/mmd_physics_node.cpp
+        mmd/maya/nodes/mmd_physics_draw_override.cpp
     )
     # Bullet's exported targets do not carry INTERFACE_INCLUDE_DIRECTORIES
     # (upstream uses the directory-level INCLUDE_DIRECTORIES), so add the

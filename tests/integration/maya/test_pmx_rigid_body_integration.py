@@ -4,16 +4,19 @@ Integration tests for PMX rigid body physics creation in Maya.
 **Milestone 2 (physics_builder rewrite — native C++ Bullet node):**
 
 The old mayaBullet layer is GONE.  Physics is now driven by one native
-``mmdPhysicsNode`` (a plain ``MPxNode`` in ``MayaMMD.mll``) that owns a
+``mmdPhysicsNode`` (an ``MPxLocatorNode`` in ``MayaMMD.mll``) that owns a
 ``btDiscreteDynamicsWorld``:
 
-* ``FOLLOW_BONE`` bodies are **visible polygonal guide meshes** bound to their
+* The node DRAWS its own guide visualization (wireframe box/sphere/capsule per
+  body, colored by collision group) via a C++ draw override — no guide
+  meshes/shaders exist in the scene.
+* ``FOLLOW_BONE`` bodies are **invisible guide transforms** bound to their
   bone via ``parentConstraint`` (DG).  Their world/parent-inverse matrices feed
   the node's ``anchorWorldMatrix`` / ``anchorParentInverseMatrix`` inputs so the
   kinematic colliders track the bones every frame.
 * ``PHYSICS`` / ``PHYSICS_BONE`` bodies are **dynamic**: the node writes each
   body's solved LOCAL transform to ``outTranslate[i]`` / ``outRotate[i]``,
-  connected straight into the guide mesh transform; a ``parentConstraint``
+  connected straight into the guide transform; a ``parentConstraint``
   (PHYSICS) or ``orientConstraint`` (PHYSICS_BONE) writes the solved pose back
   to the related bone.
 
@@ -42,7 +45,6 @@ from maya import cmds
 
 from mmd.core.data_types import PmxModel
 from mmd.maya.pmx.rigid_body_builder import (
-    _RIGID_BODY_GROUP_COLORS,
     mmd_euler_to_maya_degrees,
     step_physics,
     write_back_physics,
@@ -196,6 +198,13 @@ def test_pmx_rigid_body_physics_group(pmx_data: PmxModel, maya_pmx_data):
     assert_true(
         cmds.nodeType(node) == "mmdPhysicsNode", f"{node} is not an mmdPhysicsNode"
     )
+    # Phase 1: the node is an MPxLocatorNode (DAG shape) parented under the
+    # physics group — it draws its own guides, so it must live in the DAG.
+    node_parents = cmds.listRelatives(node, parent=True, type="transform") or []
+    assert_true(
+        bool(node_parents),
+        f"mmdPhysicsNode {node} is not a DAG shape (no parent transform)",
+    )
     assert_true(
         cmds.isConnected("time1.outTime", f"{node}.time"),
         "mmdPhysicsNode.time not connected to time1.outTime",
@@ -225,7 +234,7 @@ def test_pmx_rigid_body_count(pmx_data: PmxModel, maya_pmx_data):
             len(pmx_data.joints),
             f"node.joints size {n_joints} != PMX joint count {len(pmx_data.joints)}",
         )
-    # One guide mesh per rigid body.
+    # One guide transform per rigid body (the node draws the visible guides).
     n_guides = len(list(_iter_guides(maya_pmx_data)))
     assert_eq(
         n_guides,
@@ -393,43 +402,26 @@ def test_follow_bone_tracks_joint_rotation(pmx_data: PmxModel, maya_pmx_data):
     return True
 
 
-def test_pmx_rigid_body_group_colors(pmx_data: PmxModel, maya_pmx_data):
-    """Test per-group color coding of the guide meshes (unique Lambert per group)."""
-    fb = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value == 0]
-    if not fb:
-        print("SKIP: model has no FOLLOW_BONE rigid bodies")
+def test_rigid_body_guides_are_node_drawn(pmx_data: PmxModel, maya_pmx_data):
+    """Test guides are meshless transforms — the node draws the colliders.
+
+    Phase 1: the mmdPhysicsNode draws its own guide visualization (wireframe
+    box/sphere/capsule per body, colored by collision group via the C++ draw
+    palette).  Each per-body guide is now a plain transform (the DG write-back
+    bridge) with NO mesh shape and NO shader in the scene.
+    """
+    if not pmx_data.rigid_bodies:
+        print("SKIP: model has no rigid bodies")
         return True
-    unique_groups = sorted({rb.group_id for rb in fb})
-    colored = set()
+    checked = 0
     for rb_idx, guide in _iter_guides(maya_pmx_data):
-        rb = pmx_data.rigid_bodies[rb_idx]
-        gid = rb.group_id
         mesh_shapes = cmds.listRelatives(guide, shapes=True, type="mesh") or []
-        assert_true(bool(mesh_shapes), f"Body {guide} has no guide mesh")
-        for ms in mesh_shapes:
-            # Each guide shape is shaded by one unique shader per group whose
-            # color matches the group's palette entry (no draw-override tinting).
-            sgs = cmds.listConnections(ms, type="shadingEngine") or []
-            assert_true(bool(sgs), f"Guide {ms} has no shading group")
-            shaders = cmds.listConnections(
-                f"{sgs[0]}.surfaceShader", source=True, destination=False
-            )
-            assert_true(bool(shaders), f"Shading group {sgs[0]} has no shader")
-            sh = shaders[0]
-            # Maya 2024+ standard shader stores its color in baseColor;
-            # Lambert (fallback on older releases) uses `color`.
-            color_attr = "baseColor" if cmds.nodeType(sh) == "openPBRSurface" else "color"
-            got = cmds.getAttr(f"{sh}.{color_attr}")[0]
-            r, g, b = _RIGID_BODY_GROUP_COLORS[gid % len(_RIGID_BODY_GROUP_COLORS)]
-            for gv, exp, label in zip(got, (r, g, b), ("R", "G", "B")):
-                assert_true(
-                    abs(gv - exp) < 1e-3,
-                    f"Group {gid} guide {ms} color{label} {gv} != expected {exp}",
-                )
-        colored.add(gid)
-    for gid in unique_groups:
-        assert_true(gid in colored, f"Collision group {gid} has no colored body")
-    print(f"PASS: {len(unique_groups)} collision groups shaded on guide meshes")
+        assert_true(not mesh_shapes, f"Guide {guide} should have no mesh shape")
+        sgs = cmds.listConnections(guide, type="shadingEngine") or []
+        assert_true(not sgs, f"Guide {guide} should not be shaded")
+        checked += 1
+    assert_true(checked > 0, "No guides found to check")
+    print(f"PASS: {checked} guides are meshless transforms (node draws them)")
     return True
 
 
@@ -461,8 +453,6 @@ def test_dynamic_bodies(pmx_data: PmxModel, maya_pmx_data):
                           f"{guide}.rotate"),
             f"Dynamic body {guide} rotate not driven by node output",
         )
-        mesh_shapes = cmds.listRelatives(guide, shapes=True, type="mesh") or []
-        assert_true(bool(mesh_shapes), f"Dynamic body {guide} has no guide mesh")
         # DG write-back to the related bone.
         if rb.related_bone_index >= 0:
             con_type = "parentConstraint" if mode == 1 else "orientConstraint"
@@ -707,7 +697,7 @@ _TESTS = [
     ("Rigid Body Attributes", test_pmx_rigid_body_attributes),
     ("Rigid Body Transform", test_pmx_rigid_body_transform),
     ("Follow-Bone Tracks Joint", test_follow_bone_tracks_joint_rotation),
-    ("Rigid Body Group Colors", test_pmx_rigid_body_group_colors),
+    ("Rigid Body Guides Node-Drawn", test_rigid_body_guides_are_node_drawn),
     ("Dynamic Bodies", test_dynamic_bodies),
     ("Physics Joints", test_physics_joints),
     ("Kinematic Anchors", test_kinematic_anchors),

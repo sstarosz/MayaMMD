@@ -261,17 +261,30 @@ was a use-after-free that crashed Maya intermittently during scene teardown.
 
 ### Node graph per model
 
-| Node                                         | Type                  | Purpose                                             |
-| -------------------------------------------- | --------------------- | --------------------------------------------------- |
-| `{model}_Physics`                            | transform group       | Organizes the guide meshes (Bullet world frame)     |
-| `{model}_PhysicsSolver`                      | `mmdPhysicsNode` (DG) | Owns the Bullet world, steps every frame            |
-| `{model}_Physics_RB{i}`                      | poly mesh transform   | Visible guide (sphere/box/capsule), shaded by group |
-| `{model}_Physics_RB{i}_Jnt_parentConstraint` | DG constraint         | FOLLOW_BONE: bone→guide; PHYSICS: guide→bone        |
-| (PHYSICS_BONE)                               | `orientConstraint`    | guide→bone, rotation only                           |
+| Node                                         | Type                              | Purpose                                                                 |
+| -------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| `{model}_Physics`                            | transform group                   | Bullet world frame; parents the solver locator                          |
+| `{model}_PhysicsSolver`                      | `mmdPhysicsNode` (MPxLocatorNode) | Owns the Bullet world, steps every frame, DRAWS the guide visualization |
+| `{model}_Physics_RB{i}`                      | invisible transform               | DG write-back bridge (no mesh — the node draws it)                      |
+| `{model}_Physics_RB{i}_Jnt_parentConstraint` | DG constraint                     | FOLLOW_BONE: bone→guide; PHYSICS: guide→bone                            |
+| (PHYSICS_BONE)                               | `orientConstraint`                | guide→bone, rotation only                                               |
+
+### Guide visualization (Phase 1 — node-drawn)
+
+The `mmdPhysicsNode` is an **`MPxLocatorNode`** that draws its own rigid-body
+visualization through a C++ **`MPxDrawOverride`** (`mmd_physics_draw_override`):
+wireframe box / sphere / capsule per body, colored by collision group from the
+(ported) group palette, with kinematic (bone-following) colliders dimmed.  The
+draw geometry is pulled in `prepareForDraw()` from the node's **current solver
+state** — solved world poses when the Bullet world is built, rest poses before
+first evaluation — so the viewport always shows exactly what the simulation
+has.  No guide meshes or surface shaders are created in the scene: each
+`{model}_Physics_RB{i}` is a plain invisible transform that exists purely as
+the DG bridge (FOLLOW_BONE anchor source / dynamic write-back target).
 
 ### Write-back to the skeleton
 
-The guide mesh is the **driver**; the bone is the **driven** object:
+The guide transform is the **driver**; the bone is the **driven** object:
 
 - `FOLLOW_BONE`: `parentConstraint(joint, guide, maintainOffset=True)` — the bone
   drives the guide (and its collider).
@@ -287,9 +300,12 @@ pose == rest pose) every bone stays exactly at its PMX position — verified
 ### Headless stepping
 
 Interactive playback is pure DG (the node's output connections pull it each
-time step). Headless/batch use calls `step_physics(node)` (`dgdirty` + `dgeval` on
-the node) then `write_back_physics(bodies, constraints)` (propagate solved pose
-through the guides and constraints).
+time step).  Headless/batch use calls `step_physics(node)` then
+`write_back_physics(bodies, constraints)` (propagate solved pose through the
+guides and constraints).  NOTE: `step_physics` demands the node's `outTranslate`
+plug (not a bare `dgeval(node)`), because `dgeval` on the locator shape does not
+reliably pull the solver outputs (verified during the Phase 1 locator
+conversion — the sim only advanced when a guide transform was read).
 
 ---
 
@@ -301,17 +317,17 @@ through the guides and constraints).
 scene is the source of truth — discover physics state later with
 `mmd/maya/pmx_model_utils.py`, wrapped by `ModelContext.physics*` getters):
 
-1. Create the `{model}_Physics` group and the `mmdPhysicsNode`
-   (`{model}_PhysicsSolver`); connect `time1.outTime → node.time`, set
-   `gravity = (0, -9.8, 0)`, `fps = 30`.
-2. For every PMX rigid body create a **visible guide mesh** at the PMX rest pose
-   (Z-flip + handedness), parented into the group, carrying
-   `pmxRigidBodyIndex` / `pmxGroupId` / `pmxPhysicsMode` metadata. Each mesh is
-   **shaded by collision group with one unique surface shader per group** —
-   `openPBRSurface` on Maya 2024+ (color via `baseColor`), Lambert fallback on
-   older releases (color via `color`) — sharing the `_RIGID_BODY_GROUP_COLORS`
-   palette, so every group has its own recognizable color in the viewport.
-   Bind the guide↔bone DG constraint (see above).
+1. Create the `{model}_Physics` group and the `mmdPhysicsNode` locator
+   (`{model}_PhysicsSolver`) parented under it (its object space is the group's
+   local space, i.e. the Bullet world frame); connect `time1.outTime → node.time`,
+   set `gravity = (0, -9.8, 0)`, and `fps` from the scene's playback rate.
+2. For every PMX rigid body create an **invisible guide transform** at the PMX
+   rest pose (Z-flip + handedness), parented into the group, carrying
+   `pmxRigidBodyIndex` / `pmxGroupId` / `pmxPhysicsMode` metadata.  The
+   **`mmdPhysicsNode` draws the visible collider itself** (wireframe
+   box/sphere/capsule, group-colored) via its C++ draw override — no mesh
+   shapes and no surface shaders are created.  Bind the guide↔bone DG
+   constraint (see above).
 3. Populate `node.bodies[i]` for every body (indices = PMX rigid-body index).
 4. Connect each FOLLOW_BONE guide's `worldMatrix[0]` +
    `parentInverseMatrix[0]` to `anchorWorldMatrix[k]` / `anchorParentInverseMatrix[k]`

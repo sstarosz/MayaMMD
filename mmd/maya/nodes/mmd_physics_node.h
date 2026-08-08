@@ -36,9 +36,10 @@
 
 #pragma once
 
+#include <maya/MBoundingBox.h>
 #include <maya/MEvaluationNode.h>
 #include <maya/MObject.h>
-#include <maya/MPxNode.h>
+#include <maya/MPxLocatorNode.h>
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
 
@@ -56,12 +57,40 @@ class btRigidBody;
 // ===========================================================================
 // MMDPhysicsNode
 // ===========================================================================
-class MMDPhysicsNode : public MPxNode
+class MMDPhysicsNode : public MPxLocatorNode
 {
   public:
     static const MTypeId kTypeId;
     static constexpr const char* kNodeName = "mmdPhysicsNode";
-    static constexpr const char* kNodeClassify = "utility/general";
+    // VP2 draw-database classification.  A drawable locator node must be
+    // registered with the SAME classification string its draw override is
+    // registered under ("drawdb/geometry/<nodeType>") or VP2 never associates
+    // the override with the node and no guides are drawn.
+    static constexpr const char* kNodeClassify = "drawdb/geometry/mmdPhysicsNode";
+
+    // ------------------------------------------------------------------
+    // Draw support (Phase 1) — the node draws its own guide visualization
+    // ------------------------------------------------------------------
+    // Per-body primitive pulled by the draw override
+    // (mmd_physics_draw_override.cpp) from the node's CURRENT solver state:
+    // solved world poses if the Bullet world is built, rest poses otherwise.
+    // The node is an MPxLocatorNode so the guides are always visible, and the
+    // viewport shows exactly what the simulation has — no scene guide meshes.
+    struct DrawBody
+    {
+        double pos[3];
+        double quat[4];     // (x, y, z, w)
+        short colliderType; // 1 box, 2 sphere, 3 capsule
+        double radius;
+        double extents[3]; // box half extents
+        double length;     // capsule cylinder length
+        int groupId;       // collision group 0..15 (draw palette)
+        bool kinematic;
+    };
+    // Fill *out* with one DrawBody per rigid body (body-index aligned).
+    void collectDrawData(std::vector<DrawBody>& out) const;
+    // Object-space bounding box over the body rest poses (selection/culling).
+    MBoundingBox boundingBox() const override;
 
     MMDPhysicsNode();
     ~MMDPhysicsNode() override;

@@ -6,10 +6,10 @@ builder and physics_builder.py).  It owns:
 
 * the MMD → Maya coordinate conversions shared by the rigid-body code
   (Z-flip positions, ``(-rx, -ry, +rz)`` handedness rotation),
-* the collision-group color palette and per-group surface shaders,
 * the **rigid-body build functions** that drive one native ``mmdPhysicsNode``
-  (embedded Bullet) per model: visible guide meshes for every rigid body, the
-  node's ``bodies`` / ``joints`` compound arrays, the kinematic-anchor and
+  (embedded Bullet) per model: an invisible guide transform per rigid body
+  (the NODE draws the visible colliders itself through its draw override),
+  the node's ``bodies`` / ``joints`` compound arrays, the kinematic-anchor and
   dynamic-output connections, and the DG write-back constraints to the
   skeleton.
 
@@ -26,7 +26,7 @@ discovery helpers (wrapped by ``ModelContext.physics*`` getters).  Headless
 stepping live here as :func:`step_physics` and :func:`write_back_physics`.
 
 This module is part of the mmd.maya.pmx package and runs inside Autodesk Maya
-(requires maya.api.OpenMaya, maya.cmds, maya.mel).
+(requires maya.api.OpenMaya, maya.cmds).
 """
 
 from __future__ import annotations
@@ -37,46 +37,10 @@ from typing import Optional
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
-import maya.mel as mel
 
 from mmd.core.data_types import PhysicsMode, PmxModel, ShapeType
 
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Collision-group color palette
-# ---------------------------------------------------------------------------
-
-# Distinct viewport colors for collision groups, indexed by PMX group_id (0-15).
-# Four-bit group ids are the MMD convention; ids beyond 15 wrap around.
-# Groups 0-7 use the classic rainbow (maximally distinct for the groups most
-# models actually use); 8-15 extend it with clearly different hues/lightness so
-# every group id has a unique, recognizable color.
-_RIGID_BODY_GROUP_COLORS: tuple[tuple[float, float, float], ...] = (
-    (0.90, 0.10, 0.10),   # 0  red
-    (0.10, 0.75, 0.15),   # 1  green
-    (0.15, 0.35, 0.95),   # 2  blue
-    (1.00, 0.90, 0.10),   # 3  yellow
-    (0.95, 0.15, 0.65),   # 4  magenta
-    (0.00, 0.85, 0.90),   # 5  cyan
-    (1.00, 0.55, 0.10),   # 6  orange
-    (0.50, 0.10, 0.90),   # 7  purple
-    (0.60, 0.90, 0.10),   # 8  lime
-    (1.00, 0.35, 0.50),   # 9  rose
-    (0.40, 0.65, 0.95),   # 10 sky blue
-    (1.00, 0.65, 0.80),   # 11 pink
-    (0.55, 0.35, 0.15),   # 12 brown
-    (0.80, 0.60, 0.95),   # 13 lavender
-    (0.10, 0.70, 0.55),   # 14 teal
-    (0.10, 0.15, 0.50),   # 15 navy
-)
-
-
-def _group_color_hex(group_id: int) -> str:
-    """Human-readable hex color for a collision group's palette entry."""
-    r, g, b = _RIGID_BODY_GROUP_COLORS[group_id % len(_RIGID_BODY_GROUP_COLORS)]
-    return f"#{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
 
 
 # ---------------------------------------------------------------------------
@@ -113,48 +77,6 @@ def mmd_euler_to_maya_degrees(
     )
 
 
-# ---------------------------------------------------------------------------
-# Collision-group shaders
-# ---------------------------------------------------------------------------
-
-
-def _create_group_material(group_name: str, group_id: int) -> tuple[str, str]:
-    """Create one unique shader + shading group for a collision group.
-
-    Uses Maya 2024+'s standard surface shader ``openPBRSurface`` (colored via
-    its ``baseColor`` attribute, matching the ``shadingNode -asShader
-    openPBRSurface`` workflow in Maya 2026).  Falls back to a Lambert on older
-    Maya releases where ``openPBRSurface`` does not exist.
-
-    Returns:
-        ``(shader_name, shading_group_name)``.
-    """
-    r, g, b = _RIGID_BODY_GROUP_COLORS[group_id % len(_RIGID_BODY_GROUP_COLORS)]
-    shader = None
-    shader_type = None
-    for candidate in ("openPBRSurface", "lambert"):
-        try:
-            shader = cmds.shadingNode(
-                candidate, asShader=True, name=f"{group_name}_Group{group_id:02d}"
-            )
-            shader_type = candidate
-            break
-        except Exception:
-            continue
-    if shader is None:
-        raise RuntimeError("No supported surface shader node available")
-    if shader_type == "openPBRSurface":
-        cmds.setAttr(f"{shader}.baseColor", r, g, b, type="double3")
-    else:  # lambert
-        cmds.setAttr(f"{shader}.color", r, g, b, type="double3")
-        cmds.setAttr(f"{shader}.diffuse", 0.8)
-    sg = cmds.sets(
-        name=f"{shader}SG", renderable=True, noSurfaceShader=True, empty=True
-    )
-    cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader")
-    return shader, sg
-
-
 # ===========================================================================
 # Physics binding — one native mmdPhysicsNode (embedded Bullet) per model
 # ===========================================================================
@@ -179,6 +101,57 @@ _DEFAULT_GRAVITY_Y = -9.8
 # Playback frames per second — the node converts Maya frame deltas to seconds
 # with this.
 _DEFAULT_FPS = 30.0
+
+# Maya time-unit names -> playback frames per second (cmds.currentUnit's named
+# units).  Custom "NNNfps" units are parsed numerically instead.
+_MAYA_TIME_UNIT_FPS: dict[str, float] = {
+    "film": 24.0,
+    "game": 30.0,
+    "ntsc": 30.0,
+    "pal": 25.0,
+    "show": 48.0,
+    "palf": 50.0,
+    "ntscf": 60.0,
+}
+
+
+def _time_unit_to_fps(unit: Optional[str]) -> Optional[float]:
+    """Convert a Maya time-unit string to frames-per-second (PURE).
+
+    ``unit`` is what ``cmds.currentUnit(query=True, time=True)`` returns — a
+    named unit (``"film"``, ``"game"``, ``"ntsc"``, ``"pal"``, ``"show"``,
+    ``"palf"``, ``"ntscf"``) or an explicit custom rate like ``"30fps"``.
+    Returns ``None`` when the string cannot be resolved (the caller falls back
+    to :data:`_DEFAULT_FPS`).  Pure function of the string — unit-testable
+    without Maya.
+    """
+    if not unit:
+        return None
+    named = _MAYA_TIME_UNIT_FPS.get(unit)
+    if named is not None:
+        return named
+    if unit.endswith("fps"):
+        try:
+            return float(unit[: -len("fps")])
+        except ValueError:
+            return None
+    return None
+
+
+def _scene_fps(default: float = _DEFAULT_FPS) -> float:
+    """Resolve the current Maya scene playback frame rate (fps).
+
+    Used to configure the physics node's ``fps`` so its frame→seconds
+    conversion matches the timeline.  Falls back to ``default`` (30, MMD's
+    rate) when the time unit cannot be resolved.
+    """
+    try:
+        unit = cmds.currentUnit(query=True, time=True)
+        fps = _time_unit_to_fps(unit)
+        return fps if fps is not None else default
+    except Exception as e:
+        log.debug("Could not resolve scene time unit: %s", e)
+        return default
 
 
 def _clamp01(v: float) -> float:
@@ -442,19 +415,30 @@ def _create_physics_group(name_registry, root_transform_obj) -> str:
     return cmds.createNode("transform", name=group_name)
 
 
-def _create_physics_solver(name_registry) -> str:
-    """Create the ``mmdPhysicsNode`` and make it time-driven through the DG.
+def _create_physics_solver(name_registry, parent_group: Optional[str] = None) -> str:
+    """Create the ``mmdPhysicsNode`` (a locator shape) and make it time-driven.
 
-    The node owns the Bullet world; connecting ``time1.outTime`` to its
-    ``time`` input makes the evaluation manager step it on every frame.
+    The node is an ``MPxLocatorNode``: it owns the Bullet world AND draws its
+    own guide visualization (wireframe box/sphere/capsule per body, colored by
+    collision group) through a C++ draw override — no scene guide meshes.  It
+    is parented under the physics group at the origin, so the Bullet world runs
+    in the group's local space and the guides are drawn there.  Connecting
+    ``time1.outTime`` to its ``time`` input makes the evaluation manager step
+    it on every frame.
     """
-    node = cmds.createNode(_NODE_TYPE, name=name_registry.get_physics_solver_name())
+    kwargs: dict = {"name": name_registry.get_physics_solver_name()}
+    if parent_group:
+        kwargs["parent"] = parent_group
+    node = cmds.createNode(_NODE_TYPE, **kwargs)
     try:
         cmds.connectAttr("time1.outTime", f"{node}.time")
     except Exception as e:
         log.warning("Could not connect time1 to node time: %s", e)
     cmds.setAttr(f"{node}.gravity", 0.0, _DEFAULT_GRAVITY_Y, 0.0)
-    cmds.setAttr(f"{node}.fps", _DEFAULT_FPS) #TODO get from scene fps
+    # Match the node's frame→seconds conversion to the scene's playback rate —
+    # a scene at 24/25/48/50/60 fps would otherwise run the sim too fast/slow
+    # against the timeline (the node's default is MMD's 30 fps).
+    cmds.setAttr(f"{node}.fps", _scene_fps())
     return node
 
 
@@ -483,20 +467,26 @@ def _create_rigid_body_guide(
     group,
     name_registry,
     joint_names: dict[int, str],
-    materials_cache: dict[int, tuple[str, str]],
     kin_overlap_bits: int,
     dyn_overlap_bits: int,
     cloth_overlap_bits: int = 0,
     bodies: Optional[dict[int, str]] = None,
     constraints: Optional[dict[int, str]] = None,
 ) -> Optional[dict]:
-    """Create one visible guide mesh for a PMX rigid body.
+    """Create one (invisible) guide transform for a PMX rigid body.
 
     Returns a body spec dict (used to populate the node's ``bodies``
     compound array) or None on failure.  The guide is placed at the PMX
     rest pose (Z-flip + handedness-correct rotation) and parented under the
     physics group; the node solves in the group's local space, so the
     guide's LOCAL transform is the Bullet rest pose.
+
+    The guide is a plain transform — the ``mmdPhysicsNode`` DRAWS the visible
+    collider (wireframe box/sphere/capsule, group-colored) through its C++
+    draw override, so no mesh shape or shader is created in the scene.  The
+    transform exists purely as the DG bridge: FOLLOW_BONE guides feed the
+    node's kinematic anchors, dynamic guides receive the solved pose and drive
+    the bones via the write-back constraints.
     """
     jn = body.related_bone_index
     jpath = joint_names.get(jn) if jn >= 0 else None
@@ -510,7 +500,7 @@ def _create_rigid_body_guide(
         )
 
         guide_name = name_registry.get_physics_rigidbody_name(rb_idx)
-        guide = _create_guide_mesh(body, guide_name)
+        guide = cmds.createNode("transform", name=guide_name)
         cmds.xform(guide, ws=True, translation=world_t)
         cmds.xform(guide, ws=True, rotation=world_r)
         cmds.parent(guide, group, absolute=True)
@@ -551,18 +541,6 @@ def _create_rigid_body_guide(
             if not cmds.attributeQuery(attr, node=guide, exists=True):
                 cmds.addAttr(guide, longName=attr, attributeType="long")
             cmds.setAttr(f"{guide}.{attr}", value)
-
-        # Unique surface shader per collision group, shared by all guides
-        # in the group (see _group_shading_group).  Assign the MESH SHAPES
-        # (not the transform): assigning a constrained transform (e.g. a
-        # FOLLOW_BONE guide) emits "cannot add parentConstraint to set"
-        # warnings, and per-shape assignment is precise anyway.
-        try:
-            sg = _group_shading_group(group, body.group_id, materials_cache)
-            for ms in cmds.listRelatives(guide, shapes=True, type="mesh") or []:
-                cmds.sets(ms, edit=True, forceElement=sg)
-        except Exception as e:
-            log.debug("Could not shade guide %s: %s", guide, e)
 
         if bodies is not None:
             bodies[rb_idx] = guide
@@ -793,71 +771,29 @@ def _set_joint_attributes(node: Optional[str], pmx_data: PmxModel) -> None:
         except Exception as e:
             log.warning("Could not set joint %d attributes: %s", jt_idx, e)
 
-def _create_guide_mesh(body, guide_name: str) -> str:
-    """Create a polygonal guide mesh (sphere / box / capsule) for a body.
-
-    The guide is the VISIBLE rigid body — a regular mesh always draws from
-    its DAG matrix, so it follows its bone (via the parentConstraint)
-    reliably, including under Cached Playback.
-    """
-    size = body.shape_size
-    if body.shape == ShapeType.SPHERE:
-        # Size.x is the radius.
-        return cmds.polySphere(
-            radius=size.x, subdivisionsX=12, subdivisionsY=12, name=guide_name
-        )[0]
-    if body.shape == ShapeType.BOX:
-        # Size components are half-extents.
-        return cmds.polyCube(
-            width=size.x * 2, height=size.y * 2, depth=size.z * 2, name=guide_name
-        )[0]
-    # CAPSULE: size.x is radius, size.y is total height incl. caps.  Use MEL
-    # directly — cmds.polyCylinder has a bug with roundCap.
-    mel_cmd = (
-        f"polyCylinder -r {size.x} -h {size.y} "
-        f"-sx 12 -sh 1 -sc 12 -rcp true "
-        f'-n "{guide_name}";'
-    )
-    result = mel.eval(mel_cmd)
-    return result[0] if isinstance(result, list) else result
-
-
-def _group_shading_group(
-    group_name: str,
-    group_id: int,
-    materials_cache: dict[int, tuple[str, str]],
-) -> str:
-    """Return (creating on first use) the shading group for a collision group.
-
-    Each collision group gets ONE unique surface shader (Maya 2024+:
-    ``openPBRSurface``; older releases fall back to a Lambert), colored from
-    the group palette and shared by every guide mesh in that group.  This
-    shades the guide meshes reliably in the viewport — unlike the old
-    draw-override tint (``overrideEnabled`` + ``overrideColorRGB``) which
-    was a leftover from the mayaBullet collider-shape era and does not
-    color mesh guides.
-    """
-    existing = materials_cache.get(group_id)
-    if existing:
-        return existing[1]
-    shader, sg = _create_group_material(group_name, group_id)
-    materials_cache[group_id] = (shader, sg)
-    return sg
-
 def step_physics(node: Optional[str]) -> None:
     """Force a fresh solver evaluation at the current time (headless use).
 
     Only needed for headless/batch use (or to manually advance the sim).  In
     interactive Maya the simulation is pure DG — the node's output connections
     pull it on every time step, so playback advances it.
+
+    The node is an ``MPxLocatorNode``; a bare ``dgeval(node)`` does NOT reliably
+    pull its custom solver outputs (it evaluates the DAG shape, not the
+    ``outTranslate``/``outRotate`` plugs — verified with the Phase 1 locator
+    conversion, where the sim only advanced when a guide transform was read).
+    Demanding an output plug explicitly forces ``compute()`` to run.
     """
     if not node:
         return
     try:
         cmds.dgdirty(node)
-        cmds.dgeval(node)
-    except Exception as e:
-        log.debug("physics step dgeval failed: %s", e)
+        cmds.dgeval(f"{node}.outTranslate")
+    except Exception:
+        try:
+            cmds.dgeval(node)
+        except Exception as e:
+            log.debug("physics step dgeval failed: %s", e)
 
 
 def write_back_physics(bodies, constraints) -> None:
@@ -908,7 +844,9 @@ def create_physics_from_pmx_data(
         the root), or ``None`` if the model has no rigid bodies.
     """
     group = _create_physics_group(name_registry, root_transform_obj)
-    node = _create_physics_solver(name_registry)
+    # The solver is a locator shape parented under the physics group — its
+    # object space is the group's local space, which is the Bullet world frame.
+    node = _create_physics_solver(name_registry, parent_group=group)
 
     #TODO we should consider connecting the joint outputs to the node
     # this way we will avoid name mapping and we will have a more robust connection between the joints and the node
@@ -916,7 +854,6 @@ def create_physics_from_pmx_data(
     # node will explicitly show which joint is connected 
     joint_names = _joint_names_for(joints) 
 
-    materials_cache: dict[int, tuple[str, str]] = {}
     bodies: dict[int, str] = {}
     constraints: dict[int, str] = {}
     body_specs: dict[int, dict] = {}
@@ -939,7 +876,6 @@ def create_physics_from_pmx_data(
             group,
             name_registry,
             joint_names,
-            materials_cache,
             kin_overlap.get(rb_idx, 0),
             dyn_overlap.get(rb_idx, 0),
             cloth_overlap.get(rb_idx, 0),

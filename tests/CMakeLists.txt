@@ -21,16 +21,30 @@ if(BUILD_TESTS)
     )
     FetchContent_MakeAvailable(Catch2)
 
-    # TODO: Add test source files and uncomment when ready.
-    # add_executable(mmd_tools_tests
-    #     test_example.cpp
-    # )
-    # target_link_libraries(mmd_tools_tests PRIVATE Catch2::Catch2WithMain)
-    # target_compile_features(mmd_tools_tests PRIVATE cxx_std_17)
-    # include(Catch)
-    # catch_discover_tests(mmd_tools_tests)
+    # Pure-logic C++ unit tests (no Maya SDK).  They need Bullet only for the
+    # math header's LinearMath types — vcpkg's find_package(Bullet) ran in the
+    # plugin section above (Maya is always found), so the variables are in
+    # scope here; be defensive anyway.
+    if(NOT DEFINED BULLET_LIBRARIES)
+        find_package(Bullet CONFIG REQUIRED)
+    endif()
 
-    message(STATUS "Catch2 available — no C++ tests registered yet")
+    add_executable(mmd_tools_tests
+        test_mmd_physics_math.cpp
+    )
+    target_include_directories(mmd_tools_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        ${BULLET_INCLUDE_DIRS}
+    )
+    target_link_libraries(mmd_tools_tests PRIVATE
+        Catch2::Catch2WithMain
+        ${BULLET_LIBRARIES}
+    )
+    target_compile_features(mmd_tools_tests PRIVATE cxx_std_17)
+    include(Catch)
+    catch_discover_tests(mmd_tools_tests)
+
+    message(STATUS "Catch2 available — registered mmd_tools_tests (test_mmd_physics_math.cpp)")
 endif()
 
 # =========================================================================

@@ -15,6 +15,7 @@
  * one Plugin Manager entry.
  */
 
+#include <maya/MDrawRegistry.h>
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MObject.h>
@@ -22,8 +23,15 @@
 #include <maya/MString.h>
 
 #include "maya/nodes/ccd_ik_solver_node.h"
+#include "maya/nodes/mmd_physics_draw_override.h"
 #include "maya/nodes/mmd_physics_node.h"
 #include "version.hpp"
+
+// Draw-override registration (see MHWRender::MDrawRegistry): the override is
+// keyed by a draw-database CLASSIFICATION plus a unique REGISTRANT id, not the
+// node's MTypeId.
+static const MString kPhysicsDrawClassification("drawdb/geometry/mmdPhysicsNode");
+static const MString kPhysicsDrawRegistrant("MayaMMD");
 
 // ===========================================================================
 // Python-side initialization — called from C++ via executePythonCommand
@@ -80,16 +88,28 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
         MGlobal::displayWarning("  ⚠ CCD IK solver registration failed");
 
     // 1b. Register the native rigid-body physics node (embedded Bullet).
-    //     A normal MPxNode the evaluation manager steps on every time change —
-    //     this is the MMD secondary-movement engine that replaces mayaBullet.
+    //     An MPxLocatorNode the evaluation manager steps on every time change
+    //     — this is the MMD secondary-movement engine that replaces mayaBullet.
+    //     As a locator it also draws its own guide visualization (see the draw
+    //     override registration below).
     {
         MString classification(MMDPhysicsNode::kNodeClassify);
         stat = plugin.registerNode(MMDPhysicsNode::kNodeName, MMDPhysicsNode::kTypeId,
                                    MMDPhysicsNode::creator, MMDPhysicsNode::initialize,
-                                   MPxNode::kDependNode, &classification);
+                                   MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
         MGlobal::displayWarning("  ⚠ mmdPhysicsNode registration failed");
+
+    // 1c. Register the viewport draw override that renders the node's guide
+    //     visualization (wireframe box/sphere/capsule per body, group-colored)
+    //     directly from the node's internal Bullet state.
+    {
+        stat = MHWRender::MDrawRegistry::registerDrawOverrideCreator(
+            kPhysicsDrawClassification, kPhysicsDrawRegistrant, MMDPhysicsDrawOverride::creator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ mmdPhysicsNode draw override registration failed");
 
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
@@ -112,6 +132,9 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     _run_python_uninitialization();
 
     // 2. Deregister C++ nodes and commands
+    //    (the draw override creator must be removed before its node type).
+    MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(kPhysicsDrawClassification,
+                                                            kPhysicsDrawRegistrant);
     plugin.deregisterNode(MMDPhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
 
