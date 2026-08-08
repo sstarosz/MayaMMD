@@ -90,7 +90,9 @@ converted game models frequently ship **degenerate** collision data where every
 body only collides with its OWN group (e.g. the Tololo PMX: skirt mask
 `0x0004`, legs mask `0x0002`) — in that state the skirt passes straight through
 the legs because neither mask includes the other's group, in both directions.
-The builder applies a **proximity-based correction** instead of blanket unions:
+The **node** applies a **proximity-based correction** instead of blanket unions
+(Phase 2: this logic moved out of `rigid_body_builder._compute_collision_masks`
+into `mmd/maya/nodes/mmd_physics_masks.h`, compiled into the plugin):
 
 - For each pair of bodies the builder tests whether their rest-pose extents
   overlap (`center distance < extentᵢ + extentⱼ + 0.2`). Only *overlapping*
@@ -233,8 +235,10 @@ flowchart LR
 - **Inputs**: `time`, `gravity`, `fps`; `anchorWorldMatrix` +
   `anchorParentInverseMatrix` (matrix arrays, one per kinematic body);
   `bodies` compound array (rest pose, mass, damping, friction, restitution,
-  collider type/size, collision group/mask, kinematic flag); `joints` compound
-  array (body A/B, type, frame, limits, springs).
+  collider type/size, kinematic flag, raw `bodyGroupId` + `bodyNonCollisionGroup`
+  — the node computes each body's effective collision mask itself in
+  `buildWorld` via `mmd_physics_masks.h`); `joints` compound array (body A/B,
+  type, frame, limits, springs).
 - **compute()**: on first evaluation reads bodies/joints and builds the world
   (`buildWorld`); on time change updates the kinematic anchors (`local =
   world * parentInverse`), steps `stepSimulation(dt, 8, 1/60)`, and writes each
@@ -329,6 +333,9 @@ scene is the source of truth — discover physics state later with
    shapes and no surface shaders are created.  Bind the guide↔bone DG
    constraint (see above).
 3. Populate `node.bodies[i]` for every body (indices = PMX rigid-body index).
+   Each element carries the **raw PMX** `bodyGroupId` + `bodyNonCollisionGroup`;
+   the node resolves effective masks itself (Phase 2 — the Python
+   `_compute_collision_masks` was deleted, its logic lives in the plugin).
 4. Connect each FOLLOW_BONE guide's `worldMatrix[0]` +
    `parentInverseMatrix[0]` to `anchorWorldMatrix[k]` / `anchorParentInverseMatrix[k]`
    in PMX kinematic order.
@@ -342,9 +349,17 @@ scene is the source of truth — discover physics state later with
 
 ### Collision filtering
 
-`group_id` (byte) → Bullet group bit `1 << group_id`.
-`non_collision_group` (int16 bitmask) → groups this body does **not** collide
-with; Bullet's "collides with" mask is the complement: `(~non_collision_group) & 0xFFFF`.
+Resolved in the **node** at `buildWorld` time (Phase 2) — the Python builder no
+longer pre-computes masks; it passes the raw PMX values through as attributes:
+
+- `bodyGroupId` (short, default −1) → Bullet group bit `1 << group_id`. A value
+  ≥ 0 overrides `bodyGroup` (the legacy explicit 64-bit group bit).
+- `bodyNonCollisionGroup` (long, default −1) → groups this body does **not**
+  collide with; Bullet's "collides with" mask is the complement
+  `(~non_collision_group) & 0xFFFF`, then corrected by the proximity +
+  cloth-on-cloth rules in `mmd/maya/nodes/mmd_physics_masks.h`
+  (`computeEffectiveMasks`). When both are −1 the explicit `bodyGroup` /
+  `bodyMask` attributes are used verbatim.
 
 ### Gravity / units
 
@@ -378,6 +393,7 @@ every structural check.
 | `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                                                 |
 | `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + palette + build functions (node + guides + anchors + outputs + write-back) |
 | `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                     |
+| `mmd/maya/nodes/mmd_physics_masks.h`                                    | Collision-mask resolver (`computeEffectiveMasks`: proximity + cloth-on-cloth corrections)                   |
 | `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                       |
 | `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                         |
 | `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                         |

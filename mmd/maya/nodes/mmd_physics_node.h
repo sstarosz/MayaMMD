@@ -139,7 +139,10 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyLength;         // double (capsule)
     static MObject aBodyGroup;          // long collision group
     static MObject aBodyMask;           // long collision mask
-    static MObject aBodyKinematic;      // bool — kinematic (anchor) vs dynamic
+    static MObject aBodyGroupId;        // short PMX group id 0..15 (-1 = explicit bodyGroup)
+    static MObject
+        aBodyNonCollisionGroup;    // long raw PMX non-collision mask (-1 = explicit bodyMask)
+    static MObject aBodyKinematic; // bool — kinematic (anchor) vs dynamic
     static MObject
         aBodyResetAnchorIndex; // long — index of the kinematic
                                // anchor whose delta drives this body's scrub-back reset; -1 = none
@@ -180,6 +183,11 @@ class MMDPhysicsNode : public MPxLocatorNode
         double length;
         long group;
         long mask;
+        // Raw PMX collision inputs (Phase 2): the node derives the Bullet
+        // group bit and the effective mask itself when these are set (>= 0);
+        // `group`/`mask` above remain as explicit overrides (used otherwise).
+        short groupId;
+        long nonCollisionGroup;
         bool kinematic;
         // Scrub-back reset: index of the kinematic ANCHOR whose current pose
         // drives this body's reset (or -1), plus the constant offset

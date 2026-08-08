@@ -158,35 +158,11 @@ def _clamp01(v: float) -> float:
     return max(0.0, min(1.0, v))
 
 
-# How deeply (in model units) two cloth bodies must interpenetrate at rest for
-# the cloth-on-cloth collision correction to treat them as "draped over each
-# other" (e.g. bangs resting in the skirt).  A shallow touch (cape tips
-# brushing the jacket back, ~0.11) must not qualify — the contact would shove
-# the shared chain around.  Tololo's bangs penetrate the skirt 0.21-0.81 deep,
-# the cape tips only 0.11, so 0.15 cleanly separates them.
-_CLOTH_OVERLAP_PENETRATION = 0.15
-# Chain-size guards for the cloth-on-cloth correction: only a SHORT chain
-# (≤ _CLOTH_SMALL_CHAIN bodies) draping a LARGE sheet (≥ _CLOTH_LARGE_SHEET
-# bodies) qualifies — the bangs (8) resting on the skirt (144).  This keeps the
-# rule from adding collisions in models with different cloth layouts (a large
-# skirt draping small belts/ribbons, long hair chains, etc.), which destabilize.
-_CLOTH_SMALL_CHAIN = 10
-_CLOTH_LARGE_SHEET = 50
-
-
-def _approx_extent(rb) -> float:
-    """Rough bounding radius of a rigid body's rest collider.
-
-    Used by the proximity-based collision-mask correction to decide whether two
-    bodies overlap at rest.  Box -> largest half-extent; sphere -> radius;
-    capsule -> max(radius, cylinder-half + radius).
-    """
-    s = rb.shape_size
-    if rb.shape == ShapeType.BOX:
-        return max(s.x, s.y, s.z)
-    if rb.shape == ShapeType.SPHERE:
-        return s.x
-    return max(s.x, s.y / 2.0 + s.x)
+# Collision-mask resolution lives in the NODE (Phase 2): Python feeds the raw
+# PMX data (bodyGroupId + bodyNonCollisionGroup) and the C++ node derives the
+# effective group bit + mask with the same proximity + cloth-on-cloth
+# corrections — mmd/maya/nodes/mmd_physics_masks.h is the exact port of the
+# former _compute_collision_masks (see that header for the MMD-intent reasoning).
 
 
 def _joint_names_for(joints) -> dict[int, str]:
@@ -203,195 +179,6 @@ def _joint_names_for(joints) -> dict[int, str]:
             except Exception as e:
                 log.debug("Could not resolve joint %d path: %s", b_idx, e)
     return names
-
-
-# ---------------------------------------------------------------------------
-# Collision-mask correction (PURE — no Maya calls, unit-testable)
-# ---------------------------------------------------------------------------
-
-
-def _compute_collision_masks(pmx_data: PmxModel) -> tuple[dict[int, int], dict[int, int], dict[int, int]]:
-    """Compute the verified proximity + cloth-on-cloth collision-mask bits.
-
-    Returns ``(kin_overlap, dyn_overlap, cloth_overlap)``:
-
-    * ``kin_overlap[dyn_rb]``  — kinematic group bits overlapping that dynamic
-      body's rest collider.
-    * ``dyn_overlap[kin_rb]``  — dynamic group bits overlapping that
-      kinematic body's rest collider.
-    * ``cloth_overlap[dyn_rb]`` — additional dynamic group bits from the
-      cloth-on-cloth drape rule (a small chain resting on a large sheet that
-      shares the same kinematic anchor).
-
-    Pure function of ``pmx_data`` — see the comments below for the MMD-intent
-    reasoning (do NOT change without re-running the rigidbody suite).
-    """
-    # PROXIMITY-BASED correction.  Converted game models often ship degenerate
-    # non_collision_group values (every body = "own group only", e.g. the
-    # Tololo PMX: skirt mask 0x0004, legs mask 0x0002), which would let the
-    # skirt pass straight through the legs.  But blanket-adding ALL kinematic
-    # groups to every dynamic body over-broadens: e.g. the bangs (Beg, PMX
-    # mask 0x0012 = head group 1 only) would also get the huge torso capsule
-    # (group 7) and jitter on it.  Instead, a DYNAMIC body only gains the
-    # KINEMATIC groups whose colliders actually overlap its rest collider, and
-    # a KINEMATIC body gains the DYNAMIC groups that overlap it — so the skirt
-    # collides with the legs/hips it wraps, while the bangs keep colliding
-    # only with the head they rest on.
-    centers = [rb.shape_position for rb in pmx_data.rigid_bodies]
-    extents = [_approx_extent(rb) for rb in pmx_data.rigid_bodies]
-    kin_overlap: dict[int, int] = {}  # dynamic rb_idx -> kinematic group bits
-    dyn_overlap: dict[int, int] = {}  # kinematic rb_idx -> dynamic group bits
-    for i, rb in enumerate(pmx_data.rigid_bodies):
-        bits = 0
-        if rb.physics_mode == PhysicsMode.FOLLOW_BONE:
-            others = (j for j, rbj in enumerate(pmx_data.rigid_bodies)
-                      if rbj.physics_mode != PhysicsMode.FOLLOW_BONE)
-            store = dyn_overlap
-        else:
-            others = (j for j, rbj in enumerate(pmx_data.rigid_bodies)
-                      if rbj.physics_mode == PhysicsMode.FOLLOW_BONE)
-            store = kin_overlap
-        for j in others:
-            rbj = pmx_data.rigid_bodies[j]
-            dx = centers[i].x - centers[j].x
-            dy = centers[i].y - centers[j].y
-            dz = centers[i].z - centers[j].z
-            rr = extents[i] + extents[j] + 0.2
-            if dx * dx + dy * dy + dz * dz < rr * rr:
-                bits |= 1 << rbj.group_id
-        store[i] = bits
-
-    # Cloth-on-cloth correction (hair/bangs draping over the skirt/jacket).
-    # The kinematic correction above only covers body↔cloth.  Converted game
-    # models also ship masks where e.g. the bangs (Beg chain, anchored to the
-    # torso) do NOT collide with the skirt (also anchored to the torso) — so
-    # the bangs hang free, sag into the skirt and swing "under the arm"
-    # instead of resting ON the jacket colliders.  Adding the skirt group to
-    # the bangs (and vice-versa) fixes that.  Guards keep this from creating
-    # new instabilities:
-    #   1. CHAINS: connectivity uses DYNAMIC bodies only (kinematic bodies
-    #      never merge chains).  Bodies jointed into the same chain (bangs vs
-    #      their own tail capsules) never collide, and a cape sharing only the
-    #      torso ANCHOR with the bangs is a separate chain.
-    #   2. ANCHOR: two cloth chains only interact when they are jointed to the
-    #      SAME body part (same collision group of their FOLLOW_BONE anchor,
-    #      e.g. both anchored to the torso) — the bangs and the skirt both hang
-    #      off the torso, while the sleeve hangs off the arm and the hair off
-    #      the head, so bangs↔sleeve/hair are never added (two hanging chains
-    #      colliding shove each other around).
-    #   3. SMALL↔LARGE: only a SHORT cloth chain (≤ 10 bodies) resting on a
-    #      LARGE cloth sheet (≥ 50 bodies) qualifies.  The bangs (8 bodies)
-    #      draping the skirt (144) is exactly this.  Everything else is
-    #      excluded — a big skirt draping a small belt, two small ribbons,
-    #      long hair chains, etc. — so this never adds collisions in models
-    #      where the cloth layout differs (validated: adding skirt↔ribbon/
-    #      belt/hair contacts there destabilizes the sim).
-    #   4. DRAPE: the small chain must genuinely DRAPE the large one — some
-    #      body of it must INTERPENETRATE a body of the large chain at rest
-    #      (centre distance < extents sum − 0.15).  A mere touch (e.g. the
-    #      cape tips brushing the jacket back 0.11 deep) does NOT qualify —
-    #      that contact would shove the shared chain around and jitter the
-    #      bangs.  Once a small chain drapes, EVERY body of it that overlaps
-    #      the large chain gains its group (so the bangs tail, which only
-    #      touches the skirt, still rests on it).
-    # Own-group bits stay cleared (hair↔hair pass-through preserved).
-    n_rb = len(pmx_data.rigid_bodies)
-    parent = list(range(n_rb))
-
-    def _find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def _union(a: int, c: int) -> None:
-        ra, rc = _find(a), _find(c)
-        if ra != rc:
-            parent[rc] = ra
-
-    for jn in pmx_data.joints:
-        a, b = jn.rigid_body_index_a, jn.rigid_body_index_b
-        if a < 0 or b < 0:
-            continue
-        ba = pmx_data.rigid_bodies[a]
-        bb = pmx_data.rigid_bodies[b]
-        if (ba.physics_mode != PhysicsMode.FOLLOW_BONE and
-                bb.physics_mode != PhysicsMode.FOLLOW_BONE):
-            _union(a, b)  # dynamic↔dynamic joint = same cloth chain
-    anchor_groups: dict[int, int] = {}  # chain root -> kinematic group bits
-    chain_size: dict[int, int] = {}  # chain root -> dynamic body count
-    for i, rb in enumerate(pmx_data.rigid_bodies):
-        if rb.physics_mode == PhysicsMode.FOLLOW_BONE:
-            continue
-        r = _find(i)
-        chain_size[r] = chain_size.get(r, 0) + 1
-    for jn in pmx_data.joints:
-        a, b = jn.rigid_body_index_a, jn.rigid_body_index_b
-        if a < 0 or b < 0:
-            continue
-        ba = pmx_data.rigid_bodies[a]
-        bb = pmx_data.rigid_bodies[b]
-        if ba.physics_mode == PhysicsMode.FOLLOW_BONE and \
-                bb.physics_mode != PhysicsMode.FOLLOW_BONE:
-            anchor_groups[_find(b)] = anchor_groups.get(_find(b), 0) | (1 << ba.group_id)
-        elif bb.physics_mode == PhysicsMode.FOLLOW_BONE and \
-                ba.physics_mode != PhysicsMode.FOLLOW_BONE:
-            anchor_groups[_find(a)] = anchor_groups.get(_find(a), 0) | (1 << bb.group_id)
-    # Chain pairs where the small chain drapes the large one.
-    draped: set[frozenset] = set()
-    for i, rb in enumerate(pmx_data.rigid_bodies):
-        if rb.physics_mode == PhysicsMode.FOLLOW_BONE:
-            continue
-        ri = _find(i)
-        for j, rbj in enumerate(pmx_data.rigid_bodies):
-            if j <= i or rbj.physics_mode == PhysicsMode.FOLLOW_BONE:
-                continue
-            rj = _find(j)
-            if rbj.group_id == rb.group_id or rj == ri:
-                continue
-            # Guard 3: one chain small, the other large.
-            si, sj = chain_size.get(ri, 0), chain_size.get(rj, 0)
-            if not ((si <= _CLOTH_SMALL_CHAIN and sj >= _CLOTH_LARGE_SHEET) or
-                    (sj <= _CLOTH_SMALL_CHAIN and si >= _CLOTH_LARGE_SHEET)):
-                continue
-            # Guard 2: same body part.
-            if (anchor_groups.get(ri, 0) & anchor_groups.get(rj, 0)) == 0:
-                continue
-            dx = centers[i].x - centers[j].x
-            dy = centers[i].y - centers[j].y
-            dz = centers[i].z - centers[j].z
-            # Guard 4: real draping interpenetration, not a mere touch.
-            rr = extents[i] + extents[j] - _CLOTH_OVERLAP_PENETRATION
-            if dx * dx + dy * dy + dz * dz < rr * rr:
-                draped.add(frozenset((ri, rj)))
-    cloth_overlap: dict[int, int] = {}  # dynamic rb_idx -> dynamic group bits
-    for i, rb in enumerate(pmx_data.rigid_bodies):
-        if rb.physics_mode == PhysicsMode.FOLLOW_BONE:
-            continue
-        ri = _find(i)
-        bits = 0
-        for j, rbj in enumerate(pmx_data.rigid_bodies):
-            if i == j or rbj.physics_mode == PhysicsMode.FOLLOW_BONE:
-                continue
-            if rbj.group_id == rb.group_id:
-                continue  # own group stays cleared (hair↔hair pass-through)
-            rj = _find(j)
-            if rj == ri:
-                continue  # same cloth chain — jointed bodies never collide
-            if (anchor_groups.get(ri, 0) & anchor_groups.get(rj, 0)) == 0:
-                continue  # different body part (arm/head vs torso)
-            if frozenset((ri, rj)) not in draped:
-                continue  # chains only touch / wrong size mix, no drape
-            dx = centers[i].x - centers[j].x
-            dy = centers[i].y - centers[j].y
-            dz = centers[i].z - centers[j].z
-            rr = extents[i] + extents[j] + 0.2
-            if dx * dx + dy * dy + dz * dz < rr * rr:
-                bits |= 1 << rbj.group_id
-        if bits:
-            cloth_overlap[i] = bits
-
-    return kin_overlap, dyn_overlap, cloth_overlap
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +254,6 @@ def _create_rigid_body_guide(
     group,
     name_registry,
     joint_names: dict[int, str],
-    kin_overlap_bits: int,
-    dyn_overlap_bits: int,
-    cloth_overlap_bits: int = 0,
     bodies: Optional[dict[int, str]] = None,
     constraints: Optional[dict[int, str]] = None,
 ) -> Optional[dict]:
@@ -546,31 +330,11 @@ def _create_rigid_body_guide(
             bodies[rb_idx] = guide
 
         size = body.shape_size
-        # Collision mask.
-        #
-        # The PMX non_collision_group is respected as the base, then two
-        # MMD-intent corrections are applied, PROXIMITY-BASED (see
-        # _compute_collision_masks): a dynamic body collides with the
-        # kinematic "body" colliders that overlap it at rest (so the skirt
-        # blocks on the legs/hips it wraps, but the bangs keep colliding only
-        # with the head, not the huge torso capsule), and a kinematic body
-        # blocks the dynamic bodies that overlap it.  Dynamic bodies also
-        # clear their OWN group bit: MMD models store hair/skirt spheres
-        # DEEPLY OVERLAPPING, and self-collision pushes the chains apart ("the
-        # bang is longer than normal"); like a well-configured MMD model,
-        # hair strands pass through each other but still collide with the
-        # body.
-        mask = (~body.non_collision_group) & 0xFFFF
-        if kinematic:
-            mask |= dyn_overlap_bits
-        else:
-            mask &= ~(1 << body.group_id)
-            mask |= kin_overlap_bits
-            # Cloth-on-cloth: bangs/hair resting on the skirt/jacket that
-            # shares the same kinematic anchor (see _compute_collision_masks).
-            # Both sides gain the other's group, so the bangs rest ON the
-            # jacket colliders instead of falling through them / under the arm.
-            mask |= cloth_overlap_bits
+        # The node computes the effective collision mask itself (Phase 2) from
+        # the raw PMX data below (bodyGroupId + bodyNonCollisionGroup) — the
+        # proximity + cloth-on-cloth corrections live in
+        # mmd/maya/nodes/mmd_physics_masks.h.  `group` (the bit) is still fed
+        # so the draw override can color guides before the node's first solve.
         return {
             "restT": local_t,
             "restR": local_r,
@@ -591,7 +355,8 @@ def _create_rigid_body_guide(
             "extents": (size.x, size.y, size.z),
             "length": size.y,
             "group": 1 << body.group_id,
-            "mask": mask,
+            "groupId": body.group_id,
+            "nonCollisionGroup": body.non_collision_group,
             "kinematic": kinematic,
             "guide": guide,
         }
@@ -620,7 +385,13 @@ def _set_body_attributes(
             cmds.setAttr(f"{base}.bodyExtents", *spec["extents"])
             cmds.setAttr(f"{base}.bodyLength", float(spec["length"]))
             cmds.setAttr(f"{base}.bodyGroup", int(spec["group"]))
-            cmds.setAttr(f"{base}.bodyMask", int(spec["mask"]))
+            # Raw PMX collision inputs — the node derives the effective mask
+            # itself (Phase 2); bodyGroup is kept so the draw override can
+            # color guides before the node's first solve.
+            cmds.setAttr(f"{base}.bodyGroupId", int(spec["groupId"]))
+            cmds.setAttr(
+                f"{base}.bodyNonCollisionGroup", int(spec["nonCollisionGroup"])
+            )
             cmds.setAttr(f"{base}.bodyKinematic", bool(spec["kinematic"]))
             cmds.setAttr(
                 f"{base}.bodyResetAnchorIndex", int(reset_index.get(rb_idx, -1))
@@ -824,9 +595,9 @@ def create_physics_from_pmx_data(
 ) -> Optional[str]:
     """Build the full physics graph for a PMX model (no in-memory handle).
 
-    Creates the ``{model}_Physics`` group, the ``mmdPhysicsNode`` solver, a
-    visible guide mesh per rigid body (with DG write-back constraints), the
-    ``bodies`` / ``joints`` arrays, the kinematic-anchor and dynamic-output
+    Creates the ``{model}_Physics`` group, the ``mmdPhysicsNode`` solver, an
+    invisible guide transform per rigid body (with DG write-back constraints),
+    the ``bodies`` / ``joints`` arrays, the kinematic-anchor and dynamic-output
     connections, and disables DG caching on the subgraph.
 
     The SCENE is the source of truth: discover the built graph later with
@@ -860,15 +631,11 @@ def create_physics_from_pmx_data(
     kinematic_order: list[int] = []
 
 
-    #TODO: Collision masks need to be redesigned. 
-    # Right now there is too much complexity and edge cases handling that focus more on fixing one model issues than generic collision handling.
-    # Also we should consider moving the collision mask computation to the node itself, becouse they belong to the physics simulation and not to the maya scene.
-    # Collison mask should be attribute input of the node.
-    kin_overlap, dyn_overlap, cloth_overlap = _compute_collision_masks(pmx_data)
-
-    #TODO: We should consider moving the guide mesh creation to the node itself, becouse they belong to the physics simulation and not to the maya scene.
-    # Node should draw the guides itself, and not rely on maya scene objects.
-    # This will also make the node more robust and less dependent on the maya scene, and will allow for better performance and less complexity in the maya scene.
+    # The collision-mask resolution lives in the NODE (Phase 2): each body
+    # feeds the raw PMX data (bodyGroupId + bodyNonCollisionGroup) and the
+    # node derives the effective group bit + mask itself (see
+    # mmd/maya/nodes/mmd_physics_masks.h — exact port of the former Python
+    # proximity + cloth-on-cloth corrections).
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         spec = _create_rigid_body_guide(
             rb_idx,
@@ -876,9 +643,6 @@ def create_physics_from_pmx_data(
             group,
             name_registry,
             joint_names,
-            kin_overlap.get(rb_idx, 0),
-            dyn_overlap.get(rb_idx, 0),
-            cloth_overlap.get(rb_idx, 0),
             bodies=bodies,
             constraints=constraints,
         )
