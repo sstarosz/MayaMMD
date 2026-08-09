@@ -13,6 +13,7 @@ and adding new C++ commands or nodes.
 | **GCC / Clang**        | Any C++17           | Linux / macOS                             |
 | **Python**             | 3.10, 3.11, or 3.13 | Must match the Maya version you target    |
 | **Maya SDK**           | 2024–2027           | Headers + libs for your Maya version      |
+| **vcpkg**              | ≥ 2023-03-29        | Dependency manager                        |
 | **Python dev tools**   | —                   | Install via `pip install ".[dev]"`        |
 | **clang-format**       | ≥ 15                | C++ code formatting (optional)            |
 | **clang-tidy**         | ≥ 15                | C++ static analysis (optional)            |
@@ -34,13 +35,44 @@ This downloads the DevKit from Autodesk, strips it to headers + libs only
 
 For CI builds, the SDK is downloaded automatically by CMake (see `CMakeLists.txt`).
 
+### vcpkg Setup (dependencies)
+
+MayaMMD resolves its C/C++ dependencies via **vcpkg** (`vcpkg.json`).
+Currently that is **Bullet 3.25** (float precision) for the native
+`pmxPhysicsNode`; future C/C++ dependencies will be added to `vcpkg.json`
+the same way. A fresh clone just needs a bootstrapped vcpkg with
+`VCPKG_ROOT` set:
+
+```bash
+# Linux/macOS
+git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+"$HOME/vcpkg/bootstrap-vcpkg.sh"
+export VCPKG_ROOT="$HOME/vcpkg"
+
+# Windows
+git clone https://github.com/microsoft/vcpkg "%USERPROFILE%\vcpkg"
+"%USERPROFILE%\vcpkg\bootstrap-vcpkg.bat"
+set VCPKG_ROOT=%USERPROFILE%\vcpkg
+```
+
+The vcpkg toolchain is wired through `CMakePresets.json`: the `maya*` presets
+set `CMAKE_TOOLCHAIN_FILE` from `$VCPKG_ROOT` (hidden `with-vcpkg` preset),
+and CMake installs the project's dependencies on the first configure (into
+the build directory) — no manual `vcpkg install` is needed.
+
+- **No vcpkg:** if `VCPKG_ROOT` is unset, the `maya*` presets fail with a
+  clear toolchain error. Bootstrap vcpkg, set `VCPKG_ROOT`, and re-run.
+- Keep Bullet at **float** precision: do **not** enable vcpkg's
+  `double-precision` feature — `btScalar` must stay float to match
+  `physics_node.cpp`.
+
 ## Quick Start
 
 ### Local C++ Development
 
 ```bash
-# 1. Ensure the Maya SDK is available (one-time — CMake auto-downloads it)
-cmake --preset default
+# 1. Ensure the Maya SDK + vcpkg are available (one-time — both auto-detected)
+cmake --preset maya2026-release
 
 # 2. Build
 cmake --build out/build/maya2026-release --config Release
@@ -64,17 +96,16 @@ cmds.loadPlugin("path/to/MayaMMD.mll")
 
 ### CMake Presets
 
-| Preset                 | Purpose                   | Maya SDK        |
-| ---------------------- | ------------------------- | --------------- |
-| `ci`                   | CI unit tests (no Maya)   | Not needed      |
-| `maya2024-debug`       | Local C++ dev (Maya 2024) | Auto-downloaded |
-| `maya2024-release`     | Local C++ dev (Maya 2024) | Auto-downloaded |
-| `maya2025-debug`       | Local C++ dev (Maya 2025) | Auto-downloaded |
-| `maya2025-release`     | Local C++ dev (Maya 2025) | Auto-downloaded |
-| `maya2026-debug`       | Local C++ dev (Maya 2026) | Auto-downloaded |
-| `maya2026-release`     | Local C++ dev (Maya 2026) | Auto-downloaded |
-| `maya2027-debug`       | Local C++ dev (Maya 2027) | Auto-downloaded |
-| `maya2027-release`     | Local C++ dev (Maya 2027) | Auto-downloaded |
+| Preset             | Purpose                   | Maya SDK        |
+| ------------------ | ------------------------- | --------------- |
+| `maya2024-debug`   | Local C++ dev (Maya 2024) | Auto-downloaded |
+| `maya2024-release` | Local C++ dev (Maya 2024) | Auto-downloaded |
+| `maya2025-debug`   | Local C++ dev (Maya 2025) | Auto-downloaded |
+| `maya2025-release` | Local C++ dev (Maya 2025) | Auto-downloaded |
+| `maya2026-debug`   | Local C++ dev (Maya 2026) | Auto-downloaded |
+| `maya2026-release` | Local C++ dev (Maya 2026) | Auto-downloaded |
+| `maya2027-debug`   | Local C++ dev (Maya 2027) | Auto-downloaded |
+| `maya2027-release` | Local C++ dev (Maya 2027) | Auto-downloaded |
 
 ### Build Variants
 
@@ -103,12 +134,12 @@ ctest --test-dir out/build/maya2026-release -C Release --output-on-failure
 
 ### Development Scripts
 
-| Command                                       | Description                       |
-| --------------------------------------------- | --------------------------------- |
+| Command                                                | Description                       |
+| ------------------------------------------------------ | --------------------------------- |
 | `cmake --preset maya2026-release && cmake --build ...` | Build .mll for Maya 2026          |
-| `python scripts/ci/strip_maya_sdk.py ensure`  | Download + cache Maya SDK         |
-| `clang-format -i mmd/...`                     | Format C++ code with clang-format |
-| `clang-tidy mmd/...`                          | Lint C++ code with clang-tidy     |
+| `python scripts/ci/strip_maya_sdk.py ensure`           | Download + cache Maya SDK         |
+| `clang-format -i mmd/...`                              | Format C++ code with clang-format |
+| `clang-tidy mmd/...`                                   | Lint C++ code with clang-tidy     |
 
 See `.vscode/tasks.json` for pre-configured VS Code tasks for all of the above.
 
@@ -245,6 +276,12 @@ The project uses LLVM-style formatting with 4-space indentation (see `.clang-for
 ### "Maya SDK not found"
 
 Run `python scripts/ci/strip_maya_sdk.py ensure` to download the SDK. Or set `MAYA_LOCATION` env var to your Maya install directory.
+
+### "vcpkg is not configured" / toolchain not found
+
+The native plugin resolves its dependencies via vcpkg. Bootstrap vcpkg and set
+`VCPKG_ROOT` (see [vcpkg Setup](#vcpkg-setup-dependencies)), then re-run
+`cmake --preset maya2026-release`.
 
 ### "Cannot open include file: 'maya/MFnPlugin.h'"
 

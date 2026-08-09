@@ -136,6 +136,21 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(Maya REQUIRED)
 message(STATUS "Maya ${Maya_VERSION} SDK: ${Maya_INCLUDE_DIR} (libs: ${Maya_LIBRARY_DIR})")
 
+# ── Bullet (physics engine) — resolved ONCE at the top level ────────────
+# Used by the Maya-free core (mmd_core) and the plugin.  Provided by vcpkg
+# (see vcpkg.json, package `bullet3` 3.25) with FLOAT precision — do NOT
+# enable vcpkg's `double-precision` feature, btScalar must stay float to
+# match the consumers in mmd/core/simulation.cpp.
+if(NOT CMAKE_TOOLCHAIN_FILE)
+    message(FATAL_ERROR
+        "No CMake toolchain configured.\n\n"
+        "  Use a CMake preset to activate the vcpkg toolchain:\n"
+        "    cmake --preset maya2026-release\n\n"
+        "  Set VCPKG_ROOT to a bootstrapped vcpkg first — see docs/CPPDevelopment.md."
+    )
+endif()
+find_package(Bullet CONFIG REQUIRED)
+
 # =========================================================================
 # Native .mll plugin — single entry point for MayaMMD
 # =========================================================================

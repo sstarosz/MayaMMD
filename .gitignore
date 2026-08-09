@@ -35,6 +35,10 @@ CMakeCache.txt
 
 #Third Party — external reference projects (not part of the plugin)
 thirdparty/
+third_party/
+
+#vcpkg — local installs (the toolchain installs into the build dir)
+vcpkg_installed/
 
 #VS Code — generated Maya API stubs (experimental, not part of the project)
 .vscode/stubs/
