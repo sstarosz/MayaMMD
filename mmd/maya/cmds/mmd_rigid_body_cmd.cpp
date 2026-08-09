@@ -571,7 +571,16 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
         identity.setToIdentity();
         if (jointPath.isValid())
         {
-            MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            // K = jointRestWorld * bodyRestWorld^-1 with the body's DIRECT
+            // world rest pose (MMD Z-flip + handedness), exactly like the old
+            // Python bake.  Do NOT round-trip through the group-space
+            // decomposition (matrixFromTR(localT, localR) * groupWorld): when
+            // the physics group carries scale, MTransformationMatrix drops the
+            // scale during euler decomposition, so the round-tripped "world"
+            // is scaled wrongly and every write-back-driven bone lands off its
+            // rest pose (the collider guides stay correct — they render the
+            // scale back through the DAG — which is the exact breakage seen).
+            MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }
         setMatrixValue(fn.findPlug(MMDPhysicsNode::aBodyWriteBackOffset).elementByLogicalIndex(n),

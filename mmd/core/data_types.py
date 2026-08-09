@@ -467,8 +467,8 @@ class ShapeType(Enum):
 
 class PhysicsMode(Enum):
     FOLLOW_BONE = 0  # Rigid body sticks to bone
-    PHYSICS = 1  # Rigid body uses gravity
-    PHYSICS_BONE = 2  # Rigid body uses gravity pivoted to bone
+    PHYSICS = 1  # Physics drives rigid body
+    PHYSICS_BONE = 2  # Physics drives rigid body; result is applied to bone
 
 
 @dataclass

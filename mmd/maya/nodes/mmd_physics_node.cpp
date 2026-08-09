@@ -1331,11 +1331,19 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
             offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
             offsetHandle.jumpToArrayElement((unsigned int) parentIdx) == MS::kSuccess)
         {
+            // The two jumps in the condition above leave the handle at the
+            // LAST element (parentIdx) — re-position explicitly before each
+            // read so k = K[i] and mp = K[parentIdx].  (Reading K[parentIdx]
+            // for BOTH was the bug that displaced every dynamic bone: the
+            // joint-world terms cancelled and boneLocal collapsed to
+            // bodyLocal * B_parent^-1.)
+            offsetHandle.jumpToArrayElement((unsigned int) i);
             MMatrix k = offsetHandle.inputValue().asMatrix();
             // M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the
             // SAME constant as K[parentIdx] (bodyWriteBackOffset of the parent
             // body — baked at create for kinematic AND dynamic parents), so a
             // separate parent-offset array is not needed.
+            offsetHandle.jumpToArrayElement((unsigned int) parentIdx);
             MMatrix mp = offsetHandle.inputValue().asMatrix();
             double bpRow[4][4];
             btTransformToRowMatrix(mRigidBodies[parentIdx]->getWorldTransform(), bpRow);

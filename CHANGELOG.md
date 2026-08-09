@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed: write-back displaced every dynamic bone at rest (M_parent read
+  bug).** When `bodyParentJointOffset` was replaced by deriving
+  `M_parent = K[parentBodyIndex]` inside the node, the two
+  `jumpToArrayElement` calls in the primary-path condition left the array
+  handle at `parentIdx`, so `k` AND `mp` both read `K[parentIdx]` (the body's
+  own `K[i]` was never read) and `boneLocal` collapsed to
+  `bodyLocal · B_parent⁻¹` — collider guides stayed correct but every driven
+  joint was displaced.  The handle is now explicitly re-positioned before each
+  read.  Verified: all 285 driven joints at exact rest after import.
 - **Simulation re-enabled — no `-finalize` step.** Import now wires the full
   physics graph in one pass: the solver is time-driven (`time1.outTime →
   node.time`) and the solved pose is written straight into the related joints
