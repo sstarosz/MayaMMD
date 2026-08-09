@@ -11,5 +11,6 @@ target_include_directories(mmd_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}"
     ${BULLET_INCLUDE_DIRS}
 )
-target_link_libraries(mmd_core PUBLIC ${BULLET_LIBRARIES})
+
+target_link_libraries(mmd_core PRIVATE ${BULLET_LIBRARIES})
 target_compile_features(mmd_core PUBLIC cxx_std_17)

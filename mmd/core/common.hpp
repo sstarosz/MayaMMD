@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <cassert>
+
 namespace mmd
 {
 namespace core
@@ -34,9 +36,11 @@ struct Double3
     constexpr Double3() = default;
     constexpr Double3(double x_, double y_, double z_) : x(x_), y(y_), z(z_) {}
 
-    // Index access for the flag-parsing loops (i in 0..2).
+    // Index access for the flag-parsing loops (i in 0..2).  Out-of-range
+    // indices are a programming error — assert before the default case.
     constexpr double& operator[](int i)
     {
+        assert(i >= 0 && i < 3);
         switch (i)
         {
         case 0:
@@ -49,6 +53,7 @@ struct Double3
     }
     constexpr const double& operator[](int i) const
     {
+        assert(i >= 0 && i < 3);
         switch (i)
         {
         case 0:
@@ -76,9 +81,11 @@ struct Double4
     constexpr Double4() = default;
     constexpr Double4(double x_, double y_, double z_, double w_) : x(x_), y(y_), z(z_), w(w_) {}
 
-    // Index access (i in 0..3).
+    // Index access (i in 0..3).  Out-of-range indices are a programming
+    // error — assert before the default case.
     constexpr double& operator[](int i)
     {
+        assert(i >= 0 && i < 4);
         switch (i)
         {
         case 0:
@@ -93,6 +100,7 @@ struct Double4
     }
     constexpr const double& operator[](int i) const
     {
+        assert(i >= 0 && i < 4);
         switch (i)
         {
         case 0:

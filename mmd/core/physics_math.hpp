@@ -62,9 +62,9 @@ inline btQuaternion eulerDegreesToQuat(double rx, double ry, double rz)
 inline void quatToEulerXYZDegrees(const btQuaternion& q, Double3& out)
 {
     btMatrix3x3 m(q);
-    const double sy = -m[2][0]; // sin(ry)
-    const double epsilon = 1e-6;
-    if (sy < -1.0 + epsilon || sy > 1.0 - epsilon)
+    const double sinRy = -m[2][0]; // sin(ry)
+    constexpr double kGimbalEps = 1e-6;
+    if (sinRy < -1.0 + kGimbalEps || sinRy > 1.0 - kGimbalEps)
     {
         // Gimbal lock: ry = ±90°, rx/rz degenerate (only their combination is
         // well-defined).  Set rx = 0 and solve the combined term:
@@ -90,7 +90,7 @@ inline void quatToEulerXYZDegrees(const btQuaternion& q, Double3& out)
         return;
     }
     double rx = std::atan2(m[2][1], m[2][2]);
-    double ry = std::asin(sy);
+    double ry = std::asin(sinRy);
     double rz = std::atan2(m[1][0], m[0][0]);
     out.x = rad2deg(rx);
     out.y = rad2deg(ry);

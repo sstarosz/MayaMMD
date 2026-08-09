@@ -3,11 +3,6 @@
  *
  * simulation.cpp
  *
- * mmd::core::Simulation implementation — see simulation.hpp.  Maya-free
- * Bullet engine (no Maya headers).  Compiled into the plugin AND into the
- * unit-test target (tests/core/test_simulation.cpp), which proves it is
- * Maya-free.
- *
  * The simulation runs in the physics group's LOCAL space; the node supplies
  * and consumes plain poses (pos+quat).  All matrix/unit conversion is the
  * node's job — the pure math helpers come from physics_math.hpp.
@@ -35,13 +30,13 @@ constexpr int kJointSlider = 4;
 constexpr int kJointHinge = 5;
 
 // Simulation stepping constants (see initialize()/step()).
-constexpr int kSolverIterations = 30;       // > Bullet's default 10 — long rigid chains need it
-constexpr int kMaxSubSteps = 8;             // max internal steps per step()
-constexpr double kMaxStepTime = 0.5;        // clamp for huge time jumps (scrub/tab)
-constexpr double kMinShapeSize = 1e-4;      // floor for shape sizes — 0 would make Bullet assert
-constexpr float kConstraintSoftness = 0.3F; // cone/hinge limit softness (Bullet tuning)
-constexpr double kAnchorMoveEps2 = 1e-6;    // squared-distance threshold for anchor movement
-constexpr double kAnchorMoveEpsRot = 1e-5;  // column-dot threshold for anchor rotation
+constexpr int kSolverIterations = 30;         // > Bullet's default 10 — long rigid chains need it
+constexpr int kMaxSubSteps = 8;               // max internal steps per step()
+constexpr double kMaxStepTime = 0.5;          // clamp for huge time jumps (scrub/tab)
+constexpr double kMinShapeSize = 1e-4;        // floor for shape sizes — 0 would make Bullet assert
+constexpr float kConstraintSoftness = 0.3F;   // cone/hinge limit softness (Bullet tuning)
+constexpr double kAnchorMoveDistEpsSq = 1e-6; // squared-distance threshold for anchor movement
+constexpr double kAnchorMoveRotEps = 1e-5;    // column-dot threshold for anchor rotation
 } // namespace
 
 namespace mmd
@@ -176,16 +171,17 @@ void Simulation::createBodies()
         btCollisionShape* shape = nullptr;
         if (b.colliderType == ColliderType::eSphere)
         {
-            shape = new btSphereShape(static_cast<btScalar>(std::max(b.radius, kMinShapeSize)));
-            mShapes.emplace_back(shape);
+            mShapes.push_back(std::make_unique<btSphereShape>(
+                static_cast<btScalar>(std::max(b.radius, kMinShapeSize))));
+            shape = mShapes.back().get();
         }
         else if (b.colliderType == ColliderType::eBox)
         {
-            shape = new btBoxShape(
+            mShapes.push_back(std::make_unique<btBoxShape>(
                 btVector3(static_cast<btScalar>(std::max(b.extents.x, kMinShapeSize)),
                           static_cast<btScalar>(std::max(b.extents.y, kMinShapeSize)),
-                          static_cast<btScalar>(std::max(b.extents.z, kMinShapeSize))));
-            mShapes.emplace_back(shape);
+                          static_cast<btScalar>(std::max(b.extents.z, kMinShapeSize)))));
+            shape = mShapes.back().get();
         }
         else // capsule — btCapsuleShape is ALREADY Y-axis (m_upAxis = 1), which
              // matches MMD's vertical capsule and the polyCylinder guide mesh.
@@ -194,11 +190,10 @@ void Simulation::createBodies()
              // hemispherical cap at the skirt and pushed it ~1 unit out, making
              // the skirt float with a visible gap from the body.)
         {
-            auto* capsule =
-                new btCapsuleShape(static_cast<btScalar>(std::max(b.radius, kMinShapeSize)),
-                                   static_cast<btScalar>(std::max(b.length, kMinShapeSize)));
-            mShapes.emplace_back(capsule);
-            shape = capsule;
+            mShapes.push_back(std::make_unique<btCapsuleShape>(
+                static_cast<btScalar>(std::max(b.radius, kMinShapeSize)),
+                static_cast<btScalar>(std::max(b.length, kMinShapeSize))));
+            shape = mShapes.back().get();
         }
 
         const btScalar mass =
@@ -209,13 +204,17 @@ void Simulation::createBodies()
             shape->calculateLocalInertia(mass, localInertia);
         }
 
-        auto* motionState = new btDefaultMotionState(start);
-        btRigidBody::btRigidBodyConstructionInfo ci(mass, motionState, shape, localInertia);
+        // btRigidBody takes ownership of the motion state (deletes it in its
+        // dtor), so the unique_ptr is released once the body owns it.
+        std::unique_ptr<btDefaultMotionState> motionState =
+            std::make_unique<btDefaultMotionState>(start);
+        btRigidBody::btRigidBodyConstructionInfo ci(mass, motionState.get(), shape, localInertia);
         ci.m_linearDamping = static_cast<btScalar>(b.linearDamping);
         ci.m_angularDamping = static_cast<btScalar>(b.angularDamping);
         ci.m_friction = static_cast<btScalar>(b.friction);
         ci.m_restitution = static_cast<btScalar>(b.restitution);
-        auto* body = new btRigidBody(ci);
+        auto body = std::make_unique<btRigidBody>(ci);
+        (void) motionState.release(); // btRigidBody now owns the motion state
 
         if (b.kinematic)
         {
@@ -264,10 +263,13 @@ void Simulation::createBodies()
 
         // Bullet group bit from the raw PMX group id (legacy scenes without
         // it keep the default group 0); b.mask is the PMX non_collision_group
-        // bools stored verbatim.
-        const long group = 1L << ((b.groupId >= 0 ? b.groupId : 0) & 0x0F);
-        mWorld->addRigidBody(body, group, b.mask);
-        mRigidBodies[i].reset(body);
+        // bits stored verbatim.  addRigidBody takes shorts; group 15
+        // (1 << 15 = 0x8000) does not fit a signed short and truncates to
+        // -32768 — the same limitation MMD itself has, noted so a future
+        // "fix" doesn't change it silently.
+        const short group = static_cast<short>(1 << ((b.groupId >= 0 ? b.groupId : 0) & 0x0F));
+        mWorld->addRigidBody(body.get(), group, static_cast<short>(b.mask));
+        mRigidBodies[i] = std::move(body);
     }
 }
 
@@ -294,7 +296,7 @@ void Simulation::createJoint(const JointDefinition& j)
     btTransform frameInA = rbA->getWorldTransform().inverse() * frameWorld;
     btTransform frameInB = rbB->getWorldTransform().inverse() * frameWorld;
 
-    btTypedConstraint* con = nullptr;
+    std::unique_ptr<btTypedConstraint> con;
     switch (j.type)
     {
     case kJointSpring6Dof:
@@ -309,7 +311,7 @@ void Simulation::createJoint(const JointDefinition& j)
         //   * nonzero springs            -> springy (PMX stiffness).
         // This is the single mapping that matches MMD's behaviour for the
         // whole joints data (rigid hair/cape chains, springy skirt, etc.).
-        auto* g6 = new btGeneric6DofSpring2Constraint(*rbA, *rbB, frameInA, frameInB);
+        auto g6 = std::make_unique<btGeneric6DofSpring2Constraint>(*rbA, *rbB, frameInA, frameInB);
         g6->setLinearLowerLimit(btVector3(static_cast<btScalar>(j.linearMin.x),
                                           static_cast<btScalar>(j.linearMin.y),
                                           static_cast<btScalar>(j.linearMin.z)));
@@ -335,12 +337,12 @@ void Simulation::createJoint(const JointDefinition& j)
                 g6->setStiffness(ax + 3, static_cast<btScalar>(j.angularSpring[ax]));
             }
         }
-        con = g6;
+        con = std::move(g6);
         break;
     }
     case kJointSixDof:
     {
-        auto* g6 = new btGeneric6DofConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        auto g6 = std::make_unique<btGeneric6DofConstraint>(*rbA, *rbB, frameInA, frameInB, true);
         g6->setLinearLowerLimit(btVector3(static_cast<btScalar>(j.linearMin.x),
                                           static_cast<btScalar>(j.linearMin.y),
                                           static_cast<btScalar>(j.linearMin.z)));
@@ -353,50 +355,50 @@ void Simulation::createJoint(const JointDefinition& j)
         g6->setAngularUpperLimit(btVector3(static_cast<btScalar>(j.angularMax.x),
                                            static_cast<btScalar>(j.angularMax.y),
                                            static_cast<btScalar>(j.angularMax.z)));
-        con = g6;
+        con = std::move(g6);
         break;
     }
     case kJointP2P:
     {
         const btVector3 pivotInA = frameInA.getOrigin();
         const btVector3 pivotInB = frameInB.getOrigin();
-        con = new btPoint2PointConstraint(*rbA, *rbB, pivotInA, pivotInB);
+        con = std::make_unique<btPoint2PointConstraint>(*rbA, *rbB, pivotInA, pivotInB);
         break;
     }
     case kJointConeTwist:
     {
-        auto* ct = new btConeTwistConstraint(*rbA, *rbB, frameInA, frameInB);
+        auto ct = std::make_unique<btConeTwistConstraint>(*rbA, *rbB, frameInA, frameInB);
         ct->setLimit(static_cast<btScalar>(j.angularMin.y), static_cast<btScalar>(j.angularMax.y),
                      0.0F, kConstraintSoftness, 0.0F, 1.0F);
-        con = ct;
+        con = std::move(ct);
         break;
     }
     case kJointSlider:
     {
-        auto* sl = new btSliderConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        auto sl = std::make_unique<btSliderConstraint>(*rbA, *rbB, frameInA, frameInB, true);
         sl->setLowerLinLimit(static_cast<btScalar>(j.linearMin.y));
         sl->setUpperLinLimit(static_cast<btScalar>(j.linearMax.y));
         sl->setLowerAngLimit(static_cast<btScalar>(j.angularMin.y));
         sl->setUpperAngLimit(static_cast<btScalar>(j.angularMax.y));
-        con = sl;
+        con = std::move(sl);
         break;
     }
     case kJointHinge:
     {
-        auto* hi = new btHingeConstraint(*rbA, *rbB, frameInA, frameInB, true);
+        auto hi = std::make_unique<btHingeConstraint>(*rbA, *rbB, frameInA, frameInB, true);
         hi->setLimit(static_cast<btScalar>(j.angularMin.y), static_cast<btScalar>(j.angularMax.y),
                      kConstraintSoftness, 0.0F, 1.0F);
-        con = hi;
+        con = std::move(hi);
         break;
     }
     default:
         break;
     }
 
-    if (con != nullptr)
+    if (con)
     {
-        mWorld->addConstraint(con, /*disableCollisionsBetweenLinkedBodies=*/true);
-        mConstraints.emplace_back(con);
+        mWorld->addConstraint(con.get(), /*disableCollisionsBetweenLinkedBodies=*/true);
+        mConstraints.push_back(std::move(con));
     }
 }
 
@@ -442,9 +444,9 @@ bool Simulation::setKinematicPose(size_t anchorIndex, const Pose& pose)
         const btVector3 p0 = prev.getBasis().getColumn(0);
         const btVector3 c1 = t.getBasis().getColumn(1);
         const btVector3 p1 = prev.getBasis().getColumn(1);
-        if (d.length2() > btScalar(kAnchorMoveEps2) ||
-            c0.dot(p0) < btScalar(1.0) - btScalar(kAnchorMoveEpsRot) ||
-            c1.dot(p1) < btScalar(1.0) - btScalar(kAnchorMoveEpsRot))
+        if (d.length2() > btScalar(kAnchorMoveDistEpsSq) ||
+            c0.dot(p0) < btScalar(1.0) - btScalar(kAnchorMoveRotEps) ||
+            c1.dot(p1) < btScalar(1.0) - btScalar(kAnchorMoveRotEps))
         {
             moved = true;
         }
@@ -462,7 +464,7 @@ void Simulation::step(double dt)
     {
         return;
     }
-    dt = std::min(dt, kMaxStepTime); // guard against huge jumps
+    dt = std::clamp(dt, 0.0, kMaxStepTime); // guard against huge jumps / negative dt
     mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
 }
 
@@ -482,14 +484,14 @@ void Simulation::resetDynamicBodies()
         {
             continue;
         }
-        const int aIdx = b.resetAnchorIndex;
-        if (aIdx < 0 || aIdx >= static_cast<int>(mAnchorCurrent.size()))
+        const int anchorIdx = b.resetAnchorIndex;
+        if (anchorIdx < 0 || anchorIdx >= static_cast<int>(mAnchorCurrent.size()))
         {
             continue;
         }
 
         const btTransform anchorCurrent =
-            anchorPoseToTransform(mAnchorCurrent[aIdx].pos, mAnchorCurrent[aIdx].quat);
+            anchorPoseToTransform(mAnchorCurrent[anchorIdx].pos, mAnchorCurrent[anchorIdx].quat);
         btTransform offset;
         offset.setIdentity();
         offset.setOrigin(btVector3(btScalar(b.resetOffsetPos.x), btScalar(b.resetOffsetPos.y),

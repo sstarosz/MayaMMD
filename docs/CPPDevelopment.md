@@ -162,7 +162,10 @@ mmd/                          # Python package + C++ plugin entry point
 
 tests/
 ├── CMakeLists.txt            # CTest definitions (Catch2 + Maya integration)
-├── unit_tests/               # Python unit tests (pytest)
+├── unit_tests/               # Unit tests
+│   ├── core/                 # Core tests (pytest .py + Catch2 .cpp)
+│   ├── maya/                 # Python Maya tests (pytest)
+│   └── ui/                   # Python UI tests (pytest)
 ├── integration/              # Maya integration tests
 └── benchmarks/               # Performance benchmarks
 ```
@@ -247,8 +250,8 @@ cmake --build out/build/maya2026-release --config Release
 ctest --preset default --output-on-failure
 ```
 
-Add new test files in `tests/core/` and add them to the `mmd_core_tests`
-target in `tests/core/CMakeLists.txt`.
+Add new test files in `tests/unit_tests/core/` and add them to the
+`mmd_core_tests` target in `tests/unit_tests/core/CMakeLists.txt`.
 
 ### Maya Integration Tests
 

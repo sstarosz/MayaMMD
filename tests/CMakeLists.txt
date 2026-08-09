@@ -6,8 +6,8 @@
 # =========================================================================
 
 # =========================================================================
-# Catch2 C++ unit tests (no Maya SDK required) — one subdirectory per
-# tested component (see tests/core/ for the Maya-free core).
+# Catch2 C++ unit tests (no Maya SDK required) — C++ tests live in
+# tests/unit_tests/core/ (alongside the Python unit tests).
 # =========================================================================
 if(BUILD_TESTS)
     include(FetchContent)
@@ -18,7 +18,7 @@ if(BUILD_TESTS)
     )
     FetchContent_MakeAvailable(Catch2)
 
-    add_subdirectory(core)
+    add_subdirectory(unit_tests/core)
 endif()
 
 # =========================================================================

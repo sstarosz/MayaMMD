@@ -5,8 +5,8 @@
  * DESIGN: everything that actually IS the simulation — the Bullet world,
  * rigid bodies, constraints, collision filtering, kinematic anchors and the
  * scrub-back reset — lives in this class, so it can be unit-tested WITHOUT
- * the Maya SDK (see tests/core/test_simulation.cpp) and reasoned about in
- * isolation.  A thin Maya node (a later PR) adapts it: it reads attributes,
+ * the Maya SDK (see tests/unit_tests/core/test_simulation.cpp) and reasoned
+ * about in isolation.  A thin Maya node (a later PR) adapts it: it reads attributes,
  * converts Maya<->Bullet transforms and owns the timeline/state machine.
  *
  * This class knows nothing about Maya: it consumes a plain Definition
