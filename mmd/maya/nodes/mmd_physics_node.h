@@ -70,6 +70,25 @@ class MMDPhysicsNode : public MPxLocatorNode
     // the override with the node and no guides are drawn.
     static constexpr const char* kNodeClassify = "drawdb/geometry/mmdPhysicsNode";
 
+    // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
+    // attribute and used by the mmdRigidBody command to classify bodies.
+    enum BodyPhysicsMode : short
+    {
+        kBodyPhysicsFollowBone = 0, // kinematic anchor — driven by the related joint
+        kBodyPhysics = 1,           // full dynamic body
+        kBodyPhysicsBone = 2,       // dynamic, rotation-only write-back
+    };
+
+    // PMX rigid-body collider shape — stored in the bodyColliderType enum
+    // attribute and used by the mmdRigidBody command.  Values match the
+    // collision-mask resolver's own enum (mmd_physics_masks.h).
+    enum ColliderType : short
+    {
+        kColliderBox = 1,
+        kColliderSphere = 2,
+        kColliderCapsule = 3,
+    };
+
     // ------------------------------------------------------------------
     // Draw support (Phase 1) — the node draws its own guide visualization
     // ------------------------------------------------------------------
@@ -81,8 +100,8 @@ class MMDPhysicsNode : public MPxLocatorNode
     struct DrawBody
     {
         double pos[3];
-        double quat[4];     // (x, y, z, w)
-        short colliderType; // 1 box, 2 sphere, 3 capsule
+        double quat[4];            // (x, y, z, w)
+        ColliderType colliderType; // PMX shape type (box/sphere/capsule)
         double radius;
         double extents[3]; // box half extents
         double length;     // capsule cylinder length
@@ -154,35 +173,33 @@ class MMDPhysicsNode : public MPxLocatorNode
     // parentBodyRestWorld^-1 is baked by Python (the same constant for
     // kinematic and dynamic parents).
     static MObject aBodyParentJointOffset; // matrix array, body-indexed: M_parent baked constant
-    // Per-body compound array: aBodies[i].
+    // Per-body compound array: aBodies[i] — children are declared to mirror
+    // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
+    // attribute) sits first.
     static MObject aBodies;
-    static MObject aBodyRestTranslate;  // float3 (degrees? no — translate units)
-    static MObject aBodyRestRotate;     // float3 degrees
-    static MObject aBodyMass;           // double
-    static MObject aBodyLinearDamping;  // double
-    static MObject aBodyAngularDamping; // double
-    static MObject aBodyFriction;       // double
-    static MObject aBodyRestitution;    // double
-    static MObject aBodyColliderType;   // short: 1 box, 2 sphere, 3 capsule
-    static MObject aBodyRadius;         // double (sphere/capsule)
-    static MObject aBodyExtents;        // float3 (box half extents)
-    static MObject aBodyLength;         // double (capsule)
-    static MObject aBodyMask;           // long collision mask
-    static MObject aBodyGroupId; // short PMX group id 0..15 (Bullet group bit derived from it)
+    static MObject aBodyEnabled;       // bool (custom) — disabled bodies are skipped by buildWorld
+    static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
+    static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none
+    static MObject aBodyGroupId; // short PMX group_id 0..15 (Bullet group bit derived from it)
     static MObject
-        aBodyNonCollisionGroup;    // long raw PMX non-collision mask (-1 = explicit bodyMask)
-    static MObject aBodyKinematic; // bool — kinematic (anchor) vs dynamic
+        aBodyNonCollisionGroup;         // long raw PMX non_collision_group (-1 = explicit bodyMask)
+    static MObject aBodyColliderType;   // enum — PMX shape (kColliderBox/Sphere/Capsule)
+    static MObject aBodyRadius;         // double — PMX shape_size.x (sphere/capsule radius)
+    static MObject aBodyExtents;        // float3 — PMX shape_size (box half extents)
+    static MObject aBodyLength;         // double — PMX shape_size.y (capsule cylinder length)
+    static MObject aBodyRestTranslate;  // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyRestRotate;     // float3 — PMX shape_rotation (degrees)
+    static MObject aBodyMass;           // double — PMX mass
+    static MObject aBodyLinearDamping;  // double — PMX move_attenuation
+    static MObject aBodyAngularDamping; // double — PMX rotation_damping
+    static MObject aBodyRestitution;    // double — PMX repulsion
+    static MObject aBodyFriction;       // double — PMX friction_force
+    static MObject aBodyPhysicsMode;    // enum — PMX physics_mode (BodyPhysicsMode)
+    static MObject aBodyKinematic;      // bool (derived) — kinematic (anchor) vs dynamic
+    static MObject aBodyMask;           // long (derived/override) — explicit collision mask
+    static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
     static MObject
-        aBodyPhysicsMode; // short — PMX physics mode 0/1/2 (FOLLOW_BONE/PHYSICS/PHYSICS_BONE)
-    static MObject aBodyParentBodyIndex; // short — rigid-body index of the related
-                                         // joint's parent joint's body (write-back parent-inverse
-                                         // source); -1 = none
-    static MObject
-        aBodyResetAnchorIndex; // long — index of the kinematic
-                               // anchor whose delta drives this body's scrub-back reset; -1 = none
-    static MObject aBodyNameLocal;     // string — PMX body name (local) for Query/UI; "" = none
-    static MObject aBodyNameUniversal; // string — PMX body name (universal) for Query/UI; "" = none
-    static MObject aBodyEnabled; // bool — Remove support: disabled bodies are skipped by buildWorld
+        aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
@@ -214,7 +231,7 @@ class MMDPhysicsNode : public MPxLocatorNode
         double angularDamping;
         double friction;
         double restitution;
-        short colliderType; // 1 box, 2 sphere, 3 capsule
+        ColliderType colliderType; // PMX shape type (box/sphere/capsule)
         double radius;
         double extents[3];
         double length;

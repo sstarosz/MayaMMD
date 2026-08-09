@@ -22,6 +22,7 @@
 #include <maya/MDataHandle.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnData.h>
+#include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
@@ -161,7 +162,8 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
 // by the DG.
 void readDrawBodyFromPlug(const MPlug& el, MMDPhysicsNode::DrawBody& db)
 {
-    db.colliderType = static_cast<short>(el.child(MMDPhysicsNode::aBodyColliderType).asShort());
+    db.colliderType = static_cast<MMDPhysicsNode::ColliderType>(
+        el.child(MMDPhysicsNode::aBodyColliderType).asShort());
     db.radius = el.child(MMDPhysicsNode::aBodyRadius).asDouble();
     const double* e = el.child(MMDPhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
     db.extents[0] = e[0];
@@ -363,62 +365,15 @@ MStatus MMDPhysicsNode::initialize()
     mAttr.setKeyable(false);
 
     // --- body compound ---
-    aBodyRestTranslate =
-        nAttr.create("bodyRestTranslate", "brt", MFnNumericData::k3Double, 0.0, &stat);
+    // Body-compound children are created in PMX order (mirrors the
+    // rigid_bodies.json fields); aBodyEnabled (a Maya-only custom attribute)
+    // comes first.  The node reads everything by attribute name, so the order
+    // is purely for the Attribute Editor / listAttr readability.
+    aBodyEnabled = nAttr.create("bodyEnabled", "ben", MFnNumericData::kBoolean, true, &stat);
     CHECK_MSTATUS(stat);
-    aBodyRestRotate = nAttr.create("bodyRestRotate", "brr", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyMass = nAttr.create("bodyMass", "bm", MFnNumericData::kDouble, 1.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyLinearDamping =
-        nAttr.create("bodyLinearDamping", "bld", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyAngularDamping =
-        nAttr.create("bodyAngularDamping", "bad", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyFriction = nAttr.create("bodyFriction", "bfr", MFnNumericData::kDouble, 0.5, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyRestitution = nAttr.create("bodyRestitution", "bre", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyColliderType =
-        nAttr.create("bodyColliderType", "bct", MFnNumericData::kShort, kColliderBox, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyRadius = nAttr.create("bodyRadius", "brad", MFnNumericData::kDouble, 0.5, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyExtents = nAttr.create("bodyExtents", "bext", MFnNumericData::k3Double, 1.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyLength = nAttr.create("bodyLength", "blen", MFnNumericData::kDouble, 1.0, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyMask = nAttr.create("bodyMask", "bmk", MFnNumericData::kLong, 0xFFFF, &stat);
-    CHECK_MSTATUS(stat);
-    // Raw PMX collision inputs: the node derives the Bullet group bit from
-    // bodyGroupId, and the effective mask itself when nonCollisionGroup >= 0;
-    // bodyMask stays as an explicit override used otherwise (legacy scenes).
-    aBodyGroupId = nAttr.create("bodyGroupId", "bgid", MFnNumericData::kShort, -1, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyNonCollisionGroup =
-        nAttr.create("bodyNonCollisionGroup", "bncg", MFnNumericData::kLong, -1, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyKinematic = nAttr.create("bodyKinematic", "bkn", MFnNumericData::kBoolean, false, &stat);
-    CHECK_MSTATUS(stat);
-    // PMX physics mode: 0 FOLLOW_BONE, 1 PHYSICS, 2 PHYSICS_BONE.  The node
-    // writes the joint-local pose for mode 1/2 (mode 2 = rotation only — Python
-    // connects only outRotate for those bodies).
-    aBodyPhysicsMode = nAttr.create("bodyPhysicsMode", "bpm", MFnNumericData::kShort, 1, &stat);
-    CHECK_MSTATUS(stat);
-    // Rigid-body index of the related joint's PARENT joint's body (the
-    // write-back derives the parent inverse from that body's solved Bullet
-    // transform); -1 = parent bone has no body (DG parentInverse fallback).
-    aBodyParentBodyIndex =
-        nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
-    CHECK_MSTATUS(stat);
-    aBodyResetAnchorIndex =
-        nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
-    CHECK_MSTATUS(stat);
+
     // PMX body names (local + universal — Query/UI display; the node itself
-    // never reads them, they just need to be storable attributes) and the
-    // enabled flag (Remove support — disabled bodies are skipped by
-    // buildWorld).
+    // never reads them, they just need to be storable attributes).
     MFnTypedAttribute tAttr;
     aBodyNameLocal =
         tAttr.create("bodyNameLocal", "bnml", MFnData::kString, MObject::kNullObj, &stat);
@@ -430,14 +385,90 @@ MStatus MMDPhysicsNode::initialize()
     CHECK_MSTATUS(stat);
     tAttr.setStorable(true);
     tAttr.setKeyable(false);
-    aBodyEnabled = nAttr.create("bodyEnabled", "ben", MFnNumericData::kBoolean, true, &stat);
+
+    // Raw PMX collision inputs: the node derives the Bullet group bit from
+    // bodyGroupId, and the effective mask itself when nonCollisionGroup >= 0;
+    // bodyMask stays as an explicit override used otherwise (legacy scenes).
+    aBodyGroupId = nAttr.create("bodyGroupId", "bgid", MFnNumericData::kShort, -1, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyNonCollisionGroup =
+        nAttr.create("bodyNonCollisionGroup", "bncg", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
 
-    for (MObject* a : {&aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
-                       &aBodyAngularDamping, &aBodyFriction, &aBodyRestitution, &aBodyColliderType,
-                       &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyMask, &aBodyGroupId,
-                       &aBodyNonCollisionGroup, &aBodyKinematic, &aBodyPhysicsMode,
-                       &aBodyParentBodyIndex, &aBodyResetAnchorIndex, &aBodyEnabled})
+    // PMX collider type — enum: box / sphere / capsule (field values match
+    // MMDPhysicsNode::ColliderType).  Field names mirror the enumerators.
+    // Read back via .asShort() like any other numeric attribute.
+    {
+        MFnEnumAttribute eAttr;
+        aBodyColliderType = eAttr.create("bodyColliderType", "bct", kColliderBox, &stat);
+        CHECK_MSTATUS(stat);
+        eAttr.addField("Box", kColliderBox);
+        eAttr.addField("Sphere", kColliderSphere);
+        eAttr.addField("Capsule", kColliderCapsule);
+        eAttr.setStorable(true);
+        eAttr.setKeyable(false);
+    }
+    aBodyRadius = nAttr.create("bodyRadius", "brad", MFnNumericData::kDouble, 0.5, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyExtents = nAttr.create("bodyExtents", "bext", MFnNumericData::k3Double, 1.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyLength = nAttr.create("bodyLength", "blen", MFnNumericData::kDouble, 1.0, &stat);
+    CHECK_MSTATUS(stat);
+
+    aBodyRestTranslate =
+        nAttr.create("bodyRestTranslate", "brt", MFnNumericData::k3Double, 0.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyRestRotate = nAttr.create("bodyRestRotate", "brr", MFnNumericData::k3Double, 0.0, &stat);
+    CHECK_MSTATUS(stat);
+
+    aBodyMass = nAttr.create("bodyMass", "bm", MFnNumericData::kDouble, 1.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyLinearDamping =
+        nAttr.create("bodyLinearDamping", "bld", MFnNumericData::kDouble, 0.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyAngularDamping =
+        nAttr.create("bodyAngularDamping", "bad", MFnNumericData::kDouble, 0.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyRestitution = nAttr.create("bodyRestitution", "bre", MFnNumericData::kDouble, 0.0, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyFriction = nAttr.create("bodyFriction", "bfr", MFnNumericData::kDouble, 0.5, &stat);
+    CHECK_MSTATUS(stat);
+
+    // PMX physics mode — enum: followBone / physics / physicsBone (field
+    // values match BodyPhysicsMode).  Field names mirror the enumerators.  The
+    // node writes the joint-local pose for mode 1/2 (mode 2 = rotation only —
+    // Python connects only outRotate for those bodies).
+    {
+        MFnEnumAttribute eAttr;
+        aBodyPhysicsMode = eAttr.create("bodyPhysicsMode", "bpm", kBodyPhysics, &stat);
+        CHECK_MSTATUS(stat);
+        eAttr.addField("FollowBone", kBodyPhysicsFollowBone);
+        eAttr.addField("Physics", kBodyPhysics);
+        eAttr.addField("PhysicsBone", kBodyPhysicsBone);
+        eAttr.setStorable(true);
+        eAttr.setKeyable(false);
+    }
+
+    // Derived / wiring fields (no PMX JSON counterpart).
+    aBodyKinematic = nAttr.create("bodyKinematic", "bkn", MFnNumericData::kBoolean, false, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyMask = nAttr.create("bodyMask", "bmk", MFnNumericData::kLong, 0xFFFF, &stat);
+    CHECK_MSTATUS(stat);
+    // Rigid-body index of the related joint's PARENT joint's body (the
+    // write-back derives the parent inverse from that body's solved Bullet
+    // transform); -1 = parent bone has no body (DG parentInverse fallback).
+    aBodyParentBodyIndex =
+        nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
+    CHECK_MSTATUS(stat);
+    aBodyResetAnchorIndex =
+        nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
+    CHECK_MSTATUS(stat);
+
+    for (MObject* a :
+         {&aBodyEnabled, &aBodyGroupId, &aBodyNonCollisionGroup, &aBodyRadius, &aBodyExtents,
+          &aBodyLength, &aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
+          &aBodyAngularDamping, &aBodyRestitution, &aBodyFriction, &aBodyKinematic, &aBodyMask,
+          &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -450,27 +481,27 @@ MStatus MMDPhysicsNode::initialize()
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setStorable(true);
     cAttr.setKeyable(false);
+    cAttr.addChild(aBodyEnabled);
+    cAttr.addChild(aBodyNameLocal);
+    cAttr.addChild(aBodyNameUniversal);
+    cAttr.addChild(aBodyGroupId);
+    cAttr.addChild(aBodyNonCollisionGroup);
+    cAttr.addChild(aBodyColliderType);
+    cAttr.addChild(aBodyRadius);
+    cAttr.addChild(aBodyExtents);
+    cAttr.addChild(aBodyLength);
     cAttr.addChild(aBodyRestTranslate);
     cAttr.addChild(aBodyRestRotate);
     cAttr.addChild(aBodyMass);
     cAttr.addChild(aBodyLinearDamping);
     cAttr.addChild(aBodyAngularDamping);
-    cAttr.addChild(aBodyFriction);
     cAttr.addChild(aBodyRestitution);
-    cAttr.addChild(aBodyColliderType);
-    cAttr.addChild(aBodyRadius);
-    cAttr.addChild(aBodyExtents);
-    cAttr.addChild(aBodyLength);
-    cAttr.addChild(aBodyMask);
-    cAttr.addChild(aBodyGroupId);
-    cAttr.addChild(aBodyNonCollisionGroup);
-    cAttr.addChild(aBodyKinematic);
+    cAttr.addChild(aBodyFriction);
     cAttr.addChild(aBodyPhysicsMode);
+    cAttr.addChild(aBodyKinematic);
+    cAttr.addChild(aBodyMask);
     cAttr.addChild(aBodyParentBodyIndex);
     cAttr.addChild(aBodyResetAnchorIndex);
-    cAttr.addChild(aBodyNameLocal);
-    cAttr.addChild(aBodyNameUniversal);
-    cAttr.addChild(aBodyEnabled);
 
     // --- joint compound ---
     aJointBodyA = nAttr.create("jointBodyA", "jba", MFnNumericData::kLong, 0, &stat);
@@ -688,7 +719,7 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.angularDamping = bodyHandle.child(aBodyAngularDamping).asDouble();
         b.friction = bodyHandle.child(aBodyFriction).asDouble();
         b.restitution = bodyHandle.child(aBodyRestitution).asDouble();
-        b.colliderType = bodyHandle.child(aBodyColliderType).asShort();
+        b.colliderType = static_cast<ColliderType>(bodyHandle.child(aBodyColliderType).asShort());
         b.radius = bodyHandle.child(aBodyRadius).asDouble();
         read3(aBodyExtents, b.extents);
         b.length = bodyHandle.child(aBodyLength).asDouble();
@@ -892,7 +923,7 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
             bi.pos[0] = b.restPos[0];
             bi.pos[1] = b.restPos[1];
             bi.pos[2] = b.restPos[2];
-            bi.colliderType = b.colliderType;
+            bi.colliderType = static_cast<mmd_physics_masks::ColliderType>(b.colliderType);
             bi.radius = b.radius;
             bi.extents[0] = b.extents[0];
             bi.extents[1] = b.extents[1];

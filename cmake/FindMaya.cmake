@@ -53,12 +53,23 @@ if(DEFINED MAYA_LOCATION)
 endif()
 
 # 3. out/.sdk/ — auto-downloaded stripped SDKs (preferred cache)
-# file(GLOB without wildcards does NOT match directories, so use foreach+exists.
-foreach(_sdk_ver 2024 2025 2026 2027)
+# Prefer MAYA_VERSION first (a Maya-2027 build must never resolve the 2026
+# SDK just because it was cached earlier), then scan the remaining cached
+# SDKs newest-first as a fallback.  file(GLOB without wildcards does NOT
+# match directories, so use foreach+exists.
+if(DEFINED MAYA_VERSION AND NOT MAYA_VERSION STREQUAL "")
+    set(_sdk_dir "${CMAKE_SOURCE_DIR}/out/.sdk/sdk-maya${MAYA_VERSION}")
+    if(EXISTS "${_sdk_dir}/include/maya/MFnPlugin.h")
+        list(APPEND _maya_candidates "${_sdk_dir}")
+    endif()
+endif()
+foreach(_sdk_ver 2027 2026 2025 2024)
+    if(DEFINED MAYA_VERSION AND _sdk_ver STREQUAL "${MAYA_VERSION}")
+        continue()  # Already added above
+    endif()
     set(_sdk_dir "${CMAKE_SOURCE_DIR}/out/.sdk/sdk-maya${_sdk_ver}")
     if(EXISTS "${_sdk_dir}/include/maya/MFnPlugin.h")
         list(APPEND _maya_candidates "${_sdk_dir}")
-        break()  # Use the first matching SDK version
     endif()
 endforeach()
 

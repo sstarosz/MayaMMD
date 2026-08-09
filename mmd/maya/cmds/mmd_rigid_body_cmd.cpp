@@ -3,15 +3,14 @@
  *
  * mmd_rigid_body_cmd.cpp
  *
- * Native C++ implementation of the ``mmdRigidBody`` command (create +
- * finalize modes).
+ * Native C++ implementation of the ``mmdRigidBody`` command (create mode —
+ * the default).
  *
  * ``-create`` is the single body-modification path (the PMX import loops it;
  * there is no Python wiring anymore).  SIMULATION IS DISABLED: create writes
  * the body DATA and binds FOLLOW_BONE bodies to their related joint through
  * the kinematic-anchor input; dynamic bodies are data-only (no write-back,
- * no stepping).  ``-finalize`` (dormant) resolves every body's cross-body
- * wiring from the complete scene — kept for when the simulation is re-enabled.
+ * no stepping).
  */
 
 #include "mmd_rigid_body_cmd.h"
@@ -20,13 +19,11 @@
 #include <maya/MArgParser.h>
 #include <maya/MDGModifier.h>
 #include <maya/MDagPath.h>
-#include <maya/MDataHandle.h>
 #include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnMatrixData.h>
 #include <maya/MFnNumericData.h>
-#include <maya/MGlobal.h>
 #include <maya/MItDag.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
@@ -43,8 +40,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <map>
-#include <set>
 
 namespace
 {
@@ -61,49 +56,6 @@ inline double radToDeg(double r)
 inline double clamp01(double v)
 {
     return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
-}
-
-// Scan an MPlugArray of connection endpoints and return the first JOINT, or
-// follow through a Maya auto-inserted unitConversion (a raw double3 in
-// radians connected to a joint's degree-based rotate gets one inserted) to
-// reach the joint.
-MDagPath jointFromDestinations(const MPlugArray& plugs)
-{
-    for (unsigned int d = 0; d < plugs.length(); ++d)
-    {
-        MObject node = plugs[d].node();
-        if (node.hasFn(MFn::kJoint))
-        {
-            MDagPath p;
-            if (MDagPath::getAPathTo(node, p) == MS::kSuccess)
-                return p;
-        }
-    }
-    for (unsigned int d = 0; d < plugs.length(); ++d)
-    {
-        MObject node = plugs[d].node();
-        if (node.hasFn(MFn::kDependencyNode))
-        {
-            MFnDependencyNode fn(node);
-            if (fn.typeName() == "unitConversion")
-            {
-                MPlug out = fn.findPlug("output");
-                MPlugArray next;
-                out.connectedTo(next, false, true);
-                for (unsigned int e = 0; e < next.length(); ++e)
-                {
-                    MObject jnode = next[e].node();
-                    if (jnode.hasFn(MFn::kJoint))
-                    {
-                        MDagPath p;
-                        if (MDagPath::getAPathTo(jnode, p) == MS::kSuccess)
-                            return p;
-                    }
-                }
-            }
-        }
-    }
-    return MDagPath();
 }
 
 // Flag short names (single/compound, Maya API style).
@@ -134,11 +86,11 @@ void setMatrixValue(MPlug& plug, const MMatrix& m)
 }
 
 // MPlug has no setValue3Double — wrap 3 doubles in an MFnNumericData object.
-void setFloat3(MPlug& plug, double x, double y, double z)
+void setDouble3(MPlug& plug, const Double3& v)
 {
     MFnNumericData data;
     MObject obj = data.create(MFnNumericData::k3Double);
-    data.setData3Double(x, y, z);
+    data.setData3Double(v.x, v.y, v.z);
     plug.setValue(obj);
 }
 
@@ -175,9 +127,6 @@ MSyntax MmdRigidBodyCmd::syntaxCreator()
     syntax.addFlag(kGroupFlag, "group", MSyntax::kLong);
     syntax.addFlag(kNonCollisionGroupFlag, "nonCollisionGroup", MSyntax::kLong);
     syntax.addFlag(kPhysicsModeFlag, "physicsMode", MSyntax::kString);
-    // -finalize: resolve every body's cross-body wiring from the scene
-    // (write-back resolution — simulation is currently disabled at import).
-    syntax.addFlag("fin", "finalize", MSyntax::kNoArg);
 
     syntax.enableEdit(true);
     syntax.enableQuery(true);
@@ -221,14 +170,6 @@ MStatus MmdRigidBodyCmd::doIt(const MArgList& args)
     {
         displayError("'" + target + "' is not an mmdPhysicsNode or a PMX model root");
         return MS::kFailure;
-    }
-
-    if (parser.isFlagSet("fin"))
-    {
-        MStatus s = doFinalize(solverNode);
-        if (s)
-            setResult(0);
-        return s;
     }
 
     int newIndex = -1;
@@ -292,27 +233,11 @@ bool MmdRigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
     return false;
 }
 
-void MmdRigidBodyCmd::readFloat3(const MPlug& plug, double out[3])
-{
-    out[0] = out[1] = out[2] = 0.0;
-    try
-    {
-        MDataHandle h = plug.asMDataHandle();
-        MVector v = h.asVector();
-        out[0] = v.x;
-        out[1] = v.y;
-        out[2] = v.z;
-    }
-    catch (...)
-    {
-    }
-}
-
-MMatrix MmdRigidBodyCmd::matrixFromTR(const double t[3], const double r[3])
+MMatrix MmdRigidBodyCmd::matrixFromTR(const Double3& t, const Double3& r)
 {
     MTransformationMatrix mt;
-    mt.setTranslation(MVector(t[0], t[1], t[2]), MSpace::kTransform);
-    double rot[3] = {degToRad(r[0]), degToRad(r[1]), degToRad(r[2])};
+    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
+    double rot[3] = {degToRad(r.x), degToRad(r.y), degToRad(r.z)};
     mt.setRotation(rot, MTransformationMatrix::kXYZ);
     return mt.asMatrix();
 }
@@ -346,21 +271,6 @@ int MmdRigidBodyCmd::jointPmxBoneIndex(const MDagPath& jointPath)
     {
         MFnDependencyNode fn(jointPath.node());
         MPlug plug = fn.findPlug("pmxBoneIndex", true);
-        if (!plug.isNull())
-            return plug.asInt();
-    }
-    catch (...)
-    {
-    }
-    return -1;
-}
-
-int MmdRigidBodyCmd::jointPmxParentBoneIndex(const MDagPath& jointPath)
-{
-    try
-    {
-        MFnDependencyNode fn(jointPath.node());
-        MPlug plug = fn.findPlug("pmxParentBoneIndex", true);
         if (!plug.isNull())
             return plug.asInt();
     }
@@ -416,69 +326,6 @@ MDagPath MmdRigidBodyCmd::resolveBone(const MString& bone, const MDagPath& group
     return out;
 }
 
-MDagPath MmdRigidBodyCmd::bodyJointPath(MFnDependencyNode& fn, MPlug& bodiesPlug, int i)
-{
-    MDagPath out;
-    try
-    {
-        short mode =
-            bodiesPlug.elementByLogicalIndex(i).child(MMDPhysicsNode::aBodyPhysicsMode).asShort();
-        if (mode != 0)
-        {
-            // Dynamic: outRotate[i] → (unitConversion) → joint.rotate.
-            MPlug outRotate = fn.findPlug(MMDPhysicsNode::aOutRotate)
-                                  .elementByLogicalIndex(i)
-                                  .child(MMDPhysicsNode::aOutRotateValue);
-            MPlugArray dests;
-            outRotate.connectedTo(dests, false, true);
-            return jointFromDestinations(dests);
-        }
-        else
-        {
-            // Kinematic: anchorWorldMatrix[k] ← joint.worldMatrix.
-            int k = 0;
-            for (int j = 0; j < i; ++j)
-            {
-                if (bodiesPlug.elementByLogicalIndex(j)
-                        .child(MMDPhysicsNode::aBodyPhysicsMode)
-                        .asShort() == 0)
-                    ++k;
-            }
-            MPlug anchor = fn.findPlug(MMDPhysicsNode::aAnchorWorldMatrix).elementByLogicalIndex(k);
-            MPlugArray srcs;
-            anchor.connectedTo(srcs, true, false);
-            for (unsigned int d = 0; d < srcs.length(); ++d)
-            {
-                MObject node = srcs[d].node();
-                if (node.hasFn(MFn::kJoint))
-                {
-                    MDagPath p;
-                    if (MDagPath::getAPathTo(node, p) == MS::kSuccess)
-                        return p;
-                }
-            }
-        }
-    }
-    catch (...)
-    {
-    }
-    return out;
-}
-
-void MmdRigidBodyCmd::stepSolver(const MObject& solverNode)
-{
-    try
-    {
-        MFnDependencyNode fn(solverNode);
-        MString name = fn.name();
-        MGlobal::executeCommand("dgdirty \"" + name + "\"");
-        MGlobal::executeCommand("dgeval \"" + name + ".outTranslate\"");
-    }
-    catch (...)
-    {
-    }
-}
-
 // ===========================================================================
 // Create mode
 // ===========================================================================
@@ -507,9 +354,9 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     if (parser.isFlagSet(kPhysicsModeFlag))
         physicsMode = parser.flagArgumentString(kPhysicsModeFlag, 0);
 
-    double size[3] = {0.5, 0.5, 0.5};
-    double pos[3] = {0.0, 0.0, 0.0};
-    double rot[3] = {0.0, 0.0, 0.0};
+    Double3 size(0.5, 0.5, 0.5);
+    Double3 pos;
+    Double3 rot;
     if (parser.isFlagSet(kSizeFlag))
         for (int i = 0; i < 3; ++i)
             size[i] = parser.flagArgumentDouble(kSizeFlag, i);
@@ -552,11 +399,11 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
 
     // ── Enumerated values ──
     MString sh = shape.toLowerCase();
-    int colliderType = 2; // sphere
+    MMDPhysicsNode::ColliderType colliderType = MMDPhysicsNode::kColliderSphere;
     if (sh == "box")
-        colliderType = 1;
+        colliderType = MMDPhysicsNode::kColliderBox;
     else if (sh == "capsule")
-        colliderType = 3;
+        colliderType = MMDPhysicsNode::kColliderCapsule;
     else if (sh != "sphere")
     {
         displayError("Unknown shape '" + shape + "' — expected sphere, box or capsule");
@@ -564,18 +411,18 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     }
 
     MString pm = physicsMode.toLowerCase();
-    int physicsModeInt = 1; // physics
+    MMDPhysicsNode::BodyPhysicsMode physicsModeEnum = MMDPhysicsNode::kBodyPhysics;
     if (pm == "followbone")
-        physicsModeInt = 0;
+        physicsModeEnum = MMDPhysicsNode::kBodyPhysicsFollowBone;
     else if (pm == "physicsbone")
-        physicsModeInt = 2;
+        physicsModeEnum = MMDPhysicsNode::kBodyPhysicsBone;
     else if (pm != "physics")
     {
         displayError("Unknown physicsMode '" + physicsMode +
                      "' — expected followBone, physics or physicsBone");
         return MS::kFailure;
     }
-    bool kinematic = (physicsModeInt == 0);
+    bool kinematic = (physicsModeEnum == MMDPhysicsNode::kBodyPhysicsFollowBone);
 
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
@@ -619,32 +466,32 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     }
 
     // ── Rest pose in group space (MMD → Maya: Z-flip + handedness) ──
-    double worldT[3] = {pos[0], pos[1], -pos[2]};
-    double worldR[3] = {-radToDeg(rot[0]), -radToDeg(rot[1]), radToDeg(rot[2])};
+    Double3 worldT(pos.x, pos.y, -pos.z);
+    Double3 worldR(-radToDeg(rot.x), -radToDeg(rot.y), radToDeg(rot.z));
     MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
     MTransformationMatrix mt(local);
     MVector lt = mt.getTranslation(MSpace::kTransform);
     MEulerRotation le = mt.eulerRotation();
-    double localT[3] = {lt.x, lt.y, lt.z};
-    double localR[3] = {radToDeg(le.x), radToDeg(le.y), radToDeg(le.z)};
+    Double3 localT(lt.x, lt.y, lt.z);
+    Double3 localR(radToDeg(le.x), radToDeg(le.y), radToDeg(le.z));
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    setFloat3(elem.child(MMDPhysicsNode::aBodyRestTranslate), localT[0], localT[1], localT[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aBodyRestRotate), localR[0], localR[1], localR[2]);
+    setDouble3(elem.child(MMDPhysicsNode::aBodyRestTranslate), localT);
+    setDouble3(elem.child(MMDPhysicsNode::aBodyRestRotate), localR);
     elem.child(MMDPhysicsNode::aBodyMass).setDouble(mass);
     elem.child(MMDPhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
     elem.child(MMDPhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
     elem.child(MMDPhysicsNode::aBodyFriction).setDouble(friction);
     elem.child(MMDPhysicsNode::aBodyRestitution).setDouble(restitution);
     elem.child(MMDPhysicsNode::aBodyColliderType).setShort(colliderType);
-    elem.child(MMDPhysicsNode::aBodyRadius).setDouble(size[0]);
-    setFloat3(elem.child(MMDPhysicsNode::aBodyExtents), size[0], size[1], size[2]);
-    elem.child(MMDPhysicsNode::aBodyLength).setDouble(size[1]);
+    elem.child(MMDPhysicsNode::aBodyRadius).setDouble(size.x);
+    setDouble3(elem.child(MMDPhysicsNode::aBodyExtents), size);
+    elem.child(MMDPhysicsNode::aBodyLength).setDouble(size.y);
     elem.child(MMDPhysicsNode::aBodyGroupId).setShort(group);
     elem.child(MMDPhysicsNode::aBodyNonCollisionGroup).setInt(ncg & 0xFFFF);
     elem.child(MMDPhysicsNode::aBodyKinematic).setBool(kinematic);
-    elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(physicsModeInt);
+    elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     // Wiring fields stay at defaults — simulation disabled (no write-back).
     elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);
     elem.child(MMDPhysicsNode::aBodyParentBodyIndex).setInt(-1);
@@ -668,7 +515,7 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
         {
             if (bodiesPlug.elementByLogicalIndex(i)
                     .child(MMDPhysicsNode::aBodyPhysicsMode)
-                    .asShort() == 0)
+                    .asShort() == static_cast<short>(MMDPhysicsNode::kBodyPhysicsFollowBone))
                 ++k;
         }
         if (jointPath.isValid())
@@ -701,167 +548,5 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     }
 
     outIndex = n;
-    return MS::kSuccess;
-}
-
-// ===========================================================================
-// Finalize mode + shared resolution helpers
-// ===========================================================================
-
-void MmdRigidBodyCmd::buildBodyMaps(MFnDependencyNode& fn, MPlug& bodiesPlug,
-                                    std::map<int, int>& boneToBody,
-                                    std::map<int, MDagPath>& boneToJoint,
-                                    std::map<int, int>& boneToAnchor, int& kinematicCount)
-{
-    boneToBody.clear();
-    boneToJoint.clear();
-    boneToAnchor.clear();
-    kinematicCount = 0;
-    int count = bodiesPlug.numElements();
-    for (int i = 0; i < count; ++i)
-    {
-        bool kinematic =
-            bodiesPlug.elementByLogicalIndex(i).child(MMDPhysicsNode::aBodyPhysicsMode).asShort() ==
-            0;
-        MDagPath jp = bodyJointPath(fn, bodiesPlug, i);
-        int b = -1;
-        if (jp.isValid())
-            b = jointPmxBoneIndex(jp);
-        if (kinematic)
-        {
-            if (b >= 0 && !boneToAnchor.count(b))
-                boneToAnchor[b] = kinematicCount;
-            ++kinematicCount;
-        }
-        if (b >= 0)
-        {
-            boneToBody[b] = i; // last body on a bone wins
-            boneToJoint[b] = jp;
-        }
-    }
-}
-
-void MmdRigidBodyCmd::resolveBody(MFnDependencyNode& fn, MPlug& bodiesPlug,
-                                  const MDagPath& groupPath, const MMatrix& groupWorld, int n,
-                                  bool connectFallback, const std::map<int, int>& boneToBody,
-                                  const std::map<int, MDagPath>& boneToJoint,
-                                  const std::map<int, int>& boneToAnchor)
-{
-    MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    short mode = elem.child(MMDPhysicsNode::aBodyPhysicsMode).asShort();
-    if (mode == 0)
-    {
-        elem.child(MMDPhysicsNode::aBodyParentBodyIndex).setInt(-1);
-        elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);
-        return;
-    }
-    MDagPath jpath = bodyJointPath(fn, bodiesPlug, n);
-    if (!jpath.isValid())
-        return;
-    MFnDependencyNode jointFn(jpath.node());
-    int ownBone = jointPmxBoneIndex(jpath);
-    int parentBone = jointPmxParentBoneIndex(jpath);
-
-    // Write-back parent (Phase 3 cycle fix): the parent inverse comes from the
-    // PARENT BODY's solved Bullet transform (M_parent baked below).
-    int parentRb = -1;
-    MDagPath parentJointPath;
-    if (parentBone >= 0)
-    {
-        std::map<int, int>::const_iterator it = boneToBody.find(parentBone);
-        if (it != boneToBody.end())
-        {
-            parentRb = it->second;
-            std::map<int, MDagPath>::const_iterator jt = boneToJoint.find(parentBone);
-            if (jt != boneToJoint.end())
-                parentJointPath = jt->second;
-        }
-    }
-    elem.child(MMDPhysicsNode::aBodyParentBodyIndex).setInt(parentRb);
-    if (parentRb >= 0 && parentJointPath.isValid())
-    {
-        double pt[3] = {0.0, 0.0, 0.0};
-        double pr[3] = {0.0, 0.0, 0.0};
-        readFloat3(
-            bodiesPlug.elementByLogicalIndex(parentRb).child(MMDPhysicsNode::aBodyRestTranslate),
-            pt);
-        readFloat3(
-            bodiesPlug.elementByLogicalIndex(parentRb).child(MMDPhysicsNode::aBodyRestRotate), pr);
-        MMatrix parentWorld = matrixFromTR(pt, pr) * groupWorld;
-        MMatrix mParent = worldMatrix(parentJointPath) * parentWorld.inverse();
-        setMatrixValue(fn.findPlug(MMDPhysicsNode::aBodyParentJointOffset).elementByLogicalIndex(n),
-                       mParent);
-    }
-    else if (connectFallback)
-    {
-        // Parent bone has no body — read its parent inverse from the DG (that
-        // parent is never node-driven, so it cannot feed back).  Only safe
-        // when the model is COMPLETE (finalize): a mid-import create would
-        // later gain a node-driven parent and form a DG cycle.
-        MPlug jpi = jointFn.findPlug("parentInverseMatrix").elementByLogicalIndex(0);
-        connectOrReplace(
-            jpi, fn.findPlug(MMDPhysicsNode::aBodyParentInverseMatrix).elementByLogicalIndex(n));
-    }
-
-    // Scrub-back reset anchor: nearest kinematic ancestor (walk the PMX bone
-    // hierarchy via the joints' pmxBoneData — exact port of the Python map).
-    int resetAnchor = -1;
-    if (ownBone >= 0)
-    {
-        std::set<int> seen;
-        int cur = ownBone;
-        while (cur >= 0 && !seen.count(cur))
-        {
-            seen.insert(cur);
-            std::map<int, int>::const_iterator it = boneToAnchor.find(cur);
-            if (it != boneToAnchor.end())
-            {
-                resetAnchor = it->second;
-                break;
-            }
-            MDagPath jp = resolveBone(MString(std::to_string(cur).c_str()), groupPath);
-            if (!jp.isValid())
-                break;
-            cur = jointPmxParentBoneIndex(jp);
-        }
-    }
-    elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(resetAnchor);
-}
-
-MStatus MmdRigidBodyCmd::doFinalize(const MObject& solverNode)
-{
-    MFnDependencyNode fn(solverNode);
-    MPlug bodiesPlug = fn.findPlug(MMDPhysicsNode::aBodies, true);
-    if (bodiesPlug.isNull())
-    {
-        displayError("mmdRigidBody: node has no 'bodies' array");
-        return MS::kFailure;
-    }
-    MDagPath nodePath;
-    if (MDagPath::getAPathTo(solverNode, nodePath) != MS::kSuccess)
-        return MS::kFailure;
-    MDagPath groupPath = nodePath;
-    groupPath.pop();
-    MMatrix groupWorld = groupPath.inclusiveMatrix();
-
-    std::map<int, int> boneToBody;
-    std::map<int, MDagPath> boneToJoint;
-    std::map<int, int> boneToAnchor;
-    int kinematicCount = 0;
-    buildBodyMaps(fn, bodiesPlug, boneToBody, boneToJoint, boneToAnchor, kinematicCount);
-
-    int count = bodiesPlug.numElements();
-    for (int i = 0; i < count; ++i)
-    {
-        try
-        {
-            resolveBody(fn, bodiesPlug, groupPath, groupWorld, i, true, boneToBody, boneToJoint,
-                        boneToAnchor);
-        }
-        catch (...)
-        {
-        }
-    }
-    stepSolver(solverNode);
     return MS::kSuccess;
 }

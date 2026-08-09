@@ -18,7 +18,10 @@
     {
       "name": "maya2024-debug",
       "displayName": "Maya 2024 — Debug",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2024",
         "CMAKE_BUILD_TYPE": "Debug"
@@ -27,7 +30,10 @@
     {
       "name": "maya2024-release",
       "displayName": "Maya 2024 — Release",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2024",
         "CMAKE_BUILD_TYPE": "Release"
@@ -36,7 +42,10 @@
     {
       "name": "maya2025-debug",
       "displayName": "Maya 2025 — Debug",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2025",
         "CMAKE_BUILD_TYPE": "Debug"
@@ -45,7 +54,10 @@
     {
       "name": "maya2025-release",
       "displayName": "Maya 2025 — Release",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2025",
         "CMAKE_BUILD_TYPE": "Release"
@@ -54,7 +66,10 @@
     {
       "name": "maya2026-debug",
       "displayName": "Maya 2026 — Debug",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2026",
         "CMAKE_BUILD_TYPE": "Debug"
@@ -63,7 +78,10 @@
     {
       "name": "maya2026-release",
       "displayName": "Maya 2026 — Release",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2026",
         "CMAKE_BUILD_TYPE": "Release"
@@ -72,7 +90,10 @@
     {
       "name": "maya2027-debug",
       "displayName": "Maya 2027 — Debug",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2027",
         "CMAKE_BUILD_TYPE": "Debug"
@@ -81,7 +102,10 @@
     {
       "name": "maya2027-release",
       "displayName": "Maya 2027 — Release",
-      "inherits": ["base", "with-vcpkg"],
+      "inherits": [
+        "base",
+        "with-vcpkg"
+      ],
       "cacheVariables": {
         "MAYA_VERSION": "2027",
         "CMAKE_BUILD_TYPE": "Release"
@@ -91,23 +115,28 @@
   "buildPresets": [
     {
       "name": "maya2024-debug",
-      "configurePreset": "maya2024-debug"
+      "configurePreset": "maya2024-debug",
+      "configuration": "Debug"
     },
     {
       "name": "maya2024-release",
-      "configurePreset": "maya2024-release"
+      "configurePreset": "maya2024-release",
+      "configuration": "Release"
     },
     {
       "name": "maya2025-debug",
-      "configurePreset": "maya2025-debug"
+      "configurePreset": "maya2025-debug",
+      "configuration": "Debug"
     },
     {
       "name": "maya2025-release",
-      "configurePreset": "maya2025-release"
+      "configurePreset": "maya2025-release",
+      "configuration": "Release"
     },
     {
       "name": "maya2026-debug",
-      "configurePreset": "maya2026-debug"
+      "configurePreset": "maya2026-debug",
+      "configuration": "Debug"
     },
     {
       "name": "maya2026-release",
@@ -116,11 +145,13 @@
     },
     {
       "name": "maya2027-debug",
-      "configurePreset": "maya2027-debug"
+      "configurePreset": "maya2027-debug",
+      "configuration": "Debug"
     },
     {
       "name": "maya2027-release",
-      "configurePreset": "maya2027-release"
+      "configurePreset": "maya2027-release",
+      "configuration": "Release"
     }
   ],
   "testPresets": [

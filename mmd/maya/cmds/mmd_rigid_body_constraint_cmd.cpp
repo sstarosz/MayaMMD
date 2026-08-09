@@ -17,6 +17,8 @@
 
 #include "mmd_rigid_body_constraint_cmd.h"
 
+#include "mmd_common.h"
+
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
 #include <maya/MDagPath.h>
@@ -46,11 +48,11 @@ inline double radToDeg(double r)
 }
 
 // MPlug has no setValue3Double — wrap 3 doubles in an MFnNumericData object.
-void setFloat3(MPlug& plug, double x, double y, double z)
+void setDouble3(MPlug& plug, const Double3& v)
 {
     MFnNumericData data;
     MObject obj = data.create(MFnNumericData::k3Double);
-    data.setData3Double(x, y, z);
+    data.setData3Double(v.x, v.y, v.z);
     plug.setValue(obj);
 }
 
@@ -216,8 +218,8 @@ MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObj
     if (parser.isFlagSet(kTypeFlag))
         type = static_cast<int>(parser.flagArgumentInt(kTypeFlag, 0));
 
-    double pos[3] = {0.0, 0.0, 0.0};
-    double rot[3] = {0.0, 0.0, 0.0};
+    Double3 pos;
+    Double3 rot;
     if (parser.isFlagSet(kPositionFlag))
         for (int i = 0; i < 3; ++i)
             pos[i] = parser.flagArgumentDouble(kPositionFlag, i);
@@ -225,12 +227,12 @@ MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObj
         for (int i = 0; i < 3; ++i)
             rot[i] = parser.flagArgumentDouble(kRotationFlag, i);
 
-    double lmin[3] = {0.0, 0.0, 0.0};
-    double lmax[3] = {0.0, 0.0, 0.0};
-    double amin[3] = {0.0, 0.0, 0.0};
-    double amax[3] = {0.0, 0.0, 0.0};
-    double ls[3] = {0.0, 0.0, 0.0};
-    double as[3] = {0.0, 0.0, 0.0};
+    Double3 lmin;
+    Double3 lmax;
+    Double3 amin;
+    Double3 amax;
+    Double3 ls;
+    Double3 as;
     if (parser.isFlagSet(kLinearMinFlag))
         for (int i = 0; i < 3; ++i)
             lmin[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
@@ -275,15 +277,15 @@ MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObj
     elem.child(MMDPhysicsNode::aJointBodyA).setInt(bodyA);
     elem.child(MMDPhysicsNode::aJointBodyB).setInt(bodyB);
     elem.child(MMDPhysicsNode::aJointType).setInt(type);
-    setFloat3(elem.child(MMDPhysicsNode::aJointFrameTranslate), pos[0], pos[1], -pos[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointFrameRotate), -radToDeg(rot[0]), -radToDeg(rot[1]),
-              radToDeg(rot[2]));
-    setFloat3(elem.child(MMDPhysicsNode::aJointLinearMin), lmin[0], lmin[1], lmin[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointLinearMax), lmax[0], lmax[1], lmax[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointAngularMin), amin[0], amin[1], amin[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointAngularMax), amax[0], amax[1], amax[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointLinearSpring), ls[0], ls[1], ls[2]);
-    setFloat3(elem.child(MMDPhysicsNode::aJointAngularSpring), as[0], as[1], as[2]);
+    setDouble3(elem.child(MMDPhysicsNode::aJointFrameTranslate), Double3(pos.x, pos.y, -pos.z));
+    setDouble3(elem.child(MMDPhysicsNode::aJointFrameRotate),
+               Double3(-radToDeg(rot.x), -radToDeg(rot.y), radToDeg(rot.z)));
+    setDouble3(elem.child(MMDPhysicsNode::aJointLinearMin), lmin);
+    setDouble3(elem.child(MMDPhysicsNode::aJointLinearMax), lmax);
+    setDouble3(elem.child(MMDPhysicsNode::aJointAngularMin), amin);
+    setDouble3(elem.child(MMDPhysicsNode::aJointAngularMax), amax);
+    setDouble3(elem.child(MMDPhysicsNode::aJointLinearSpring), ls);
+    setDouble3(elem.child(MMDPhysicsNode::aJointAngularSpring), as);
 
     outIndex = n;
     return MS::kSuccess;

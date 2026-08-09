@@ -31,12 +31,6 @@ namespace mmd_physics_math
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Rigid-body collider types (PMX ShapeType mapping) — shared by the physics
-// node and its draw override.
-constexpr short kColliderBox = 1;
-constexpr short kColliderSphere = 2;
-constexpr short kColliderCapsule = 3;
-
 inline double deg2rad(double d)
 {
     return d * kPi / 180.0;

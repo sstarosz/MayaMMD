@@ -213,19 +213,19 @@ void MMDPhysicsDrawOverride::addUIDrawables(const MDagPath&, MUIDrawManager& dra
     for (const auto& b : data->bodies)
     {
         drawManager.setColor(bodyColor(b.groupId, b.kinematic));
-        if (b.colliderType == mmd_physics_math::kColliderSphere)
+        if (b.colliderType == MMDPhysicsNode::kColliderSphere)
         {
             drawManager.sphere(MPoint(b.pos[0], b.pos[1], b.pos[2]), b.radius, 8, 8);
         }
         else
         {
             MPointArray pts;
-            if (b.colliderType == mmd_physics_math::kColliderBox)
+            if (b.colliderType == MMDPhysicsNode::kColliderBox)
                 addBoxEdges(b, pts);
             else
                 addCapsuleLines(b, pts);
             drawManager.mesh(MUIDrawManager::kLines, pts);
-            if (b.colliderType == mmd_physics_math::kColliderCapsule)
+            if (b.colliderType == MMDPhysicsNode::kColliderCapsule)
             {
                 // Cap hemispheres read as spheres at the two cylinder ends.
                 const float half = static_cast<float>(b.length) * 0.5f;

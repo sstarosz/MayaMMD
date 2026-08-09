@@ -42,6 +42,15 @@
 namespace mmd_physics_masks
 {
 
+// Collider shape tags for the mask resolver.  This module is standalone
+// (Maya-free/Bullet-free), so it declares its own enum — values align with
+// MMDPhysicsNode::ColliderType (1 box, 2 sphere, 3 capsule).
+enum ColliderType : short
+{
+    kColliderBox = 1,
+    kColliderSphere = 2,
+    kColliderCapsule = 3,
+};
 // Cloth-on-cloth guards (see rigid_body_builder for the MMD-intent reasoning).
 // A shallow touch (cape tips brushing the jacket back ~0.11 deep) must NOT
 // qualify; a real drape (bangs penetrating the skirt 0.21-0.81) must.
@@ -51,16 +60,11 @@ constexpr int kClothLargeSheet = 50;
 // Proximity contact slack (extent sums are rough).
 constexpr double kOverlapSlack = 0.2;
 
-// Collider types (mirror mmd_physics_math::kCollider*).
-constexpr short kColliderBox = 1;
-constexpr short kColliderSphere = 2;
-constexpr short kColliderCapsule = 3;
-
 // Per-body input, index-aligned with the rigid-body array.
 struct BodyInput
 {
     double pos[3] = {0.0, 0.0, 0.0};
-    short colliderType = kColliderBox;
+    ColliderType colliderType = kColliderBox;
     double radius = 0.5;
     double extents[3] = {1.0, 1.0, 1.0};
     double length = 1.0;
