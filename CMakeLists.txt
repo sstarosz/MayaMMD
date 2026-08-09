@@ -64,12 +64,9 @@ add_custom_target(ensure-sdk
 
 # ── Options ──────────────────────────────────────────────────────────────
 option(BUILD_NATIVE_MODULE "Build the C++ native .mll plugin (MayaMMD.mll)" ON)
-option(BUILD_TESTS "Build C++ unit tests (requires Catch2, no Maya SDK)" OFF)
+option(BUILD_TESTS "Build tests — Catch2 C++ unit tests + Maya integration suites" OFF)
 option(BUILD_PACKAGE "Build release package (assembles Python source + zip, requires Maya SDK + Python)" OFF)
 option(BUILD_DEV_INSTALL "Generate dev-install layout with .mod file for local development" ON)
-
-# Enable CTest (used by both Catch2 unit tests and Maya integration tests)
-enable_testing()
 
 # ── SDK setup ────────────────────────────────────────────────────────────
 # Must run BEFORE find_package(Maya) so FindMaya.cmake can discover it.
@@ -150,6 +147,11 @@ if(NOT CMAKE_TOOLCHAIN_FILE)
     )
 endif()
 find_package(Bullet CONFIG REQUIRED)
+
+# =========================================================================
+# Maya-free C++ core (Bullet physics engine + shared value types) — static lib
+# =========================================================================
+add_subdirectory(mmd/core)
 
 # =========================================================================
 # Native .mll plugin — single entry point for MayaMMD
@@ -270,9 +272,13 @@ elseif(BUILD_NATIVE_MODULE AND NOT Maya_FOUND)
 endif()
 
 # =========================================================================
-# Tests — Catch2 C++ unit tests & Maya integration tests via CTest
+# Tests — Catch2 C++ unit tests & Maya integration tests via CTest.
+# Only configured when BUILD_TESTS=ON (see tests/CMakeLists.txt).
 # =========================================================================
-add_subdirectory(tests)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # =========================================================================
 # Package build — assemble release directory (opt-in via -DBUILD_PACKAGE=ON)

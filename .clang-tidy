@@ -1,0 +1,61 @@
+---
+# clang-tidy configuration for MayaMMD.
+#
+# Checks that nag about project conventions are disabled:
+#   - misc-include-cleaner:                 Bullet's umbrella headers
+#                                          (btBulletCollisionCommon.h /
+#                                          btBulletDynamicsCommon.h) are the idiomatic include.
+#   - cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: engine loops
+#                                          index containers with explicit bounds guards.
+#   - cppcoreguidelines-owning-memory:      Bullet's API hands out raw pointers; ownership is
+#                                          transferred into the unique_ptr containers.
+#   - bugprone-easily-swappable-parameters:  numeric APIs (compare helpers) inherently take
+#                                          same-type parameter pairs.
+#   - portability-avoid-pragma-once:          the project uses `#pragma once` everywhere.
+#   - misc-non-private-member-variables-in-classes: Double3/Double4/Matrix4 are plain
+#                                          value types — public members are the point.
+#   - readability-identifier-length:         x/y/z/w/i are idiomatic for math + indexing.
+#
+# The remaining relaxations serve the Catch2 unit tests
+# (tests/unit_tests/core), which are full of frame-count loops, epsilon
+# margins and brace-less one-liners that would otherwise be flagged as
+# magic numbers / style nags.  Keeping a single profile means the engine and
+# its tests are checked with the exact same rules.
+Checks: >-
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  clang-diagnostic-*,
+  cppcoreguidelines-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -portability-avoid-pragma-once,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -bugprone-throwing-static-initialization,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -misc-const-correctness,
+  -misc-use-anonymous-namespace,
+  -misc-use-internal-linkage,
+  -readability-braces-around-statements,
+  -readability-function-cognitive-complexity,
+  -readability-magic-numbers
+HeaderFilterRegex: 'mmd/core/.*'
+WarningsAsErrors: ''
+# (void) casts are used deliberately, e.g. the unique_ptr::release() that
+# transfers the Bullet motion state's ownership into btRigidBody — we know the
+# returned pointer is being given away, so discarding it is intentional.
+CheckOptions:
+  - key: bugprone-unused-return-value.AllowCastToVoid
+    value: 'true'
+...

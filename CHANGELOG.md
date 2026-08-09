@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   install dependencies automatically on the first configure. A bootstrapped
   vcpkg with `VCPKG_ROOT` set is now a build prerequisite (see
   `docs/CPPDevelopment.md`).
+- **Maya-free C++ physics core (`mmd_core`)** — the Bullet-based simulation
+  engine (`simulation.hpp`/`simulation.cpp`, `physics_math.hpp`, `common.hpp`)
+  as a static library, covered by Catch2 unit tests (18 cases, no Maya SDK
+  required). Internal building block for the upcoming native physics node.
 
 ### Fixed
 
