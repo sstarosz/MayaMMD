@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **vcpkg dependency management with Bullet 3.25** — C/C++ dependencies are
+  now resolved via vcpkg (`vcpkg.json`). The `maya*` CMake presets activate
+  the vcpkg toolchain from `VCPKG_ROOT` (hidden `with-vcpkg` preset) and
+  install dependencies automatically on the first configure. A bootstrapped
+  vcpkg with `VCPKG_ROOT` set is now a build prerequisite (see
+  `docs/CPPDevelopment.md`).
+
 ### Fixed
 
 - **CCD IK solver reliability** — `ccdIKSolverNode` no longer overshoots the IK

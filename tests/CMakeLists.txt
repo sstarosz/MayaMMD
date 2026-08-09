@@ -11,7 +11,6 @@
 # NOTE: No C++ unit tests exist yet. When they are added:
 #   1. Place .cpp test files in tests/
 #   2. Uncomment the add_executable + catch_discover_tests block below
-#   3. Re-enable the CI preset (ci) in CMakePresets.json
 # =========================================================================
 if(BUILD_TESTS)
     include(FetchContent)

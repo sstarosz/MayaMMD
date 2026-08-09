@@ -122,6 +122,7 @@ If you installed manually and the plugin doesn't auto-load, open
 
 - **Maya 2026** (or 2024/2025/2027) with the Maya SDK installed
 - **CMake 3.21+**
+- **vcpkg** with `VCPKG_ROOT` set — project dependency manager (see `docs/CPPDevelopment.md`)
 - **Visual Studio 2022** (Windows) with C++ desktop workload
 - **Python 3.11** (matching your Maya version)
 
@@ -143,6 +144,10 @@ If you installed manually and the plugin doesn't auto-load, open
    > CMake auto-downloads the SDK for your Maya version into `out/.sdk/`
    > (requires Python 3.10+). To use an existing SDK instead, pass
    > `-DSDK_DIR=/path/to/maya-sdk`.
+   >
+   > C/C++ dependencies are resolved via **vcpkg** (see `vcpkg.json`). Set `VCPKG_ROOT` to your
+   > bootstrapped vcpkg and CMake installs them automatically on the first
+   > configure.
 
 2. **Configure Maya** to find the plugin. Copy the generated module file
    into Maya's modules directory:

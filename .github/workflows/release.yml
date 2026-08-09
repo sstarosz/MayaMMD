@@ -86,6 +86,11 @@ jobs:
         run: pip install PySide6
         shell: bash
 
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
       - name: Configure (release preset)
         run: cmake --preset maya${{ matrix.maya }}-release -DBUILD_PACKAGE=ON
         env:
