@@ -27,14 +27,22 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system Qt libraries (PySide6 runtime deps)
+      - name: Install system dependencies (Qt runtime + OpenGL/X11 dev headers)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libegl1 \
             libgl1 \
             libxkbcommon-x11-0 \
-            libxcb-cursor0
+            libxcb-cursor0 \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libxi-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxt-dev \
+            libxmu-dev
 
       - name: Install dev dependencies
         run: pip install ".[dev]"
@@ -101,6 +109,23 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgJsonGlob: 'vcpkg.json'
+
+      - name: Install system dependencies (Qt runtime + OpenGL/X11 dev headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libxi-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxt-dev \
+            libxmu-dev
 
       - name: Configure (Maya 2026 SDK)
         run: |
