@@ -392,7 +392,7 @@ scene is the source of truth — discover physics state later with
    its C++ draw override.
 3. Populate `node.bodies[i]` for every body (indices = PMX rigid-body index).
    Each element carries the **raw PMX** `bodyGroupId` + `bodyNonCollisionGroup`,
-   `bodyKinematic` + `bodyPhysicsMode`; the node resolves effective masks itself
+   `bodyPhysicsMode`; the node resolves effective masks itself
    (Phase 2 — the Python `_compute_collision_masks` was deleted, its logic lives
    in the plugin).
 4. Feed the kinematic anchors from the JOINTS directly: `joint.worldMatrix[0]`
@@ -428,7 +428,7 @@ longer pre-computes masks; it passes the raw PMX values through as attributes:
   `(~non_collision_group) & 0xFFFF`, then corrected by the proximity +
   cloth-on-cloth rules in `mmd/maya/nodes/mmd_physics_masks.h`
   (`computeEffectiveMasks`). When both are −1 the explicit `bodyGroup` /
-  `bodyMask` attributes are used verbatim.
+  `bodyMaskGroup*` toggles are used verbatim.
 
 ### Gravity / units
 

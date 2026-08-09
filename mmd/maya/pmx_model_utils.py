@@ -396,20 +396,8 @@ def find_physics_node(root_name: str) -> Optional[str]:
 
 
 def _body_physics_mode(node: str, rb_idx: int) -> int:
-    """Read a body's PMX physics mode (0 FOLLOW_BONE, 1 PHYSICS, 2 PHYSICS_BONE).
-
-    Falls back to ``bodyKinematic`` for scenes built before ``bodyPhysicsMode``
-    existed (a kinematic body is mode 0, anything else is dynamic).
-    """
-    if cmds.attributeQuery("bodyPhysicsMode", node=node, exists=True):
-        try:
-            return int(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyPhysicsMode"))
-        except Exception:
-            pass
-    try:
-        return 0 if bool(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyKinematic")) else 1
-    except Exception:
-        return 1
+    """Read a body's PMX physics mode (0 FOLLOW_BONE, 1 PHYSICS, 2 PHYSICS_BONE)."""
+    return int(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyPhysicsMode"))
 
 
 def _driven_joint_from_out(node: str, i: int, mode: int) -> Optional[str]:

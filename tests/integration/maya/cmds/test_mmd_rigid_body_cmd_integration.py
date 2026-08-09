@@ -118,7 +118,6 @@ def test_append_body_data():
     assert_eq(
         int(cmds.getAttr(f"{base}.bodyPhysicsMode")), MODE_FOLLOW_BONE, "physicsMode"
     )
-    assert_eq(bool(cmds.getAttr(f"{base}.bodyKinematic")), True, "kinematic")
     # Box: radius = size.x, extents = size, length = size.y.  (float3 compound
     # children come back from getAttr as [(x, y, z)].)
     assert_eq(float(cmds.getAttr(f"{base}.bodyRadius")), 1.0, "bodyRadius (size.x)")
@@ -197,9 +196,6 @@ def test_dynamic_body_data_only():
     assert_eq(idx, 0, "index != 0")
     assert_eq(
         int(cmds.getAttr(f"{solver}.bodies[0].bodyPhysicsMode")), MODE_PHYSICS, "mode"
-    )
-    assert_eq(
-        bool(cmds.getAttr(f"{solver}.bodies[0].bodyKinematic")), False, "kinematic"
     )
     assert_eq(
         int(cmds.getAttr(f"{solver}.bodies[0].bodyColliderType")),
@@ -471,6 +467,43 @@ def test_enum_fields_exposed():
     return True
 
 
+def test_body_mask_group_toggles():
+    """bodyMask is one boolean toggle per collision group (0..15)."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    cmds.mmdRigidBody(solver, name="Toggled", physicsMode="physics")
+
+    # Default: every group enabled (matches the legacy 0xFFFF mask).
+    for g in range(16):
+        assert_eq(
+            bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup{g}")),
+            True,
+            f"bodyMaskGroup{g} default != True",
+        )
+
+    # Each toggle is independent — disabling one leaves the others alone.
+    cmds.setAttr(f"{solver}.bodies[0].bodyMaskGroup3", False)
+    cmds.setAttr(f"{solver}.bodies[0].bodyMaskGroup11", False)
+    assert_eq(
+        bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup3")),
+        False,
+        "group 3 not off",
+    )
+    assert_eq(
+        bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup11")),
+        False,
+        "group 11 not off",
+    )
+    for g in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15):
+        assert_eq(
+            bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup{g}")),
+            True,
+            f"group {g} unexpectedly off",
+        )
+    print("✓ bodyMask exposes one boolean toggle per collision group (0..15)")
+    return True
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ──────────────────────────────────────────────────────────────────────────
@@ -487,4 +520,5 @@ _TESTS = [
     ("Constraint cmd appends joint", test_constraint_cmd_appends_joint),
     ("Model root resolution", test_model_root_resolution),
     ("Enum fields exposed", test_enum_fields_exposed),
+    ("Body mask group toggles", test_body_mask_group_toggles),
 ]

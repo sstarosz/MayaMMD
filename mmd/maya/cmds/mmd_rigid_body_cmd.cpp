@@ -490,7 +490,6 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     elem.child(MMDPhysicsNode::aBodyLength).setDouble(size.y);
     elem.child(MMDPhysicsNode::aBodyGroupId).setShort(group);
     elem.child(MMDPhysicsNode::aBodyNonCollisionGroup).setInt(ncg & 0xFFFF);
-    elem.child(MMDPhysicsNode::aBodyKinematic).setBool(kinematic);
     elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     // Wiring fields stay at defaults — simulation disabled (no write-back).
     elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);

@@ -319,17 +319,12 @@ def test_pmx_rigid_body_attributes(pmx_data: PmxModel, maya_pmx_data):
         base = f"{node}.bodies[{rb_idx}]"
         mode = rb.physics_mode.value
         kin = mode == 0
-        assert_eq(
-            cmds.getAttr(f"{base}.bodyKinematic"),
-            kin,
-            f"body {rb_idx} bodyKinematic {cmds.getAttr(f'{base}.bodyKinematic')} != {kin}",
-        )
         if not kin:
             assert_true(
                 float(cmds.getAttr(f"{base}.bodyMass")) > 0.0,
                 f"dynamic body {rb_idx} mass not > 0",
             )
-        # PMX physics mode mirrors bodyKinematic.
+        # PMX physics mode is canonical (kinematic == mode 0).
         assert_eq(
             cmds.getAttr(f"{base}.bodyPhysicsMode"),
             mode,

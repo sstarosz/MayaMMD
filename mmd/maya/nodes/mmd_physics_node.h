@@ -195,8 +195,7 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyRestitution;    // double — PMX repulsion
     static MObject aBodyFriction;       // double — PMX friction_force
     static MObject aBodyPhysicsMode;    // enum — PMX physics_mode (BodyPhysicsMode)
-    static MObject aBodyKinematic;      // bool (derived) — kinematic (anchor) vs dynamic
-    static MObject aBodyMask;           // long (derived/override) — explicit collision mask
+    static MObject aBodyMaskGroup[16];  // bool per collision group (0..15) — manual mask override
     static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
     static MObject
         aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none

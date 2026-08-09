@@ -159,7 +159,7 @@ auto-inserted `unitConversion`) or `anchorWorldMatrix[k]` (kinematic) in
 
 The node's `bodies[i]` elements carry the PMX data directly
 (`bodyRestTranslate`, `bodyRestRotate`, `bodyMass`, `bodyGroupId`,
-`bodyNonCollisionGroup`, `bodyPhysicsMode`, `bodyKinematic`,
+`bodyNonCollisionGroup`, `bodyPhysicsMode`,
 `bodyParentBodyIndex`, …), so the physics state can be reconstructed from the
 scene alone.  The write-back parent inverse comes from the parent BODY's solved
 Bullet transform (`bodyParentBodyIndex` + the baked `bodyParentJointOffset[i]`
