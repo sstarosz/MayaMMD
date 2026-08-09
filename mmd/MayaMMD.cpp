@@ -22,6 +22,8 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
+#include "maya/cmds/mmd_rigid_body_cmd.h"
+#include "maya/cmds/mmd_rigid_body_constraint_cmd.h"
 #include "maya/nodes/ccd_ik_solver_node.h"
 #include "maya/nodes/mmd_physics_draw_override.h"
 #include "maya/nodes/mmd_physics_node.h"
@@ -111,6 +113,26 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ mmdPhysicsNode draw override registration failed");
 
+    // 1d. Register the native rigid-body command (mmdRigidBody).  It lives in
+    //     C++ (not Python) because the Python command layer crashed inside
+    //     OpenMaya's lazy MSyntax creation in mayapy 2026.
+    {
+        stat = plugin.registerCommand(MmdRigidBodyCmd::kName, MmdRigidBodyCmd::creator,
+                                      MmdRigidBodyCmd::syntaxCreator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ mmdRigidBody command registration failed");
+
+    // 1e. Register the native rigid-body-constraint command (mmdRigidBodyConstraint)
+    //     — the C++ replacement for the former Python _set_joint_attributes.
+    {
+        stat = plugin.registerCommand(MmdRigidBodyConstraintCmd::kName,
+                                      MmdRigidBodyConstraintCmd::creator,
+                                      MmdRigidBodyConstraintCmd::syntaxCreator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ mmdRigidBodyConstraint command registration failed");
+
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
     //    plugin loading, so mmd/ is already importable.
@@ -137,6 +159,8 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
                                                             kPhysicsDrawRegistrant);
     plugin.deregisterNode(MMDPhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
+    plugin.deregisterCommand(MmdRigidBodyCmd::kName);
+    plugin.deregisterCommand(MmdRigidBodyConstraintCmd::kName);
 
     return MS::kSuccess;
 }

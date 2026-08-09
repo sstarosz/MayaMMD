@@ -21,9 +21,11 @@
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MFnCompoundAttribute.h>
+#include <maya/MFnData.h>
 #include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
+#include <maya/MFnTypedAttribute.h>
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MMatrix.h>
 #include <maya/MNodeCacheDisablingInfo.h>
@@ -107,6 +109,9 @@ MObject MMDPhysicsNode::aBodyKinematic;
 MObject MMDPhysicsNode::aBodyPhysicsMode;
 MObject MMDPhysicsNode::aBodyParentBodyIndex;
 MObject MMDPhysicsNode::aBodyResetAnchorIndex;
+MObject MMDPhysicsNode::aBodyNameLocal;
+MObject MMDPhysicsNode::aBodyNameUniversal;
+MObject MMDPhysicsNode::aBodyEnabled;
 
 MObject MMDPhysicsNode::aJoints;
 MObject MMDPhysicsNode::aJointBodyA;
@@ -253,6 +258,7 @@ void MMDPhysicsNode::destroyWorld()
     mCollisionConfig.reset();
     mWorldBuilt = false;
     mLastTime = -1.0;
+    mLastTimeUnit = MTime::kFilm;
     mBodies.clear();
     mJoints.clear();
 }
@@ -409,12 +415,29 @@ MStatus MMDPhysicsNode::initialize()
     aBodyResetAnchorIndex =
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
+    // PMX body names (local + universal — Query/UI display; the node itself
+    // never reads them, they just need to be storable attributes) and the
+    // enabled flag (Remove support — disabled bodies are skipped by
+    // buildWorld).
+    MFnTypedAttribute tAttr;
+    aBodyNameLocal =
+        tAttr.create("bodyNameLocal", "bnml", MFnData::kString, MObject::kNullObj, &stat);
+    CHECK_MSTATUS(stat);
+    tAttr.setStorable(true);
+    tAttr.setKeyable(false);
+    aBodyNameUniversal =
+        tAttr.create("bodyNameUniversal", "bnmu", MFnData::kString, MObject::kNullObj, &stat);
+    CHECK_MSTATUS(stat);
+    tAttr.setStorable(true);
+    tAttr.setKeyable(false);
+    aBodyEnabled = nAttr.create("bodyEnabled", "ben", MFnNumericData::kBoolean, true, &stat);
+    CHECK_MSTATUS(stat);
 
-    for (MObject* a :
-         {&aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
-          &aBodyAngularDamping, &aBodyFriction, &aBodyRestitution, &aBodyColliderType, &aBodyRadius,
-          &aBodyExtents, &aBodyLength, &aBodyMask, &aBodyGroupId, &aBodyNonCollisionGroup,
-          &aBodyKinematic, &aBodyPhysicsMode, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a : {&aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
+                       &aBodyAngularDamping, &aBodyFriction, &aBodyRestitution, &aBodyColliderType,
+                       &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyMask, &aBodyGroupId,
+                       &aBodyNonCollisionGroup, &aBodyKinematic, &aBodyPhysicsMode,
+                       &aBodyParentBodyIndex, &aBodyResetAnchorIndex, &aBodyEnabled})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -445,6 +468,9 @@ MStatus MMDPhysicsNode::initialize()
     cAttr.addChild(aBodyPhysicsMode);
     cAttr.addChild(aBodyParentBodyIndex);
     cAttr.addChild(aBodyResetAnchorIndex);
+    cAttr.addChild(aBodyNameLocal);
+    cAttr.addChild(aBodyNameUniversal);
+    cAttr.addChild(aBodyEnabled);
 
     // --- joint compound ---
     aJointBodyA = nAttr.create("jointBodyA", "jba", MFnNumericData::kLong, 0, &stat);
@@ -646,6 +672,7 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.mask = 0xFFFF;
         b.groupId = -1;
         b.nonCollisionGroup = -1;
+        b.enabled = true;
 
         auto read3 = [&](const MObject& attr, double out[3])
         {
@@ -672,6 +699,7 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.physicsMode = bodyHandle.child(aBodyPhysicsMode).asShort();
         b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asShort();
         b.resetAnchorIndex = bodyHandle.child(aBodyResetAnchorIndex).asInt();
+        b.enabled = bodyHandle.child(aBodyEnabled).asBool();
         mBodies.push_back(b);
     }
     return !mBodies.empty();
@@ -769,6 +797,9 @@ uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
         h = hashValue(h, bh.child(aBodyPhysicsMode).asShort());
         h = hashValue(h, bh.child(aBodyParentBodyIndex).asShort());
         h = hashValue(h, bh.child(aBodyResetAnchorIndex).asInt());
+        // enabled is part of the config (toggling it rebuilds the world);
+        // bodyNameLocal/bodyNameUniversal are NOT hashed — no simulation effect.
+        h = hashValue(h, bh.child(aBodyEnabled).asBool());
     }
 
     // joints
@@ -838,7 +869,6 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     MDataHandle gravHandle = dataBlock.inputValue(aGravity);
     btVector3 gravity(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1],
                       gravHandle.asDouble3()[2]);
-    const double fps = dataBlock.inputValue(aFps).asDouble();
 
     // Resolve the collision group + effective mask (Phase 2).  Python feeds the
     // RAW PMX data (bodyGroupId + bodyNonCollisionGroup); the node derives the
@@ -917,6 +947,15 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         const Body& b = mBodies[i];
+        if (!b.enabled)
+        {
+            // Disabled (removed): keep the body index ALIGNED so the outputs
+            // and draw data stay body-indexed — store a null placeholder and
+            // never add it to the world (no collision, no simulation).  A
+            // disabled kinematic body also gets no anchor entry.
+            mRigidBodies.emplace_back(nullptr);
+            continue;
+        }
         btTransform start = transformFromRest(b.restPos, b.restRot);
 
         btCollisionShape* shape = nullptr;
@@ -1013,6 +1052,9 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     {
         if (j.bodyA < 0 || j.bodyB < 0 || j.bodyA >= (long) mRigidBodies.size() ||
             j.bodyB >= (long) mRigidBodies.size())
+            continue;
+        // Skip joints that reference a disabled (removed) body.
+        if (!mBodies[j.bodyA].enabled || !mBodies[j.bodyB].enabled)
             continue;
         btRigidBody* rbA = mRigidBodies[j.bodyA].get();
         btRigidBody* rbB = mRigidBodies[j.bodyB].get();
@@ -1132,7 +1174,7 @@ bool MMDPhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
     int anchorIndex = 0;
     for (size_t i = 0; i < mBodies.size() && anchorIndex < (int) anchorCount; ++i)
     {
-        if (!mBodies[i].kinematic)
+        if (!mBodies[i].kinematic || !mBodies[i].enabled)
             continue;
         anchors.jumpToArrayElement(anchorIndex);
         MMatrix w = anchors.inputValue().asMatrix();
@@ -1194,7 +1236,7 @@ void MMDPhysicsNode::resetDynamicBodies(MDataBlock& dataBlock)
         return;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        if (mBodies[i].kinematic || !mBodies[i].hasBoneReset)
+        if (mBodies[i].kinematic || !mBodies[i].enabled || !mBodies[i].hasBoneReset)
             continue;
         const int aIdx = mBodies[i].resetAnchorIndex;
         if (aIdx < 0 || aIdx >= (int) mAnchorCurrent.size())
@@ -1274,7 +1316,7 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
 
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        if (mBodies[i].kinematic)
+        if (mBodies[i].kinematic || !mBodies[i].enabled)
             continue;
         btRigidBody* body = mRigidBodies[i].get();
         const btTransform& wt = body->getWorldTransform();
@@ -1400,6 +1442,8 @@ void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         const Body& b = mBodies[i];
+        if (!b.enabled)
+            continue;
         DrawBody db;
         db.colliderType = b.colliderType;
         db.radius = b.radius;
@@ -1474,8 +1518,8 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     }
 
     MDataHandle timeHandle = dataBlock.inputValue(aTime);
-    const double now = timeHandle.asTime().value();
-    const double fps = dataBlock.inputValue(aFps).asDouble();
+    const MTime nowTime = timeHandle.asTime();
+    const double now = nowTime.value();
 
     const uint64_t configSignature = computeConfigSignature(dataBlock);
     const bool firstEval = !mWorldBuilt;
@@ -1487,6 +1531,7 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
             return MS::kFailure;
         mConfigSignature = configSignature;
         mLastTime = now;
+        mLastTimeUnit = nowTime.unit();
     }
     else if (configSignature != mConfigSignature)
     {
@@ -1508,6 +1553,7 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
         updateKinematicAnchors(dataBlock); // re-apply current anchors
         resetDynamicBodies(dataBlock);     // chains stay at the current pose
         mLastTime = now;                   // no time-step on the rebuild frame
+        mLastTimeUnit = nowTime.unit();
     }
 
     // Refresh the kinematic anchors from their inputs every evaluation (so the
@@ -1524,7 +1570,15 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     const bool timeChanged = (mLastTime >= 0.0 && now != mLastTime);
     if (timeChanged || anchorsMoved)
     {
-        double dt = timeChanged ? (now - mLastTime) / fps : 0.0;
+        double dt = 0.0;
+        if (timeChanged)
+        {
+            // Frame span (in the scene's current time unit) -> SECONDS via
+            // MTime.  This adapts automatically to whatever the scene's
+            // playback unit is (film/game/custom 23.976 etc.) and tracks a
+            // unit change mid-session — no fps attribute is needed.
+            dt = (nowTime - MTime(mLastTime, mLastTimeUnit)).as(MTime::kSeconds);
+        }
         bool rewound = false;
         if (dt < 0.0)
         {
@@ -1561,6 +1615,7 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
             dt = kFixedDt;
         mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
         mLastTime = now;
+        mLastTimeUnit = nowTime.unit();
     }
 
     writeOutputs(dataBlock);

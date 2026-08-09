@@ -41,6 +41,7 @@
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MString.h>
+#include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
 #include <cstdint>
@@ -116,7 +117,11 @@ class MMDPhysicsNode : public MPxLocatorNode
     // ------------------------------------------------------------------
     static MObject aTime;
     static MObject aGravity;
-    static MObject aFps; // playback frames per second (default 30)
+    // playback frames per second (default 30) — RETAINED for backward
+    // compatibility and as the Phase-4 rebuild trigger (pmx_model_utils toggles
+    // it); dt is now derived from the scene's time unit via MTime, so this
+    // attribute no longer drives the frame→seconds conversion.
+    static MObject aFps;
 
     // Anchor world matrices + parent-inverse matrices (kinematic drivers) —
     // one per kinematic body.  The node computes each anchor's LOCAL matrix as
@@ -175,6 +180,9 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject
         aBodyResetAnchorIndex; // long — index of the kinematic
                                // anchor whose delta drives this body's scrub-back reset; -1 = none
+    static MObject aBodyNameLocal;     // string — PMX body name (local) for Query/UI; "" = none
+    static MObject aBodyNameUniversal; // string — PMX body name (universal) for Query/UI; "" = none
+    static MObject aBodyEnabled; // bool — Remove support: disabled bodies are skipped by buildWorld
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
@@ -219,6 +227,7 @@ class MMDPhysicsNode : public MPxLocatorNode
         short groupId;
         long nonCollisionGroup;
         bool kinematic;
+        bool enabled = true;   // Remove support: false skips this body (and joints referencing it)
         short physicsMode = 1; // PMX physics mode 0/1/2 (write-back mode)
         // Write-back parent-inverse source (Phase 3 cycle fix): rigid-body
         // index of this body's related joint's PARENT joint's body, or -1 if
@@ -282,6 +291,7 @@ class MMDPhysicsNode : public MPxLocatorNode
 
     bool mWorldBuilt = false;
     double mLastTime = -1.0;
+    MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
     // Phase 4: FNV-1a hash of the config inputs (gravity/fps/bodies/joints/
     // anchor counts) captured at build time.  When compute() sees a different
     // signature the world is rebuilt in place — a body/joint/gravity edit takes

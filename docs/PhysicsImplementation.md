@@ -232,7 +232,9 @@ flowchart LR
 `mmd/maya/nodes/mmd_physics_node.h/.cpp` — a plain `MPxNode` that owns a
 `btDiscreteDynamicsWorld`:
 
-- **Inputs**: `time`, `gravity`, `fps`; `anchorWorldMatrix` + `anchorParentInverseMatrix`
+- **Inputs**: `time`, `gravity` (`fps` is retained for backward compatibility
+  and as the Phase-4 rebuild trigger, but `dt` is now derived from the scene's
+  current time unit via `MTime` — see "Gravity / units"); `anchorWorldMatrix` + `anchorParentInverseMatrix`
   (matrix arrays, one per kinematic body — Phase 3 feeds the JOINT's world
   matrix + the physics group's world INVERSE, plus a baked `anchorOffset[k]`
   body<->bone rest offset); `bodies` compound array (rest pose, mass, damping,
@@ -382,7 +384,8 @@ scene is the source of truth — discover physics state later with
 1. Create the `{model}_Physics` group and the `mmdPhysicsNode` locator
    (`{model}_PhysicsSolver`) parented under it (its object space is the group's
    local space, i.e. the Bullet world frame); connect `time1.outTime → node.time`,
-   set `gravity = (0, -9.8, 0)`, and `fps` from the scene's playback rate.
+   set `gravity = (0, -9.8, 0)` (`dt` is derived from the scene's time unit
+   inside the node — no `fps` configuration needed).
 2. Compute each body's rest pose in the group's local space (PMX rest, Z-flip +
    handedness) — **no guide transform is created** (Phase 3).  The node draws
    the visible collider (wireframe box/sphere/capsule, group-colored) through
@@ -432,8 +435,11 @@ longer pre-computes masks; it passes the raw PMX values through as attributes:
 MMD's physics engine uses exactly −9.8 (Bullet's default) in the model's own
 unit scale; `gravity = (0, -9.8, 0)` matches MMD exactly (a 10× −98 guess made
 every force 10× too strong and overloaded the rigid-weld constraints, so
-hair/skirt chains sagged).  `fps` converts Maya frame deltas to seconds
-(`dt = (now - last) / fps`); the world is sub-stepped at 1/60 s.
+hair/skirt chains sagged).  The node converts Maya frame deltas to seconds
+straight through `MTime`: `dt = (nowMTime - lastMTime).as(MTime::kSeconds)` —
+this adapts automatically to the scene's current time unit (film/game/custom
+23.976 etc.), so there is no `fps` attribute to keep in sync.  The world is
+sub-stepped at 1/60 s.
 
 ### Testing (behavioral, not just structural)
 

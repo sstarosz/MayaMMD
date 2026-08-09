@@ -175,6 +175,8 @@ if(Maya_FOUND)
 
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
+        mmd/maya/cmds/mmd_rigid_body_cmd.cpp
+        mmd/maya/cmds/mmd_rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
         mmd/maya/nodes/mmd_physics_node.cpp
         mmd/maya/nodes/mmd_physics_draw_override.cpp
