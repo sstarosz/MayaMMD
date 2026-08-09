@@ -169,9 +169,9 @@ class MMDPhysicsNode : public MPxLocatorNode
     // the dependency on `joint.parentInverseMatrix` — which for a body whose
     // parent JOINT is also node-driven created a DG feedback cycle that
     // exploded the simulation.  M_parent = parentJointRestWorld *
-    // parentBodyRestWorld^-1 is baked by Python (the same constant for
-    // kinematic and dynamic parents).
-    static MObject aBodyParentJointOffset; // matrix array, body-indexed: M_parent baked constant
+    // parentBodyRestWorld^-1 is the SAME constant as K[parentBodyIndex]
+    // (bodyWriteBackOffset of the parent body, for kinematic and dynamic
+    // parents) — so no separate parent-offset array exists.
     // Per-body compound array: aBodies[i] — children are declared to mirror
     // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
     // attribute) sits first.

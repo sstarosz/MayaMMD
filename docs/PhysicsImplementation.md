@@ -204,11 +204,10 @@ flowchart LR
   array (body A/B, type, frame,
   limits, springs); Phase 3 direct write-back: `groupWorldMatrix` (the physics
   group's world matrix), `bodyWriteBackOffset` (dense body-indexed baked
-  world offset K = jointRestWorld * bodyRestWorld^-1), `bodyParentJointOffset`
-  (dense body-indexed baked M_parent = parentJointRestWorld *
-  parentBodyRestWorld^-1) plus the per-body child `bodyParentBodyIndex` (the
-  parent joint's body index — the node derives the parent inverse from that
-  body's solved Bullet transform; -1 = no parent body → DG
+  world offset K = jointRestWorld * bodyRestWorld^-1) plus the per-body child
+  `bodyParentBodyIndex` (the parent joint's body index — the node derives the
+  parent inverse from that body's solved Bullet transform,
+  M_parent = K[parentBodyIndex]; -1 = no parent body → DG
   `bodyParentInverseMatrix` fallback).
 - **compute()**: on first evaluation reads bodies/joints and builds the world
   (`buildWorld`); on time change updates the kinematic anchors (`local =
@@ -288,8 +287,10 @@ where `bodyLocal` is the solved body pose in the physics group's space (from
 Bullet), `B_parent` is the **parent body's** solved Bullet transform (the node
 owns every body), and `K = jointRestWorld * (bodyRestWorld)^-1` and
 `M_parent = parentJointRestWorld * (parentBodyRestWorld)^-1` are **baked
-world-frame offsets** (captured by Python at build; `bodyWriteBackOffset[i]`
-and `bodyParentJointOffset[i]`).  Because `parentJointWorld = M_parent *
+world-frame offsets** (baked by `mmdRigidBody -create`;
+`bodyWriteBackOffset[i]`).  M_parent is the SAME constant as
+`bodyWriteBackOffset[parentBodyIndex]`, so the node derives it from the
+parent body's K — no separate array.  Because `parentJointWorld = M_parent *
 B_parent * groupWorld`, the `groupWorld` term cancels and the formula is EXACT
 at rest for both kinematic and dynamic parents.  Kinematic anchors use the
 mirror image: `anchorLocal = K_kin * jointWorld * groupWorldInverse` with
@@ -363,7 +364,7 @@ scene is the source of truth — discover physics state later with
    bake `bodyWriteBackOffset[i]` (dense, body-indexed — the world offset
    K = jointRestWorld * bodyRestWorld^-1).  For each dynamic body whose parent
    BONE has a rigid body, set `bodies[i].bodyParentBodyIndex` to that body's
-   index and bake `bodyParentJointOffset[i]` (M_parent — the parent inverse is
+   index (M_parent = the parent body's baked K — the parent inverse is
    derived from the parent BODY's solved transform inside the node, which
    removes the DG feedback cycle; see the write-back section).  Only bodies
    whose parent bone has NO body keep the DG `joint.parentInverseMatrix[0]` →
@@ -408,9 +409,9 @@ sub-stepped at 1/60 s.
 outputs) **and behavior** (13 tests/model):
 
 - **Write-Back No DG Cycle**: every dynamic body whose parent bone has a rigid
-  body must have `bodies[i].bodyParentBodyIndex` set and
-  `bodyParentJointOffset[i]` baked, and its `bodyParentInverseMatrix[i]` must
-  NOT be connected to the DG (the cycle path); bodies with a no-body parent
+  must have `bodies[i].bodyParentBodyIndex` set (the node derives M_parent
+  from that body's baked K), and its `bodyParentInverseMatrix[i]` must NOT be
+  connected to the DG (the cycle path); bodies with a no-body parent
   must not have a dynamic ancestor.
 - **Simulation Steps**: swing the model's ROOT bone (the kinematic anchors
   track it — the MMD behavior) and assert the node's solved output for at

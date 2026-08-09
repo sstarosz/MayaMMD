@@ -567,8 +567,8 @@ def test_write_back_no_dg_cycle(pmx_data: PmxModel, maya_pmx_data):
 
     Phase 3's write-back derives the parent inverse from the parent BODY's
     solved Bullet transform, never from the DG.  A dynamic body whose parent
-    BONE has a rigid body must carry ``bodyParentBodyIndex`` + a baked
-    ``bodyParentJointOffset`` and must NOT have the DG
+    BONE has a rigid body must carry ``bodyParentBodyIndex`` (the node derives
+    M_parent from that body's baked K offset) and must NOT have the DG
     ``joint.parentInverseMatrix -> bodyParentInverseMatrix`` connection (that
     is what created the feedback cycle that exploded the sim).  The DG
     fallback is allowed only when the parent bone has no body (that parent is

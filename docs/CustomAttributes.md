@@ -162,8 +162,8 @@ The node's `bodies[i]` elements carry the PMX data directly
 `bodyMaskGroup0..15`, `bodyPhysicsMode`,
 `bodyParentBodyIndex`, …), so the physics state can be reconstructed from the
 scene alone.  The write-back parent inverse comes from the parent BODY's solved
-Bullet transform (`bodyParentBodyIndex` + the baked `bodyParentJointOffset[i]`
-matrix array) — this avoids the DG feedback cycle that the old
+Bullet transform (`bodyParentBodyIndex`; the node derives M_parent from the
+parent body's baked K offset) — this avoids the DG feedback cycle that the old
 `joint.parentInverseMatrix` dependency created when a parent joint was itself
 node-driven.
 

@@ -496,21 +496,23 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     for (int g = 0; g < 16; ++g)
         elem.child(MMDPhysicsNode::aBodyMaskGroup[g]).setBool((mask >> g) & 1);
     elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
-    // Wiring fields stay at defaults — simulation disabled (no write-back).
+    // Wiring fields: the parent body / reset anchor are resolved later (the
+    // parent body may not exist yet); the write-back K offset is baked below.
     elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);
     elem.child(MMDPhysicsNode::aBodyParentBodyIndex).setInt(-1);
     elem.child(MMDPhysicsNode::aBodyNameLocal).setString(nameLocal);
     elem.child(MMDPhysicsNode::aBodyNameUniversal).setString(nameUniversal);
     elem.child(MMDPhysicsNode::aBodyEnabled).setBool(true);
 
-    // ── Bone binding (simulation DISABLED) ──
+    // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
     // kinematic-anchor INPUT (joint.worldMatrix -> anchorWorldMatrix + baked
     // body<->bone offset) — this is what makes the collider "live on the
-    // correct bone".  Dynamic bodies are DATA-ONLY for now: no output wiring
-    // and no solver stepping (that is what drove joints and exploded on
-    // import).  Bodies display from their rest pose — the draw override
-    // falls back to reading the plugs when the world is never built.
+    // correct bone".  Dynamic bodies are wired for write-back by Python AFTER
+    // the whole model exists (mmd/maya/pmx/rigid_body_builder.py — the output
+    // connections must come last so the first evaluation sees every joint).
+    // Bodies display from their rest pose — the draw override falls back to
+    // reading the plugs when the world is never built.
     if (kinematic)
     {
         // Kinematic-order index of the new anchor.
@@ -549,6 +551,34 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
             setMatrixValue(fn.findPlug(MMDPhysicsNode::aAnchorOffset).elementByLogicalIndex(k),
                            identity);
         }
+    }
+
+    // ── Write-back inputs (dense) ──
+    // bodyWriteBackOffset[n] = K = jointRestWorld * bodyRestWorld^-1 for EVERY
+    // body (identity when there is no related joint) — the array is dense by
+    // construction (every -create sets its element).  The node's write-back
+    // derives the parent joint's world from K[parentBodyIndex]
+    // (M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the SAME
+    // constant as the parent body's K, for kinematic AND dynamic parents), so
+    // no separate parent-offset array is needed.  bodyParentInverseMatrix
+    // starts as identity; Python connects the DG fallback later, ONLY for
+    // bodies whose parent bone has no rigid body (that parent is never
+    // node-driven, so it cannot feed back).
+    {
+        MMatrix k;
+        k.setToIdentity();
+        MMatrix identity;
+        identity.setToIdentity();
+        if (jointPath.isValid())
+        {
+            MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            k = worldMatrix(jointPath) * bodyWorld.inverse();
+        }
+        setMatrixValue(fn.findPlug(MMDPhysicsNode::aBodyWriteBackOffset).elementByLogicalIndex(n),
+                       k);
+        setMatrixValue(
+            fn.findPlug(MMDPhysicsNode::aBodyParentInverseMatrix).elementByLogicalIndex(n),
+            identity);
     }
 
     outIndex = n;

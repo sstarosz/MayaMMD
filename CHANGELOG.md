@@ -47,8 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skirt/hair/cape chains), that is a live DG feedback cycle (Maya allows the
   connection) that amplified every frame (bones displaced up to 54 units).
   The parent inverse is now derived from the **parent body's** solved Bullet
-  transform (`bodies[i].bodyParentBodyIndex` + the baked
-  `bodyParentJointOffset[i]`), so no write-back depends on a node-driven
+  transform (`bodies[i].bodyParentBodyIndex` — M_parent is the parent body's
+  baked K offset), so no write-back depends on a node-driven
   joint's DG matrix.
 - **Faster import.** The physics build set ~15k attributes through
   `cmds.setAttr`; scalar body/joint children now use the OpenMaya plug API and

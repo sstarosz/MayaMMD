@@ -31,13 +31,12 @@ This module is part of the mmd.maya.pmx package and runs inside Autodesk Maya
 from __future__ import annotations
 
 import logging
-import math
 from typing import Optional, Sequence
 
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
-from mmd.core.data_types import PhysicsMode, PmxModel, PMXRigidBody, ShapeType, Vec3
+from mmd.core.data_types import PhysicsMode, PmxModel, ShapeType, Vec3
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
@@ -176,51 +175,15 @@ def _vec3(v: Optional[Vec3]) -> tuple[float, float, float]:
 # straight into the related joints (no guide transforms, no -finalize step).
 #   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
 #   K        = jointRestWorld * bodyRestWorld^-1              (bodyWriteBackOffset)
-#   M_parent = parentJointRestWorld * parentBodyRestWorld^-1  (bodyParentJointOffset)
+#   M_parent = K[parentBodyIndex]                             (the same constant as the
+#               parent body's K — no separate parent-offset array)
 # FALLBACK (parent bone has no body — that parent is never node-driven):
 #   boneLocal = K * bodyLocal * groupWorld * jointParentInverse
+#
+# K is baked by the native mmdRigidBody -create command (it knows the related
+# joint and the body rest); this module only resolves the parent body index,
+# the DG fallback, the scrub-back reset anchors and the output connections.
 # ---------------------------------------------------------------------------
-
-# Dense-array default value (identity 4x4, row-major) — every body-indexed
-# matrix array the node reads with jumpToArrayElement needs an element at
-# EVERY index (a sparse array would read the wrong physical slot).
-_IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
-
-
-def _matrix_from_tr(t, r) -> om.MMatrix:
-    """4x4 ROW-vector matrix from translate + XYZ euler degrees (Maya)."""
-    mt = om.MTransformationMatrix()
-    mt.setTranslation(om.MVector(t[0], t[1], t[2]), om.MSpace.kTransform)
-    mt.setRotation(
-        om.MEulerRotation(
-            math.radians(r[0]),
-            math.radians(r[1]),
-            math.radians(r[2]),
-            om.MEulerRotation.kXYZ,
-        )
-    )
-    return mt.asMatrix()
-
-
-def _joint_world_rest(jpath: str) -> om.MMatrix:
-    """A joint's REST world matrix, read at build time (before any solve)."""
-    return om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
-
-
-def _pmx_body_world_rest(body: PMXRigidBody) -> om.MMatrix:
-    """A PMX body's rest pose in WORLD space (MMD → Maya Z-flip + handedness).
-
-    Mirrors the conversion in the native ``mmdRigidBody -create`` command
-    (world pose, then `local = world * groupWorld⁻¹`), so the baked write-back
-    offsets use exactly the same world frame as the node's bodies.
-    """
-    world_t = (body.shape_position.x, body.shape_position.y, -body.shape_position.z)
-    world_r = (
-        -math.degrees(body.shape_rotation.x),
-        -math.degrees(body.shape_rotation.y),
-        math.degrees(body.shape_rotation.z),
-    )
-    return _matrix_from_tr(world_t, world_r)
 
 
 def _compute_reset_anchor_map(
@@ -271,113 +234,73 @@ def _wire_dynamic_write_back(
     pmx_data: PmxModel,
     joint_names: dict[int, str],
     kinematic_order: list[int],
-) -> list[str]:
+) -> None:
     """Drive the related JOINTS from the node's solved pose (Phase 3).
 
-    Called AFTER every body and joint exists (no -finalize step): it bakes the
-    write-back inputs and connects ``outTranslate``/``outRotate`` straight into
-    the joints.  PHYSICS_BONE (mode 2) is rotation-only (translate not
-    connected).
+    Called AFTER every body and joint exists (no -finalize step).  The body
+    data and the write-back K offsets (``bodyWriteBackOffset`` =
+    jointRestWorld * bodyRestWorld^-1) were already baked by ``mmdRigidBody
+    -create``; here we only resolve the per-body wiring that needs the WHOLE
+    model:
 
-    CYCLE FIX: the parent inverse is derived from the PARENT BODY's solved
-    Bullet transform inside the node (no DG dependency on the parent JOINT).
-    For every dynamic body whose parent BONE has a rigid body we bake
-    ``bodies[i].bodyParentBodyIndex`` + ``bodyParentJointOffset[i]`` =
-    M_parent.  The DG ``joint.parentInverseMatrix -> bodyParentInverseMatrix``
-    connection is kept ONLY for bodies whose parent bone has no body — that
-    parent is never node-driven, so it cannot feed back.
-
-    The write-back matrix arrays are DENSE (every body index 0..n-1 set) — the
-    C++ node reads them with ``jumpToArrayElement(bodyIndex)``, which for a
-    SPARSE array reads the wrong physical slot for high body indices.
-
-    Returns the list of driven joint paths (for cache exclusion).
+    * ``bodies[i].bodyParentBodyIndex`` — the parent bone's rigid body, so the
+      node derives the parent joint's world from the PARENT BODY's solved
+      Bullet transform (M_parent = K[parentBodyIndex]) with no DG dependency on
+      node-driven parent joints (that was the feedback cycle that exploded the
+      sim);
+    * the DG ``joint.parentInverseMatrix -> bodyParentInverseMatrix`` fallback
+      ONLY for bodies whose parent bone has no body (that parent is never
+      node-driven);
+    * ``bodies[i].bodyResetAnchorIndex`` for scrub-back rewind (nearest
+      kinematic ancestor);
+    * ``outTranslate``/``outRotate`` -> joint.translate/rotate — LAST, so the
+      first evaluation (triggered by these connections) sees complete data.
+      PHYSICS_BONE (mode 2) is rotation-only.
     """
-    # The node needs the physics group's world matrix to lift the solved
-    # group-space pose into world space for the joint-local write-back.
+    # The node needs the physics group's world matrix for the DG-fallback
+    # write-back (the primary path cancels groupWorld).
     try:
         cmds.connectAttr(f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix", force=True)
     except Exception as e:
         log.warning("Could not connect groupWorldMatrix: %s", e)
 
-    n = len(pmx_data.rigid_bodies)
-    # Dense arrays: every body index gets an element (identity for bodies that
-    # have no write-back, real values for the dynamic ones).
-    for i in range(n):
-        try:
-            cmds.setAttr(f"{node}.bodyWriteBackOffset[{i}]", _IDENTITY, type="matrix")
-            cmds.setAttr(f"{node}.bodyParentInverseMatrix[{i}]", _IDENTITY, type="matrix")
-            cmds.setAttr(f"{node}.bodyParentJointOffset[{i}]", _IDENTITY, type="matrix")
-        except Exception:
-            pass
-
     # PMX bone index -> rigid-body index (only bodies with a related joint can
     # be referenced as a write-back parent).
     bone_of_body: dict[int, int] = {}
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
-        if (
-            body.related_bone_index >= 0
-            and body.related_bone_index in joint_names
-        ):
+        if body.related_bone_index >= 0 and body.related_bone_index in joint_names:
             bone_of_body.setdefault(body.related_bone_index, rb_idx)
 
-    # 1) Bake ALL write-back inputs first, so the first evaluation (triggered
-    #    by the output connections below) sees complete data.
+    # Parent body resolution + DG fallback (both need the WHOLE model: the
+    # parent body may be created later in the array).
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode == PhysicsMode.FOLLOW_BONE:
             continue
         bone_idx = body.related_bone_index
         if bone_idx < 0 or bone_idx not in joint_names:
             continue  # no related joint -> static collider, no write-back
-        jpath = joint_names[bone_idx]
-        try:
-            k = _joint_world_rest(jpath) * _pmx_body_world_rest(body).inverse()
-            cmds.setAttr(f"{node}.bodyWriteBackOffset[{rb_idx}]", list(k), type="matrix")
-
-            parent_rb = -1
-            if (
-                0 <= bone_idx < len(pmx_data.bones)
-                and pmx_data.bones[bone_idx].parentIndex >= 0
-            ):
-                parent_rb = bone_of_body.get(pmx_data.bones[bone_idx].parentIndex, -1)
-            cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex", int(parent_rb))
-            if parent_rb >= 0:
-                parent_body = pmx_data.rigid_bodies[parent_rb]
-                parent_joint = joint_names[parent_body.related_bone_index]
-                m_parent = _joint_world_rest(
-                    parent_joint
-                ) * _pmx_body_world_rest(parent_body).inverse()
-                cmds.setAttr(
-                    f"{node}.bodyParentJointOffset[{rb_idx}]",
-                    list(m_parent),
-                    type="matrix",
+        parent_rb = -1
+        if 0 <= bone_idx < len(pmx_data.bones) and pmx_data.bones[bone_idx].parentIndex >= 0:
+            parent_rb = bone_of_body.get(pmx_data.bones[bone_idx].parentIndex, -1)
+        cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex", int(parent_rb))
+        if parent_rb < 0:
+            # Parent bone has no rigid body: DG parent-inverse fallback (that
+            # parent is never node-driven, so it cannot feed back).
+            try:
+                cmds.connectAttr(
+                    f"{joint_names[bone_idx]}.parentInverseMatrix[0]",
+                    f"{node}.bodyParentInverseMatrix[{rb_idx}]",
+                    force=True,
                 )
-            else:
-                # Parent bone has no rigid body: read its parent inverse from
-                # the DG.  That parent is never node-driven (no dynamic
-                # ancestor in the PMX chain), so this cannot feed back.
-                try:
-                    cmds.connectAttr(
-                        f"{jpath}.parentInverseMatrix[0]",
-                        f"{node}.bodyParentInverseMatrix[{rb_idx}]",
-                        force=True,
-                    )
-                except Exception as e:
-                    log.warning("Could not connect parent inverse for body %d: %s", rb_idx, e)
-        except Exception as e:
-            log.warning("Could not bake write-back data for body %d: %s", rb_idx, e)
+            except Exception as e:
+                log.warning("Could not connect parent inverse for body %d: %s", rb_idx, e)
 
-    # 2) Scrub-back reset anchors (dynamic body -> nearest kinematic ancestor).
-    reset_map = _compute_reset_anchor_map(pmx_data, kinematic_order)
-    for rb_idx, anchor_idx in reset_map.items():
-        try:
-            cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyResetAnchorIndex", int(anchor_idx))
-        except Exception:
-            pass
+    # Scrub-back reset anchors (dynamic body -> nearest kinematic ancestor).
+    for rb_idx, anchor_idx in _compute_reset_anchor_map(pmx_data, kinematic_order).items():
+        cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyResetAnchorIndex", int(anchor_idx))
 
-    # 3) Connect the solved pose -> joints LAST (this triggers the first
-    #    evaluation, so every input above must already be in place).
-    driven: list[str] = []
+    # Solved pose -> joints LAST (triggers the first evaluation, so every
+    # input above is already in place).
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode == PhysicsMode.FOLLOW_BONE:
             continue
@@ -397,28 +320,15 @@ def _wire_dynamic_write_back(
                 f"{jpath}.rotate",
                 force=True,
             )
-            driven.append(jpath)
         except Exception as e:
             log.warning("Could not connect dynamic output %d (%s): %s", rb_idx, jpath, e)
-    return driven
 
-
-def _exclude_from_dg_cache(node: Optional[str], driven_joints) -> None:
-    """Disable the DG value cache for the physics subgraph.
-
-    The node already opts out of Cached Playback natively (``getCacheSetup``).
-    This additionally sets ``caching=0`` on the solver and the physics-driven
-    joints so the classic DG cache never reuses stale solver outputs either.
-    """
-    nodes: list[str] = [node] if node else []
-    nodes.extend(driven_joints)
-    for n in nodes:
-        if not n or not cmds.objExists(n):
-            continue
-        try:
-            cmds.setAttr(f"{n}.caching", 0)
-        except Exception:
-            pass
+    # Belt-and-suspenders on top of the node's native Cached-Playback opt-out
+    # (getCacheSetup): never DG-cache the stateful solver.
+    try:
+        cmds.setAttr(f"{node}.caching", 0)
+    except Exception:
+        pass
 
 
 # TODO remove in the future
@@ -581,13 +491,10 @@ def create_physics_from_pmx_data(
         for rb_idx, b in enumerate(pmx_data.rigid_bodies)
         if b.physics_mode == PhysicsMode.FOLLOW_BONE
     ]
-    driven_joints = _wire_dynamic_write_back(
-        node, group, pmx_data, joint_names, kinematic_order
-    )
-    _exclude_from_dg_cache(node, driven_joints)
+    _wire_dynamic_write_back(node, group, pmx_data, joint_names, kinematic_order)
 
     log.info(
-        "Physics: %d FOLLOW_BONE, %d dynamic bodies, %d joints (%d driven)",
+        "Physics: %d FOLLOW_BONE, %d dynamic bodies, %d joints",
         sum(
             1
             for b in pmx_data.rigid_bodies
@@ -599,6 +506,5 @@ def create_physics_from_pmx_data(
             if b.physics_mode != PhysicsMode.FOLLOW_BONE
         ),
         len(pmx_data.joints),
-        len(driven_joints),
     )
     return node

@@ -89,7 +89,6 @@ MObject MMDPhysicsNode::aAnchorOffset;
 MObject MMDPhysicsNode::aGroupWorldMatrix;
 MObject MMDPhysicsNode::aBodyWriteBackOffset;
 MObject MMDPhysicsNode::aBodyParentInverseMatrix;
-MObject MMDPhysicsNode::aBodyParentJointOffset;
 
 MObject MMDPhysicsNode::aBodies;
 MObject MMDPhysicsNode::aBodyEnabled;
@@ -343,20 +342,6 @@ MStatus MMDPhysicsNode::initialize()
 
     aBodyParentInverseMatrix =
         mAttr.create("bodyParentInverseMatrix", "bpim", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
-    mAttr.setKeyable(false);
-
-    // Phase 3 cycle fix: baked parent-joint world offset per dynamic body
-    // (M_parent = parentJointRestWorld * parentBodyRestWorld^-1).  The node
-    // derives the parent joint's world from the PARENT BODY's solved Bullet
-    // transform (M_parent * B_parent * groupWorld) instead of reading the DG
-    // `joint.parentInverseMatrix` — which for a body whose parent JOINT is
-    // also node-driven created a DG feedback cycle that exploded the sim.
-    aBodyParentJointOffset =
-        mAttr.create("bodyParentJointOffset", "bpjo", MFnMatrixAttribute::kDouble, &stat);
     CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
@@ -628,8 +613,6 @@ MStatus MMDPhysicsNode::initialize()
     CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyParentInverseMatrix);
     CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyParentJointOffset);
-    CHECK_MSTATUS(stat);
     stat = addAttribute(aBodies);
     CHECK_MSTATUS(stat);
     stat = addAttribute(aJoints);
@@ -690,10 +673,6 @@ MStatus MMDPhysicsNode::initialize()
     stat = attributeAffects(aBodyParentInverseMatrix, aOutTranslate);
     CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyParentInverseMatrix, aOutRotate);
-    CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyParentJointOffset, aOutTranslate);
-    CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyParentJointOffset, aOutRotate);
     CHECK_MSTATUS(stat);
 
     return MS::kSuccess;
@@ -896,8 +875,6 @@ uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
     h = hashValue(h, wbOffset.elementCount());
     MArrayDataHandle wbParentInv = dataBlock.inputArrayValue(aBodyParentInverseMatrix);
     h = hashValue(h, wbParentInv.elementCount());
-    MArrayDataHandle wbParentJointOffset = dataBlock.inputArrayValue(aBodyParentJointOffset);
-    h = hashValue(h, wbParentJointOffset.elementCount());
 
     return h;
 }
@@ -1293,10 +1270,11 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
     // guide transforms, no parent/orientConstraints).  The primary transform
     // is
     //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
-    // where K = jointRestWorld * bodyRestWorld^-1 (baked by Python) and the
-    // parent inverse is derived from the PARENT BODY's solved Bullet transform
-    // (M_parent * B_parent * groupWorld = parentJointWorld, M_parent =
-    // parentJointRestWorld * parentBodyRestWorld^-1 baked by Python).  This is
+    // where K = jointRestWorld * bodyRestWorld^-1 (baked by mmdRigidBody
+    // -create) and the parent inverse is derived from the PARENT BODY's
+    // solved Bullet transform (M_parent * B_parent * groupWorld =
+    // parentJointWorld, M_parent = parentJointRestWorld * parentBodyRestWorld^-1
+    // — the SAME constant as K[parentBodyIndex]).  This is
     // the exact world-space offset that parentConstraint(maintainOffset)
     // maintained (verified empirically: targetWorld = K * sourceWorld), so it
     // is EXACT at rest and invariant when the whole model is moved.  Deriving
@@ -1316,7 +1294,6 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
     }
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
     MArrayDataHandle parentInvHandle = dataBlock.inputArrayValue(aBodyParentInverseMatrix);
-    MArrayDataHandle parentJointOffsetHandle = dataBlock.inputArrayValue(aBodyParentJointOffset);
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
     // (kinematic bodies get no output element; reading them yields defaults).
@@ -1343,18 +1320,23 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
         // explode.  Here:
         //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
         // with K = bodyWriteBackOffset[i] (jointRestWorld * bodyRestWorld^-1)
-        // and M_parent = bodyParentJointOffset[i] (parentJointRestWorld *
-        // parentBodyRestWorld^-1, the same constant for kinematic and dynamic
-        // parents).  Because parentJointWorld = M_parent * B_parent *
-        // groupWorld, the groupWorld term cancels and boneLocal is EXACT at
-        // rest for both parent kinds (verified algebraically).
+        // and M_parent = K[parentBodyIndex] (parentJointRestWorld *
+        // parentBodyRestWorld^-1 — the same constant as the parent body's K,
+        // for kinematic and dynamic parents).  Because parentJointWorld =
+        // M_parent * B_parent * groupWorld, the groupWorld term cancels and
+        // boneLocal is EXACT at rest for both parent kinds (verified
+        // algebraically).
         const int parentIdx = mBodies[i].parentBodyIndex;
         if (parentIdx >= 0 && (size_t) parentIdx < mRigidBodies.size() && mRigidBodies[parentIdx] &&
             offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
-            parentJointOffsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
+            offsetHandle.jumpToArrayElement((unsigned int) parentIdx) == MS::kSuccess)
         {
             MMatrix k = offsetHandle.inputValue().asMatrix();
-            MMatrix mp = parentJointOffsetHandle.inputValue().asMatrix();
+            // M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the
+            // SAME constant as K[parentIdx] (bodyWriteBackOffset of the parent
+            // body — baked at create for kinematic AND dynamic parents), so a
+            // separate parent-offset array is not needed.
+            MMatrix mp = offsetHandle.inputValue().asMatrix();
             double bpRow[4][4];
             btTransformToRowMatrix(mRigidBodies[parentIdx]->getWorldTransform(), bpRow);
             MMatrix bParent(bpRow);
