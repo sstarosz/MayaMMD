@@ -958,8 +958,6 @@ def reset_model_to_bind_pose(
             step_physics(solver)  # restore fps -> rebuild again (still at rest)
         except Exception as exc:
             log.debug("Could not reset physics solver %s: %s", solver, exc)
-        except Exception as exc:
-            log.debug("Could not reset physics solver %s: %s", solver, exc)
 
     # Restore original ikBlend values so the rig solver state is unchanged.
     for _ik_h, _orig_blend in _ik_blend_orig.items():

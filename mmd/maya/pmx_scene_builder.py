@@ -676,19 +676,17 @@ def apply_skin_weights(
         log.debug(traceback.format_exc())
 
 
-def build_pmx_scene(
-    pmx_data: PmxModel, build_physics: bool = True
-) -> MayaPmxData:
+def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     """
     Builds the PMX scene in Maya from the given PMX data.
 
+    Physics is always built for the model: one native ``mmdPhysicsNode``
+    (embedded Bullet) with every PMX rigid body and joint, node-drawn
+    colliders, and direct write-back into the joints.  See
+    docs/PhysicsImplementation.md.
+
     Args:
         pmx_data (PmxModel): The PMX model data.
-        build_physics (bool): If True (default), also create the mayaBullet
-            physics binding (rigid body colliders + joints, per-frame
-            write-back) via ``create_physics_from_pmx_data``.  Colliders are
-            shown by mayaBullet's wireframe drawing, tinted per collision
-            group.  See docs/PhysicsImplementation.md.
     Returns:
         MayaPmxData: The Maya PMX data containing created objects.
     """
@@ -776,27 +774,21 @@ def build_pmx_scene(
         root_name,
     )
 
-    # Rigid bodies are represented by the physics guide meshes created by
-    # rigid_body_builder, which shades them per collision group with one
-    # unique material per group.  No separate mesh guides are created here.
-    # See docs/PhysicsImplementation.md.
-
     # Rigid bodies + joints via the native mmdPhysicsNode (embedded Bullet).
     # No handle is kept in memory — the scene is the source of truth; discover
     # physics state later via mmd.maya.pmx_model_utils (wrapped by
     # ModelContext.physics* getters).
-    if build_physics:
-        solver_node = create_physics_from_pmx_data(
-            pmx_data,
-            joints=joints,
-            name_registry=name_registry,
-            root_transform_obj=root_obj,
-        )
-        # Stamp the solver on the root so discovery can find it directly.
-        if solver_node:
-            if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
-                cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
-            cmds.setAttr(f"{root_name}.pmxPhysicsNode", solver_node, type="string")
+    solver_node = create_physics_from_pmx_data(
+        pmx_data,
+        joints=joints,
+        name_registry=name_registry,
+        root_transform_obj=root_obj,
+    )
+    # Stamp the solver on the root so discovery can find it directly.
+    if solver_node:
+        if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
+            cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
+        cmds.setAttr(f"{root_name}.pmxPhysicsNode", solver_node, type="string")
 
     return MayaPmxData(
         root_obj=root_obj,

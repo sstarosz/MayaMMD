@@ -19,12 +19,12 @@ and **declares itself non-cacheable** (`getCacheSetup`), so the evaluation
 manager always re-evaluates it every frame — the mechanism a built-in solver
 could not use.
 
-Milestone 2 is functional end-to-end: `build_pmx_scene(pmx, build_physics=True)`
-creates one `mmdPhysicsNode` per model with every PMX rigid body and joint, the
-simulation advances during playback / evaluation, and dynamic bodies write their
-solved pose back to the skeleton. Verified on all 17 bundled models (187/187
-rigid-body tests, including **behavioral** tests that step time and assert the
-bodies actually move and the bones follow).
+Milestone 2 is functional end-to-end: `build_pmx_scene(pmx)` always creates one
+`mmdPhysicsNode` per model with every PMX rigid body and joint, the simulation
+advances during playback / evaluation, and dynamic bodies write their solved
+pose back to the skeleton. Verified on all 17 bundled models (187/187 rigid-body
+tests, including **behavioral** tests that step time and assert the bodies
+actually move and the bones follow).
 
 Audience: developers adding or maintaining the physics feature.
 

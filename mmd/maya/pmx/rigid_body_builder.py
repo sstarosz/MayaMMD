@@ -7,11 +7,11 @@ builder and physics_builder.py).  It owns:
 * the MMD → Maya coordinate conversions shared by the rigid-body code
   (Z-flip positions, ``(-rx, -ry, +rz)`` handedness rotation),
 * the **rigid-body build functions** that drive one native ``mmdPhysicsNode``
-  (embedded Bullet) per model: an invisible guide transform per rigid body
-  (the NODE draws the visible colliders itself through its draw override),
-  the node's ``bodies`` / ``joints`` compound arrays, the kinematic-anchor and
-  dynamic-output connections, and the DG write-back constraints to the
-  skeleton.
+  (embedded Bullet) per model: the node's ``bodies`` / ``joints`` compound
+  arrays, the kinematic-anchor connections from the joints, and the direct
+  write-back of the solved pose into the related joints.  The NODE draws the
+  colliders itself through its draw override — no guide transforms and no
+  write-back constraints exist.
 
 The C++ node is time-driven (``time1.outTime -> node.time``) and evaluated by
 the evaluation manager on every time step; it declares itself non-cacheable so
@@ -19,8 +19,8 @@ Cached Playback always re-evaluates it (see docs/PhysicsImplementation.md).
 The Bullet world advances inside the node's ``compute()`` — no solver plugin,
 no scriptJob, no pairBlend, no external stateful nodes.
 
-Run it by calling :func:`create_physics_from_pmx_data` (or pass
-``build_physics=True`` to ``build_pmx_scene``).  The scene is the source of
+Run it by calling :func:`create_physics_from_pmx_data` (``build_pmx_scene``
+builds physics for every model automatically).  The scene is the source of
 truth: reconstruct physics state later with the ``mmd.maya.pmx_model_utils``
 discovery helpers (wrapped by ``ModelContext.physics*`` getters).  Headless
 stepping live here as :func:`step_physics` and :func:`write_back_physics`.
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 import maya.api.OpenMaya as om
@@ -267,12 +268,17 @@ def _exclude_from_dg_cache(node: Optional[str], driven_joints) -> None:
 
 # ---------------------------------------------------------------------------
 # Phase 3: no guide transforms exist.  The mmdPhysicsNode DRAWS the colliders
-# and writes the solved pose DIRECTLY into the related joints —
+# and writes the solved pose DIRECTLY into the related joints.  PRIMARY path
+# (the write-back parent inverse comes from the PARENT BODY's solved Bullet
+# transform — no DG dependency on node-driven parent joints):
+#   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
+#   K        = jointRestWorld * bodyRestWorld^-1              (bodyWriteBackOffset)
+#   M_parent = parentJointRestWorld * parentBodyRestWorld^-1  (bodyParentJointOffset)
+# FALLBACK (parent bone has no body — that parent is never node-driven):
 #   boneLocal = K * bodyLocal * groupWorld * jointParentInverse
-# with K (a world-frame offset, jointRestWorld * bodyRestWorld^-1) baked here
-# at build.  This is exactly the transform that parentConstraint(maintainOffset)
-# used to maintain (targetWorld = K * sourceWorld — verified empirically), so
-# rest poses stay EXACT and the whole model can be moved freely.
+# K is the exact world-frame offset parentConstraint(maintainOffset) used to
+# maintain (targetWorld = K * sourceWorld — verified empirically), so rest
+# poses stay EXACT and the whole model can be moved freely.
 # ---------------------------------------------------------------------------
 
 
@@ -299,7 +305,7 @@ _IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 def _body_world_rest(spec, group_world_rest) -> om.MMatrix:
     """A body spec's rest pose lifted into world space (restT/restR * groupWorld)."""
-    return _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
+    return _matrix_from_tr(spec.restT, spec.restR) * group_world_rest
 
 
 def _joint_world_rest(jpath: str) -> om.MMatrix:
@@ -324,7 +330,38 @@ def _local_rest_in_group(world_t, world_r, group_world_rest):
     return (t.x, t.y, t.z), (math.degrees(e.x), math.degrees(e.y), math.degrees(e.z))
 
 
-def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optional[dict]:
+@dataclass(frozen=True)
+class _BodySpec:
+    """A PMX rigid body baked for the node's ``bodies`` array (Phase 3).
+
+    Produced by :func:`_make_body_spec`; consumed by the body-array writer,
+    the anchor/write-back connectors, and the build driver.  ``joint`` is the
+    related joint's full path (or ``None`` — a static collider with no
+    write-back target).
+    """
+
+    restT: tuple[float, float, float]
+    restR: tuple[float, float, float]
+    mass: float
+    linearDamping: float
+    angularDamping: float
+    friction: float
+    restitution: float
+    collider: int
+    radius: float
+    extents: tuple[float, float, float]
+    length: float
+    groupId: int
+    nonCollisionGroup: int
+    kinematic: bool
+    physicsMode: int
+    joint: Optional[str]
+    boneIndex: int
+
+
+def _make_body_spec(
+    rb_idx: int, body, group_world_rest, joint_names
+) -> Optional[_BodySpec]:
     """Compute a PMX rigid body's spec for the node's ``bodies`` array.
 
     Phase 3: no guide transform is created.  The rest pose is the PMX rest
@@ -358,10 +395,10 @@ def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optiona
         # the raw PMX data below (bodyGroupId + bodyNonCollisionGroup) — the
         # proximity + cloth-on-cloth corrections live in
         # mmd/maya/nodes/mmd_physics_masks.h.
-        return {
-            "restT": local_t,
-            "restR": local_r,
-            "mass": body.mass,
+        return _BodySpec(
+            restT=local_t,
+            restR=local_r,
+            mass=body.mass,
             # MMD's move_attenuation / rotation_damping ARE the damping
             # coefficients (1.0 = fully damped -> the body settles; 0.0 = no
             # damping -> it swings forever).  A previous
@@ -369,34 +406,34 @@ def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optiona
             # (skirt ~0.96, bangs/cape/hair 1.0) got near-ZERO damping and
             # never settled — the bangs "jumped back and forth" on the
             # torso/jacket instead of resting on it.
-            "linearDamping": _clamp01(body.move_attenuation),
-            "angularDamping": _clamp01(body.rotation_damping),
-            "friction": _clamp01(body.friction_force),
-            "restitution": _clamp01(body.repulsion),
-            "collider": _PMX_TO_COLLIDER_TYPE.get(body.shape, 2),
-            "radius": size.x,
-            "extents": (size.x, size.y, size.z),
-            "length": size.y,
-            "groupId": body.group_id,
+            linearDamping=_clamp01(body.move_attenuation),
+            angularDamping=_clamp01(body.rotation_damping),
+            friction=_clamp01(body.friction_force),
+            restitution=_clamp01(body.repulsion),
+            collider=_PMX_TO_COLLIDER_TYPE.get(body.shape, 2),
+            radius=size.x,
+            extents=(size.x, size.y, size.z),
+            length=size.y,
+            groupId=body.group_id,
             # PMX non_collision_group is a 16-bit bitmask read as a SIGNED
             # int16 (so 0xFF6D comes back as -147).  Store it as unsigned so
             # the C++ node's "is raw data present" test (value != -1) and the
             # ~ncg & 0xFFFF mask math both see the true 16-bit value.
-            "nonCollisionGroup": body.non_collision_group & 0xFFFF,
-            "kinematic": kinematic,
-            "physicsMode": mode.value,
+            nonCollisionGroup=body.non_collision_group & 0xFFFF,
+            kinematic=kinematic,
+            physicsMode=mode.value,
             # Related joint path (Phase 3 direct write-back) or None.
-            "joint": jpath,
+            joint=jpath,
             # PMX bone index of the related joint (parent-chain lookup for the
             # write-back parent inverse — Phase 3 cycle fix).
-            "boneIndex": body.related_bone_index,
-        }
+            boneIndex=body.related_bone_index,
+        )
     except Exception as e:
         log.warning("Failed to create body %d: %s", rb_idx, e)
         return None
 
 def _set_body_attributes(
-    node: Optional[str], body_specs: dict[int, dict], reset_index: dict[int, int]
+    node: Optional[str], body_specs: dict[int, _BodySpec], reset_index: dict[int, int]
 ) -> None:
     """Write every PMX rigid body into the node's ``bodies`` array.
 
@@ -420,37 +457,37 @@ def _set_body_attributes(
         base = f"{node}.bodies[{rb_idx}]"
         try:
             el = bodies_plug.elementByLogicalIndex(rb_idx)
-            el.child(attr["bodyMass"]).setDouble(float(spec["mass"]))
-            el.child(attr["bodyLinearDamping"]).setDouble(float(spec["linearDamping"]))
-            el.child(attr["bodyAngularDamping"]).setDouble(float(spec["angularDamping"]))
-            el.child(attr["bodyFriction"]).setDouble(float(spec["friction"]))
-            el.child(attr["bodyRestitution"]).setDouble(float(spec["restitution"]))
-            el.child(attr["bodyColliderType"]).setShort(int(spec["collider"]))
-            el.child(attr["bodyRadius"]).setDouble(float(spec["radius"]))
-            el.child(attr["bodyLength"]).setDouble(float(spec["length"]))
+            el.child(attr["bodyMass"]).setDouble(float(spec.mass))
+            el.child(attr["bodyLinearDamping"]).setDouble(float(spec.linearDamping))
+            el.child(attr["bodyAngularDamping"]).setDouble(float(spec.angularDamping))
+            el.child(attr["bodyFriction"]).setDouble(float(spec.friction))
+            el.child(attr["bodyRestitution"]).setDouble(float(spec.restitution))
+            el.child(attr["bodyColliderType"]).setShort(int(spec.collider))
+            el.child(attr["bodyRadius"]).setDouble(float(spec.radius))
+            el.child(attr["bodyLength"]).setDouble(float(spec.length))
             # Raw PMX collision input — the node derives the effective mask
             # and the Bullet group bit itself (Phase 2).
-            el.child(attr["bodyGroupId"]).setShort(int(spec["groupId"]))
+            el.child(attr["bodyGroupId"]).setShort(int(spec.groupId))
             el.child(attr["bodyNonCollisionGroup"]).setInt(
-                int(spec["nonCollisionGroup"])
+                int(spec.nonCollisionGroup)
             )
-            el.child(attr["bodyKinematic"]).setBool(bool(spec["kinematic"]))
-            el.child(attr["bodyPhysicsMode"]).setShort(int(spec["physicsMode"]))
+            el.child(attr["bodyKinematic"]).setBool(bool(spec.kinematic))
+            el.child(attr["bodyPhysicsMode"]).setShort(int(spec.physicsMode))
             el.child(attr["bodyResetAnchorIndex"]).setInt(
                 int(reset_index.get(rb_idx, -1))
             )
             # 3double children (no safe OM setter — MDataHandle construction
             # crashed Maya in a probe).
-            cmds.setAttr(f"{base}.bodyRestTranslate", *spec["restT"])
-            cmds.setAttr(f"{base}.bodyRestRotate", *spec["restR"])
-            cmds.setAttr(f"{base}.bodyExtents", *spec["extents"])
+            cmds.setAttr(f"{base}.bodyRestTranslate", *spec.restT)
+            cmds.setAttr(f"{base}.bodyRestRotate", *spec.restR)
+            cmds.setAttr(f"{base}.bodyExtents", *spec.extents)
         except Exception as e:
             log.warning("Could not set body %d attributes: %s", rb_idx, e)
 
 
 def _connect_kinematic_anchors(
     node: Optional[str],
-    body_specs: dict[int, dict],
+    body_specs: dict[int, _BodySpec],
     kinematic_order: list[int],
     group: str,
     group_world_rest,
@@ -471,7 +508,7 @@ def _connect_kinematic_anchors(
         return
     for k, rb_idx in enumerate(kinematic_order):
         spec = body_specs[rb_idx]
-        jpath = spec.get("joint")
+        jpath = spec.joint
         try:
             if jpath is not None:
                 cmds.connectAttr(
@@ -555,7 +592,7 @@ def _compute_reset_anchor_map(
 
 def _connect_dynamic_outputs(
     node: Optional[str],
-    body_specs: dict[int, dict],
+    body_specs: dict[int, _BodySpec],
     group: str,
     group_world_rest,
     pmx_data: PmxModel,
@@ -610,14 +647,14 @@ def _connect_dynamic_outputs(
     # PMX bone index -> rigid-body index (only bodies that made it into the
     # node and have a related joint can be referenced as a write-back parent).
     bone_of_body = {
-        spec["boneIndex"]: rb_idx
+        spec.boneIndex: rb_idx
         for rb_idx, spec in body_specs.items()
-        if spec.get("boneIndex") is not None and spec.get("joint")
+        if spec.boneIndex is not None and spec.joint
     }
     for rb_idx, spec in body_specs.items():
-        if spec["kinematic"]:
+        if spec.kinematic:
             continue
-        jpath = spec.get("joint")
+        jpath = spec.joint
         if jpath is None:
             continue
         try:
@@ -632,7 +669,7 @@ def _connect_dynamic_outputs(
             # Parent joint's body (Phase 3 cycle fix): the write-back parent
             # inverse comes from that body's solved Bullet transform, so no DG
             # dependency on a node-driven parent joint.
-            bone = spec.get("boneIndex")
+            bone = spec.boneIndex
             parent_rb = -1
             if (
                 bone is not None
@@ -647,7 +684,7 @@ def _connect_dynamic_outputs(
             )
             if parent_rb >= 0:
                 parent_spec = body_specs[parent_rb]
-                parent_joint = parent_spec.get("joint")
+                parent_joint = parent_spec.joint
                 if parent_joint:
                     # M_parent = parentJointRestWorld * parentBodyRestWorld^-1
                     # (same constant for kinematic and dynamic parents).
@@ -676,7 +713,7 @@ def _connect_dynamic_outputs(
                         e,
                     )
             # Solved pose -> joint (mode 2 = rotation only).
-            if spec["physicsMode"] != 2:
+            if spec.physicsMode != 2:
                 cmds.connectAttr(
                     f"{node}.outTranslate[{rb_idx}].outTranslateValue",
                     f"{jpath}.translate",
@@ -772,19 +809,17 @@ def write_back_physics(node: Optional[str], driven_joints=None) -> None:
     """Propagate the solved pose to the driven joints (headless use).
 
     Phase 3: the node writes the joint-local pose straight into the joints, so
-    "write-back" is just re-evaluating the node's outputs and the driven
-    joints.  Interactive playback does this via DG automatically; this exists
-    for headless/batch stepping after :func:`step_physics`.
+    "write-back" is just stepping the solver (:func:`step_physics`) and
+    re-evaluating the driven joints.  Interactive playback does this via DG
+    automatically; this exists for headless/batch stepping.
     """
-    try:
-        if node:
-            cmds.dgdirty(node)
-            cmds.dgeval(f"{node}.outTranslate")
-        for joint in (driven_joints or {}).values():
+    step_physics(node)
+    for joint in (driven_joints or {}).values():
+        try:
             cmds.dgdirty(joint)
             cmds.dgeval(joint)
-    except Exception as e:
-        log.debug("physics write_back failed: %s", e)
+        except Exception as e:
+            log.debug("physics joint write_back failed: %s", e)
 
 
 def create_physics_from_pmx_data(
@@ -830,7 +865,7 @@ def create_physics_from_pmx_data(
     # model can be moved freely after import.
     group_world_rest = om.MMatrix(cmds.xform(group, q=True, ws=True, matrix=True))
 
-    body_specs: dict[int, dict] = {}
+    body_specs: dict[int, _BodySpec] = {}
     kinematic_order: list[int] = []
 
     # The collision-mask resolution lives in the NODE (Phase 2): each body
@@ -875,9 +910,9 @@ def create_physics_from_pmx_data(
     # Belt-and-suspenders on top of the node's native cache opt-out: never
     # cache the DG results of the physics subgraph.
     driven_joints = {
-        rb_idx: spec["joint"]
+        rb_idx: spec.joint
         for rb_idx, spec in body_specs.items()
-        if not spec["kinematic"] and spec.get("joint")
+        if not spec.kinematic and spec.joint
     }
     _exclude_from_dg_cache(node, driven_joints)
 
