@@ -105,7 +105,7 @@ jobs:
       - name: Configure (Maya 2026 SDK)
         run: |
           echo "SDK cache: ${MAYAMMD_SDK_CACHE_URL:-(not set)}"
-          cmake --preset maya2026-release
+          cmake --preset maya2026-release -DBUILD_TESTS=ON
         env:
           MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -113,4 +113,8 @@ jobs:
 
       - name: Build .mll
         run: cmake --build out/build/maya2026-release --config Release
+        shell: bash
+
+      - name: Run C++ unit tests
+        run: ctest --preset default --output-on-failure -E "maya-integration"
         shell: bash

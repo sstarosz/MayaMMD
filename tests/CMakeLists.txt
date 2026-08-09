@@ -6,11 +6,8 @@
 # =========================================================================
 
 # =========================================================================
-# Catch2 C++ unit tests (no Maya SDK required)
-#
-# NOTE: No C++ unit tests exist yet. When they are added:
-#   1. Place .cpp test files in tests/
-#   2. Uncomment the add_executable + catch_discover_tests block below
+# Catch2 C++ unit tests (no Maya SDK required) — one subdirectory per
+# tested component (see tests/core/ for the Maya-free core).
 # =========================================================================
 if(BUILD_TESTS)
     include(FetchContent)
@@ -21,16 +18,7 @@ if(BUILD_TESTS)
     )
     FetchContent_MakeAvailable(Catch2)
 
-    # TODO: Add test source files and uncomment when ready.
-    # add_executable(mmd_tools_tests
-    #     test_example.cpp
-    # )
-    # target_link_libraries(mmd_tools_tests PRIVATE Catch2::Catch2WithMain)
-    # target_compile_features(mmd_tools_tests PRIVATE cxx_std_17)
-    # include(Catch)
-    # catch_discover_tests(mmd_tools_tests)
-
-    message(STATUS "Catch2 available — no C++ tests registered yet")
+    add_subdirectory(core)
 endif()
 
 # =========================================================================

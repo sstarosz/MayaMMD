@@ -1,0 +1,41 @@
+---
+# clang-tidy configuration for MayaMMD.
+#
+# The core (mmd/core) is Maya-free C++17.  Run it with:
+#   clang-tidy mmd/core/*.cpp tests/core/*.cpp \
+#       -- -std=c++17 -Immd/core -I<bullet include dir>
+#
+# Checks that nag about project conventions are disabled:
+#   - misc-include-cleaner:                 Bullet's umbrella headers
+#                                          (btBulletCollisionCommon.h /
+#                                          btBulletDynamicsCommon.h) are the idiomatic include.
+#   - cppcoreguidelines-pro-bounds-avoid-unchecked-container-access: engine loops
+#                                          index containers with explicit bounds guards.
+#   - cppcoreguidelines-owning-memory:      Bullet's API hands out raw pointers; ownership is
+#                                          transferred into the unique_ptr containers.
+#   - bugprone-easily-swappable-parameters:  numeric APIs (compare helpers) inherently take
+#                                          same-type parameter pairs.
+#   - portability-avoid-pragma-once:          the project uses `#pragma once` everywhere.
+#   - misc-non-private-member-variables-in-classes: Double3/Double4/Matrix4 are plain
+#                                          value types — public members are the point.
+#   - readability-identifier-length:         x/y/z/w/i are idiomatic for math + indexing.
+Checks: >-
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  clang-diagnostic-*,
+  cppcoreguidelines-*,
+  misc-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -portability-avoid-pragma-once,
+  -readability-identifier-length,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+HeaderFilterRegex: 'mmd/core/.*'
+WarningsAsErrors: ''
+...

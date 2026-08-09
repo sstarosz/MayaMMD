@@ -129,7 +129,7 @@ Produces `out/install/maya2026-release/MayaMMD-Maya2026-{OS}/` with `.mll` + Pyt
 ```bash
 cmake --preset maya2026-release -DBUILD_TESTS=ON
 cmake --build out/build/maya2026-release --config Release
-ctest --test-dir out/build/maya2026-release -C Release --output-on-failure
+ctest --preset default --output-on-failure
 ```
 
 ### Development Scripts
@@ -244,10 +244,11 @@ Use `MGlobal::displayInfo()` / `MGlobal::displayWarning()` / `MGlobal::displayEr
 # Configure + build + run (enable tests with -DBUILD_TESTS=ON)
 cmake --preset maya2026-release -DBUILD_TESTS=ON
 cmake --build out/build/maya2026-release --config Release
-ctest --test-dir out/build/maya2026-release -C Release --output-on-failure
+ctest --preset default --output-on-failure
 ```
 
-Add new test files in `tests/` and add them to the `mmd_tools_tests` target in `CMakeLists.txt`.
+Add new test files in `tests/core/` and add them to the `mmd_core_tests`
+target in `tests/core/CMakeLists.txt`.
 
 ### Maya Integration Tests
 
