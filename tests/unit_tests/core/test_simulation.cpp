@@ -17,6 +17,7 @@
 #include <cmath>
 
 using mmd::core::Double3;
+using mmd::core::Double4;
 using mmd::core::Simulation;
 using namespace mmd::core::physics_math;
 
@@ -94,7 +95,9 @@ TEST_CASE("Gravity pulls a dynamic body down", "[sim]")
 
     // 1 second of simulation (60 ticks) at -9.8 -> y ~ -4.9.
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     Simulation::Pose p = sim.bodyPose(0);
     REQUIRE(p.pos.y < -1.0);
@@ -116,7 +119,9 @@ TEST_CASE("Kinematic anchor drives a welded dynamic body", "[sim]")
     REQUIRE(sim.setKinematicPose(0, moved));
 
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     Simulation::Pose p = sim.bodyPose(1);
     REQUIRE(p.pos.y > 1.2); // rest offset +1 kept, so it tracks ~y=2
@@ -129,9 +134,11 @@ TEST_CASE("resetDynamicBodies places bodies at the current skeleton pose", "[sim
 
     Simulation::Pose moved;
     moved.pos[1] = 1.0;
-    sim.setKinematicPose(0, moved);
+    (void) sim.setKinematicPose(0, moved);
     for (int i = 0; i < 30; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     // Reset teleports the dynamic body to anchorCurrent * (anchorRest^-1 * bodyRest)
     // = (0,1,0) * (0,1,0) = (0,2,0) exactly, zeroing velocities.
@@ -203,7 +210,9 @@ TEST_CASE("Collision filtering allows bodies whose filter masks overlap", "[sim]
     Simulation sim;
     REQUIRE(sim.initialize(ballDropDefinition(0xFFFF, 0xFFFF)));
     for (int i = 0; i < 120; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     // Resting ball center = sum of radii = 2.0 (definitely not fallen through).
     Simulation::Pose p = sim.bodyPose(1);
@@ -218,7 +227,9 @@ TEST_CASE("Collision filtering lets disjoint-mask bodies pass through", "[sim]")
     Simulation sim;
     REQUIRE(sim.initialize(ballDropDefinition(0xFFFF, 0xFFFE)));
     for (int i = 0; i < 120; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     Simulation::Pose p = sim.bodyPose(1);
     REQUIRE(p.pos.y < -5.0); // fell through
@@ -236,11 +247,8 @@ TEST_CASE("Kinematic anchor rotation is detected and drives a welded body", "[si
     // A pure rotation must also be reported as movement (column-dot check).
     Simulation::Pose rotated;
     {
-        const btQuaternion q = eulerDegreesToQuat(30.0, 0.0, 0.0);
-        rotated.quat.x = q.x();
-        rotated.quat.y = q.y();
-        rotated.quat.z = q.z();
-        rotated.quat.w = q.w();
+        const Double4 q = eulerDegreesToQuat(30.0, 0.0, 0.0);
+        rotated.quat = q;
     }
     REQUIRE(sim.setKinematicPose(0, rotated));
 
@@ -248,7 +256,9 @@ TEST_CASE("Kinematic anchor rotation is detected and drives a welded body", "[si
     REQUIRE_FALSE(sim.setKinematicPose(0, rotated));
 
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     // The rigid weld carries the anchor's 30 deg X rotation onto the body.
     Simulation::Pose p = sim.bodyPose(1);
@@ -311,7 +321,9 @@ TEST_CASE("Disabled kinematic bodies are excluded from the anchor order", "[sim]
     REQUIRE_FALSE(sim.setKinematicPose(1, moved));
 
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     // The welded body follows body 2 (the enabled anchor), not the disabled one.
     Simulation::Pose p = sim.bodyPose(3);
@@ -342,7 +354,9 @@ TEST_CASE("Box and capsule bodies simulate under gravity", "[sim]")
     REQUIRE(sim.initialize(def));
 
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     // Both shapes get valid inertia and fall freely (mask 0 -> no inter-body
     // collision, so they do not push each other around).
@@ -390,7 +404,9 @@ TEST_CASE("Point-to-point joint keeps the body at the anchor pivot", "[sim]")
     REQUIRE(sim.setKinematicPose(0, moved));
 
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(Simulation::kFixedDt);
+    }
 
     Simulation::Pose p = sim.bodyPose(1);
     REQUIRE(p.pos.x == Catch::Approx(1.0).margin(0.05));

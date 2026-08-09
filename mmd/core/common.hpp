@@ -13,8 +13,8 @@
  * lose precision.  The Bullet world inside Simulation is FLOAT (btScalar) —
  * MikuMikuDance itself runs Bullet in float, so float arithmetic is the
  * fidelity reference.  Conversions happen only at the core/Bullet boundary
- * (explicit btScalar() in simulation.cpp; storeAnchorPose /
- * anchorPoseToTransform in physics_math.hpp).  Do NOT switch vcpkg's bullet3
+ * (explicit btScalar() in simulation.cpp; storePose /
+ * poseToTransform in bullet_bridge.hpp).  Do NOT switch vcpkg's bullet3
  * to double-precision — it would diverge from MMD's behavior.
  */
 
@@ -22,9 +22,7 @@
 
 #include <cassert>
 
-namespace mmd
-{
-namespace core
+namespace mmd::core
 {
 
 struct Double3
@@ -66,8 +64,8 @@ struct Double3
     }
 
     // Contiguous storage for the Maya API (setValue3Double, matrices, ...).
-    double* data() { return &x; }
-    const double* data() const { return &x; }
+    constexpr double* data() { return &x; }
+    constexpr const double* data() const { return &x; }
 };
 
 // A `double[4]` tuple — quaternion convention {x, y, z, w}.
@@ -115,29 +113,121 @@ struct Double4
     }
 
     // Contiguous storage for the Maya API / Bullet boundary.
-    double* data() { return &x; }
-    const double* data() const { return &x; }
+    constexpr double* data() { return &x; }
+    constexpr const double* data() const { return &x; }
 };
 
-// A 4x4 ROW-vector matrix (Maya convention: p' = p * M, row-major).  Wraps
-// the raw double[4][4] so the math helpers never pass bare C arrays around.
-// m[r][c] reads row r, column c; the storage is zero-initialized.
+// A 4x4 ROW-vector matrix (Maya convention: p' = p * M, row-major).  Named
+// members (mRC = row R, column C) keep the matrices readable; operator()(r, c)
+// serves the index loops in the math helpers.
 struct Matrix4
 {
-    double data[4][4] = {};
+    double m00 = 0.0;
+    double m01 = 0.0;
+    double m02 = 0.0;
+    double m03 = 0.0;
+    double m10 = 0.0;
+    double m11 = 0.0;
+    double m12 = 0.0;
+    double m13 = 0.0;
+    double m20 = 0.0;
+    double m21 = 0.0;
+    double m22 = 0.0;
+    double m23 = 0.0;
+    double m30 = 0.0;
+    double m31 = 0.0;
+    double m32 = 0.0;
+    double m33 = 0.0;
 
-    // Row access — m[r][c] reads row r, column c.
-    double* operator[](int r) { return data[r]; }
-    const double* operator[](int r) const { return data[r]; }
+    // Index access — m(r, c) reads row r, column c.  A switch on the flat
+    // index keeps this strictly well-defined (a pointer-into-the-members
+    // shortcut would be out-of-bounds access to a single object).
+    constexpr double& operator()(int r, int c)
+    {
+        assert(r >= 0 && r < 4 && c >= 0 && c < 4);
+        switch (r * 4 + c)
+        {
+        case 0:
+            return m00;
+        case 1:
+            return m01;
+        case 2:
+            return m02;
+        case 3:
+            return m03;
+        case 4:
+            return m10;
+        case 5:
+            return m11;
+        case 6:
+            return m12;
+        case 7:
+            return m13;
+        case 8:
+            return m20;
+        case 9:
+            return m21;
+        case 10:
+            return m22;
+        case 11:
+            return m23;
+        case 12:
+            return m30;
+        case 13:
+            return m31;
+        case 14:
+            return m32;
+        default:
+            return m33;
+        }
+    }
+    constexpr const double& operator()(int r, int c) const
+    {
+        assert(r >= 0 && r < 4 && c >= 0 && c < 4);
+        switch (r * 4 + c)
+        {
+        case 0:
+            return m00;
+        case 1:
+            return m01;
+        case 2:
+            return m02;
+        case 3:
+            return m03;
+        case 4:
+            return m10;
+        case 5:
+            return m11;
+        case 6:
+            return m12;
+        case 7:
+            return m13;
+        case 8:
+            return m20;
+        case 9:
+            return m21;
+        case 10:
+            return m22;
+        case 11:
+            return m23;
+        case 12:
+            return m30;
+        case 13:
+            return m31;
+        case 14:
+            return m32;
+        default:
+            return m33;
+        }
+    }
 
     // The identity matrix.
-    static Matrix4 identity()
+    static constexpr Matrix4 identity()
     {
         Matrix4 m;
-        m[0][0] = m[1][1] = m[2][2] = m[3][3] = 1.0;
+        m.m00 = m.m11 = m.m22 = m.m33 = 1.0;
         return m;
     }
 };
 
-} // namespace core
-} // namespace mmd
+} // namespace mmd::core
