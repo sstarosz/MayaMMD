@@ -413,3 +413,86 @@ TEST_CASE("Point-to-point joint keeps the body at the anchor pivot", "[sim]")
     REQUIRE(p.pos.y == Catch::Approx(3.0).margin(0.05));
     REQUIRE(p.pos.z == Catch::Approx(0.0).margin(0.05));
 }
+
+TEST_CASE("initialize returns false for an empty body list", "[sim]")
+{
+    Simulation sim;
+    Simulation::Definition def;
+    REQUIRE_FALSE(sim.initialize(def));
+    REQUIRE_FALSE(sim.initialized());
+}
+
+TEST_CASE("6DOF with zero limits behaves like a rigid weld", "[sim]")
+{
+    // SIX_DOF (type 1) with zero springs + zero limits locks exactly like the
+    // SPRING_6DOF weld — the anchor must carry the dynamic body.
+    Simulation::Definition def = weldDefinition();
+    def.joints[0].type = 1; // SIX_DOF
+
+    Simulation sim;
+    REQUIRE(sim.initialize(def));
+
+    Simulation::Pose moved;
+    moved.pos.y = 1.0;
+    REQUIRE(sim.setKinematicPose(0, moved));
+
+    for (int i = 0; i < 60; ++i)
+    {
+        sim.step(Simulation::kFixedDt);
+    }
+
+    Simulation::Pose p = sim.bodyPose(1);
+    REQUIRE(p.pos.y > 1.2); // rest offset +1 kept, so it tracks ~y=2
+}
+
+TEST_CASE("Every joint type builds and steps without error", "[sim]")
+{
+    for (long type : {0L, 1L, 2L, 3L, 4L, 5L})
+    {
+        Simulation::Definition def;
+        def.gravity = Double3(0.0, 0.0, 0.0);
+
+        Simulation::BodyDefinition anchor;
+        anchor.colliderType = Simulation::ColliderType::eSphere;
+        anchor.radius = 0.5;
+        anchor.physicsMode = Simulation::PhysicsMode::eFollowBone;
+        def.bodies.push_back(anchor);
+
+        Simulation::BodyDefinition dynamic;
+        dynamic.colliderType = Simulation::ColliderType::eSphere;
+        dynamic.radius = 0.5;
+        dynamic.physicsMode = Simulation::PhysicsMode::ePhysics;
+        dynamic.restPos = Double3(0.0, 1.0, 0.0);
+        def.bodies.push_back(dynamic);
+
+        Simulation::JointDefinition joint;
+        joint.bodyA = 0;
+        joint.bodyB = 1;
+        joint.type = type;
+        joint.frameT = Double3(0.0, 0.5, 0.0);
+        // Finite limits so no constraint type degenerates.
+        joint.linearMin = Double3(-1.0, -1.0, -1.0);
+        joint.linearMax = Double3(1.0, 1.0, 1.0);
+        joint.angularMin = Double3(-0.5, -0.5, -0.5);
+        joint.angularMax = Double3(0.5, 0.5, 0.5);
+        def.joints.push_back(joint);
+
+        Simulation sim;
+        REQUIRE(sim.initialize(def));
+
+        for (int i = 0; i < 60; ++i)
+        {
+            sim.step(Simulation::kFixedDt);
+        }
+
+        // No crash, and the solved pose stays finite for every joint type.
+        Simulation::Pose p = sim.bodyPose(1);
+        REQUIRE(std::isfinite(p.pos.x));
+        REQUIRE(std::isfinite(p.pos.y));
+        REQUIRE(std::isfinite(p.pos.z));
+        REQUIRE(std::isfinite(p.quat.x));
+        REQUIRE(std::isfinite(p.quat.y));
+        REQUIRE(std::isfinite(p.quat.z));
+        REQUIRE(std::isfinite(p.quat.w));
+    }
+}

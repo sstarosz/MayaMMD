@@ -4,9 +4,10 @@
  *
  * DESIGN: everything that actually IS the simulation — the Bullet world,
  * rigid bodies, constraints, collision filtering, kinematic anchors and the
- * scrub-back reset — lives in the private Impl (PIMPL), so THIS header is
- * Bullet-free: consumers only see the core value types, and Bullet is an
- * implementation detail (the Bullet-facing math lives in bullet_bridge.hpp).
+ * scrub-back reset — lives in the private SimulationImpl (PIMPL), so THIS
+ * header is Bullet-free: consumers only see the core value types, and Bullet
+ * is an implementation detail (the Bullet-facing math lives in
+ * bullet_bridge.hpp).
  * The engine can be unit-tested WITHOUT the Maya SDK and WITHOUT Bullet
  * headers (see tests/unit_tests/core/test_simulation.cpp).  A thin Maya node
  * (a later PR) adapts it: it reads attributes, converts Maya<->Bullet
@@ -117,9 +118,9 @@ class Simulation
 
     Simulation();
     ~Simulation();
-    // The Bullet world lives on the heap inside Impl, so MOVING is safe (the
-    // unique_ptr transfers ownership without copying the world).  Copying is
-    // impossible — a Bullet world cannot be copied.
+    // The Bullet world lives on the heap inside SimulationImpl, so MOVING is
+    // safe (the unique_ptr transfers ownership without copying the world).
+    // Copying is impossible — a Bullet world cannot be copied.
     Simulation(const Simulation&) = delete;
     Simulation& operator=(const Simulation&) = delete;
     Simulation(Simulation&&) noexcept = default;

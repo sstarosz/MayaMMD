@@ -71,17 +71,17 @@ namespace mmd::core
 {
 
 // =========================================================================
-// Impl — every Bullet object + the core runtime state (PIMPL).
+// SimulationImpl — every Bullet object + the core runtime state (PIMPL).
 //
 // The world does NOT own its dispatcher / broadphase / collision config /
-// solver, and rigid bodies do NOT own their collision shapes — the Impl keeps
-// them alive and tears them down in clear().  The world + its support objects
-// are held BY VALUE in std::optional (no heap allocation) and mWorld is
-// declared LAST so that when members are destroyed (reverse declaration order)
-// the world goes down FIRST, while every body / shape / constraint it
-// references is still alive — exactly what btCollisionWorld's destructor
-// needs (it walks m_collisionObjects and calls destroyProxy() on each live
-// body).
+// solver, and rigid bodies do NOT own their collision shapes —
+// SimulationImpl keeps them alive and tears them down in clear().  The world
+// + its support objects are held BY VALUE in std::optional (no per-object
+// heap allocation) and mWorld is declared LAST so that when members are
+// destroyed (reverse declaration order) the world goes down FIRST, while
+// every body / shape / constraint it references is still alive — exactly
+// what btCollisionWorld's destructor needs (it walks m_collisionObjects and
+// calls destroyProxy() on each live body).
 // =========================================================================
 struct Simulation::SimulationImpl
 {
