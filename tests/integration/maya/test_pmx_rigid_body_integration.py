@@ -251,11 +251,11 @@ def test_pmx_rigid_body_physics_group(pmx_data: PmxModel, maya_pmx_data):
         bool(node_parents),
         f"mmdPhysicsNode {node} is not a DAG shape (no parent transform)",
     )
-    # Simulation is DISABLED: the node is deliberately NOT time-driven.
+    # Simulation is ENABLED: the node is time-driven (time1.outTime → time).
     assert_true(
-        not cmds.isConnected("time1.outTime", f"{node}.time"),
-        "mmdPhysicsNode.time should NOT be connected to time1.outTime "
-        "(simulation disabled)",
+        cmds.isConnected("time1.outTime", f"{node}.time"),
+        "mmdPhysicsNode.time is not connected to time1.outTime (simulation not "
+        "time-driven)",
     )
     print(f"PASS: Physics group + mmdPhysicsNode created: {node}")
     return True
@@ -282,23 +282,27 @@ def test_pmx_rigid_body_count(pmx_data: PmxModel, maya_pmx_data):
             len(pmx_data.joints),
             f"node.joints size {n_joints} != PMX joint count {len(pmx_data.joints)}",
         )
-    # With simulation DISABLED, only FOLLOW_BONE bodies are bound to a joint
-    # through the kinematic-anchor INPUT (dynamic bodies are data-only, so
-    # they have no scene connection yet).  Bodies with no related joint
-    # (related_bone_index -1 / out of range — e.g. Fritia body 156) are
-    # static colliders left at rest.
+    # Every body with a related JOINT that actually exists is bound: kinematic
+    # bodies through the kinematic-anchor INPUT, dynamic bodies through the
+    # write-back outputs (outTranslate/outRotate -> joint).  Bodies with no
+    # related joint (related_bone_index -1 / out of range — e.g. Fritia body
+    # 156) are static colliders left at rest.
+    valid_bones = {
+        b_idx
+        for b_idx, j in enumerate(maya_pmx_data.joints)
+        if j is not None and not j.isNull()
+    }
     expected = sum(
         1
         for rb in pmx_data.rigid_bodies
-        if rb.physics_mode.value == 0
-        and 0 <= rb.related_bone_index < len(pmx_data.bones)
+        if rb.related_bone_index in valid_bones
     )
     n_body_joints = len(list(_iter_bodies(maya_pmx_data)))
     assert_eq(
         n_body_joints,
         expected,
-        f"bound body count {n_body_joints} != FOLLOW_BONE bodies with a related "
-        f"joint {expected} (PMX body count {len(pmx_data.rigid_bodies)})",
+        f"bound body count {n_body_joints} != bodies with a related joint "
+        f"{expected} (PMX body count {len(pmx_data.rigid_bodies)})",
     )
     print(
         f"PASS: {n_bodies} bodies, {n_joints if pmx_data.joints else 0} joints in node"
@@ -336,6 +340,16 @@ def test_pmx_rigid_body_attributes(pmx_data: PmxModel, maya_pmx_data):
             rb.group_id,
             f"body {rb_idx} bodyGroupId != group_id",
         )
+        # Collision mask: the PMX non_collision_group field IS the "collides
+        # with" mask (bit i set = collides with group i) — stored VERBATIM
+        # (no inversion).  Each bodyMaskGroup bool must match the raw bit.
+        raw_mask = rb.non_collision_group & 0xFFFF
+        for g in range(16):
+            assert_eq(
+                bool(cmds.getAttr(f"{base}.bodyMaskGroup{g}")),
+                bool(raw_mask & (1 << g)),
+                f"body {rb_idx} bodyMaskGroup{g} != PMX bit {g} of 0x{raw_mask:04X}",
+            )
         assert_true(
             cmds.attributeQuery("bodyRestTranslate", node=node, exists=True),
             "bodyRestTranslate missing",
@@ -499,12 +513,12 @@ def test_rigid_body_no_guide_transforms(pmx_data: PmxModel, maya_pmx_data):
 
 
 def test_dynamic_bodies(pmx_data: PmxModel, maya_pmx_data):
-    """Dynamic bodies are DATA-ONLY (simulation disabled).
+    """Dynamic bodies are WRITE-BACK driven (simulation enabled).
 
     Dynamic (PHYSICS / PHYSICS_BONE) bodies are created with their full PMX
-    data (mass, damping, shape, group, ...) but are NOT wired into the node's
-    write-back outputs — no outTranslate / outRotate connection drives any
-    joint, so import cannot explode the skeleton.
+    data (mass, damping, shape, group, ...) and their related joints are
+    driven by the node's write-back outputs (outTranslate for mode 1,
+    outRotate through the auto-inserted unitConversion for mode 2).
     """
     dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
     if not dyn:
@@ -521,25 +535,44 @@ def test_dynamic_bodies(pmx_data: PmxModel, maya_pmx_data):
     )
     assert_eq(n_dyn, len(dyn), f"dynamic body count {n_dyn} != {len(dyn)}")
 
-    # No write-back: no joint is driven by the node's outputs.
-    driven = (cmds.listConnections(f"{node}.outRotate", destination=True) or []) + (
-        cmds.listConnections(f"{node}.outTranslate", destination=True) or []
+    # Every dynamic body with a related joint must be driven by the node's
+    # write-back outputs (discovered through find_physics_driven_joints).
+    valid_bones = {
+        b_idx
+        for b_idx, j in enumerate(maya_pmx_data.joints)
+        if j is not None and not j.isNull()
+    }
+    expected = sum(1 for rb in dyn if rb.related_bone_index in valid_bones)
+    driven = binding.driven
+    assert_true(len(driven) > 0, "no dynamic body is write-back driven")
+    assert_eq(
+        len(driven),
+        expected,
+        f"driven dynamic bodies {len(driven)} != {expected}",
     )
-    assert_true(not driven, f"simulation disabled but node outputs drive: {driven}")
-    # No old-style write-back constraint should exist either.
-    cons = cmds.ls(type="parentConstraint") + cmds.ls(type="orientConstraint")
-    assert_true(not cons, f"unexpected write-back constraints: {cons}")
-    print(f"PASS: {n_dyn} dynamic bodies present, NOT driven (simulation disabled)")
+    # Each driven joint's rotate comes from the node (mode 2 follows the
+    # auto-inserted unitConversion).
+    for rb_idx, joint in driven.items():
+        srcs = cmds.listConnections(f"{joint}.rotate", source=True) or []
+        assert_true(
+            len(srcs) > 0,
+            f"dynamic body {rb_idx} joint {joint} rotate not driven",
+        )
+    print(f"PASS: {len(driven)} dynamic bodies driven by node write-back")
     return True
 
 
 def test_write_back_no_dg_cycle(pmx_data: PmxModel, maya_pmx_data):
-    """Simulation disabled — NO write-back wiring exists.
+    """Write-back is CYCLE-SAFE (parent inverse from the parent BODY).
 
-    Phase 3's write-back (outTranslate/outRotate -> joints, parent-body
-    resolution, DG parent-inverse fallbacks) is OFF: the node never drives a
-    joint, so there is nothing that could form a DG feedback cycle.  Every
-    body's wiring fields stay at their defaults.
+    Phase 3's write-back derives the parent inverse from the parent BODY's
+    solved Bullet transform, never from the DG.  A dynamic body whose parent
+    BONE has a rigid body must carry ``bodyParentBodyIndex`` + a baked
+    ``bodyParentJointOffset`` and must NOT have the DG
+    ``joint.parentInverseMatrix -> bodyParentInverseMatrix`` connection (that
+    is what created the feedback cycle that exploded the sim).  The DG
+    fallback is allowed only when the parent bone has no body (that parent is
+    never node-driven).
     """
     if not pmx_data.rigid_bodies:
         print("SKIP: model has no rigid bodies")
@@ -547,21 +580,46 @@ def test_write_back_no_dg_cycle(pmx_data: PmxModel, maya_pmx_data):
     binding = _get_binding(maya_pmx_data)
     assert_true(binding is not None and binding.node, "No physics binding/node")
     node = binding.node
-    n = int(cmds.getAttr(f"{node}.bodies", size=True) or 0)
 
-    for i in range(n):
-        pbi = int(cmds.getAttr(f"{node}.bodies[{i}].bodyParentBodyIndex"))
-        assert_eq(
-            pbi, -1, f"body {i} bodyParentBodyIndex {pbi} should be -1 (no write-back)"
+    bone_of_body: dict[int, int] = {}
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.related_bone_index >= 0:
+            bone_of_body.setdefault(rb.related_bone_index, rb_idx)
+
+    checked = 0
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.physics_mode.value == 0 or rb.related_bone_index < 0:
+            continue
+        bone = rb.related_bone_index
+        expected_pbi = -1
+        if (
+            0 <= bone < len(pmx_data.bones)
+            and pmx_data.bones[bone].parentIndex >= 0
+        ):
+            expected_pbi = bone_of_body.get(pmx_data.bones[bone].parentIndex, -1)
+        actual_pbi = int(
+            cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex")
         )
-        plug = f"{node}.bodyParentInverseMatrix[{i}]"
-        if cmds.objExists(plug):
-            conns = cmds.listConnections(plug, source=True) or []
-            assert_true(
-                not conns,
-                f"body {i} has bodyParentInverseMatrix connected (write-back): {conns}",
+        assert_eq(
+            actual_pbi,
+            expected_pbi,
+            f"body {rb_idx} bodyParentBodyIndex {actual_pbi} != expected {expected_pbi}",
+        )
+        pinv = (
+            cmds.listConnections(
+                f"{node}.bodyParentInverseMatrix[{rb_idx}]", source=True
             )
-    print(f"PASS: {n} bodies have no write-back wiring (no DG cycle possible)")
+            or []
+        )
+        if expected_pbi >= 0:
+            assert_true(
+                not pinv,
+                f"body {rb_idx} has DG parentInverse while a parent body is set "
+                f"(DG feedback cycle): {pinv}",
+            )
+        checked += 1
+    assert_true(checked > 0, "no dynamic body checked")
+    print(f"PASS: {checked} dynamic bodies wired cycle-free (parent body -> no DG inverse)")
     return True
 
 
@@ -672,12 +730,12 @@ def test_kinematic_anchors(pmx_data: PmxModel, maya_pmx_data):
 
 
 def test_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
-    """Simulation is DISABLED — nothing moves on playback.
+    """BEHAVIOURAL: the node is time-driven and stepping MOVES the chains.
 
-    The node is not time-driven (time1.outTime is NOT connected) and no
-    write-back wiring exists, so advancing time leaves every joint untouched.
-    This is the opposite of the old behavioural test — a stable, non-exploding
-    import.
+    The solver is connected to ``time1.outTime`` and its write-back outputs
+    drive the related joints, so advancing time (while swinging the root bone)
+    must change at least one dynamic joint's LOCAL pose — the "simulation is
+    alive" signal.
     """
     dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
     if not dyn:
@@ -687,35 +745,47 @@ def test_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
     assert_true(binding is not None and binding.node, "No physics binding/node")
     node = binding.node
 
-    # The node must not be time-driven.
+    # The node must be time-driven and its outputs must reach the joints.
     assert_true(
-        not cmds.isConnected("time1.outTime", f"{node}.time"),
-        "node.time should not be connected (simulation disabled)",
+        cmds.isConnected("time1.outTime", f"{node}.time"),
+        "node.time is not connected (simulation not time-driven)",
     )
-    # No output connections to any joint.
     assert_true(
-        not (cmds.listConnections(f"{node}.outRotate", destination=True) or []),
-        "node.outRotate has connections (simulation should be disabled)",
+        bool(cmds.listConnections(f"{node}.outRotate", destination=True) or [])
+        or bool(cmds.listConnections(f"{node}.outTranslate", destination=True) or []),
+        "node write-back outputs have no connections",
     )
 
-    # Advancing time leaves the model untouched (no explosion).
-    def _snapshot():
-        return [
-            cmds.xform(j, q=True, ws=True, matrix=True)
-            for j in cmds.ls(type="joint") or []
-        ]
+    def _local(joint):
+        return cmds.getAttr(f"{joint}.rotate")[0]
 
-    before = _snapshot()
-    for f in (1, 5, 10, 20):
+    cmds.currentTime(1)
+    binding.step()
+    starts = {j: _local(j) for _, j in _iter_bodies(maya_pmx_data) if cmds.objExists(j)}
+
+    for f in (5, 10, 15, 20, 25, 30):
+        _swing_root(maya_pmx_data, f)
         cmds.currentTime(f)
-    after = _snapshot()
-    assert_eq(len(before), len(after), "joint count changed while advancing time")
-    for b, a in zip(before, after):
-        assert_true(
-            max(abs(a[i] - b[i]) for i in range(16)) < 1e-4,
-            "joint world changed after advancing time — simulation not disabled",
-        )
-    print("PASS: advancing time does not move any joint (simulation disabled)")
+        binding.step()
+    binding.write_back()
+
+    moved = 0
+    for j, r0 in starts.items():
+        if not cmds.objExists(j):
+            continue
+        r1 = _local(j)
+        if max(abs(r1[i] - r0[i]) for i in range(3)) > 0.05:
+            moved += 1
+    assert_true(
+        moved > 0,
+        "no dynamic joint moved after stepping — simulation is not running",
+    )
+
+    _restore_root(maya_pmx_data)
+    cmds.currentTime(1)
+    binding.step()
+    binding.write_back()
+    print(f"PASS: {moved} dynamic joints moved after stepping the solver")
     return True
 
 
@@ -958,9 +1028,11 @@ _TESTS = [
     ("Rigid Body Transform", test_pmx_rigid_body_rest_transform),
     ("Follow-Bone Anchor Tracks Joint", test_follow_bone_anchor_tracks_joint),
     ("Rigid Body No Guide Transforms", test_rigid_body_no_guide_transforms),
-    ("Dynamic Bodies (data-only)", test_dynamic_bodies),
-    ("No Write-Back Wiring", test_write_back_no_dg_cycle),
+    ("Dynamic Bodies (write-back driven)", test_dynamic_bodies),
+    ("Write-Back No DG Cycle", test_write_back_no_dg_cycle),
     ("Physics Joints", test_physics_joints),
     ("Kinematic Anchors", test_kinematic_anchors),
-    ("Simulation Disabled", test_simulation_steps),
+    ("Simulation Steps", test_simulation_steps),
+    ("Write-Back Moves Bone", test_write_back_moves_bone),
+    ("Config Edit Rebuilds Node", test_config_edit_rebuilds_node),
 ]

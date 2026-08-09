@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Simulation re-enabled — no `-finalize` step.** Import now wires the full
+  physics graph in one pass: the solver is time-driven (`time1.outTime →
+  node.time`) and the solved pose is written straight into the related joints
+  (Phase 3 direct write-back: `boneLocal = K · bodyLocal · B_parent⁻¹ ·
+  M_parent⁻¹`, parent inverse derived from the parent BODY so there is no DG
+  feedback cycle).  `_wire_dynamic_write_back` bakes the K / M_parent offsets,
+  sets the scrub-back reset anchors, and connects `outTranslate`/`outRotate` →
+  joints after all bodies/joints exist — the two-phase `mmdRigidBody -finalize`
+  command is gone.  Rigidbody integration suite updated to the enabled behavior
+  (time-driven, write-back driven, cycle-safe, simulation steps, write-back
+  moves bone).
+- **Fixed: PMX collision masks were inverted at import.** The
+  `non_collision_group` field IS the "collides with" mask (bit i set = the body
+  collides with group i); MikuMikuDance feeds it to Bullet directly.  We
+  previously stored its complement (`~non_collision_group`), which flipped every
+  model's masks into "own group only" — converted game models' skirts fell
+  through the legs and kinematic colliders (torso/head `0xFFFF`) became ghosts.
+  The proximity + cloth-on-cloth corrections in `mmd_physics_masks.h`
+  (`computeEffectiveMasks`) were a workaround for that inversion bug and are
+  **removed**; the mask is now stored and used verbatim.  Verified across all
+  bundled PMX models.  `rigid_bodies.json` dumps now add
+  `non_collision_group_hex` + `collides_with_groups` for readability.
 - **Full guide removal + direct joint write-back (Phase 3).** Guide transforms
   and `parentConstraint`/`orientConstraint` write-back are **gone** — the
   `mmdPhysicsNode` writes the solved JOINT-LOCAL pose straight into the related

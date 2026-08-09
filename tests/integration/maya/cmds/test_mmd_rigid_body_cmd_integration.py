@@ -86,7 +86,7 @@ def test_append_body_data():
         friction=0.7,
         restitution=0.1,
         group=3,
-        nonCollisionGroup=0xFFFE,
+        mask=0xFFFE,
         physicsMode="followBone",
     )
     assert_eq(idx, 0, f"first body index != 0 ({idx})")
@@ -107,9 +107,18 @@ def test_append_body_data():
     assert_eq(float(cmds.getAttr(f"{base}.bodyFriction")), 0.7, "bodyFriction")
     assert_eq(float(cmds.getAttr(f"{base}.bodyRestitution")), 0.1, "bodyRestitution")
     assert_eq(int(cmds.getAttr(f"{base}.bodyGroupId")), 3, "bodyGroupId")
+    # mask=0xFFFE = every group except 0 -> bodyMaskGroup bools (collides-with).
     assert_eq(
-        int(cmds.getAttr(f"{base}.bodyNonCollisionGroup")), 0xFFFE, "nonCollisionGroup"
+        bool(cmds.getAttr(f"{base}.bodyMaskGroup0")),
+        False,
+        "bodyMaskGroup0 (mask 0xFFFE clears bit 0)",
     )
+    for g in range(1, 16):
+        assert_eq(
+            bool(cmds.getAttr(f"{base}.bodyMaskGroup{g}")),
+            True,
+            f"bodyMaskGroup{g} (mask 0xFFFE keeps bit {g})",
+        )
     assert_eq(
         int(cmds.getAttr(f"{base}.bodyColliderType")),
         COLLIDER_BOX,

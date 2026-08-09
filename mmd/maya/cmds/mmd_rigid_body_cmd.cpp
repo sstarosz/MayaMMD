@@ -73,7 +73,7 @@ constexpr const char* kAngularDampingFlag = "ad";
 constexpr const char* kFrictionFlag = "f";
 constexpr const char* kRestitutionFlag = "re";
 constexpr const char* kGroupFlag = "g";
-constexpr const char* kNonCollisionGroupFlag = "ncg";
+constexpr const char* kMaskFlag = "msk"; // short names are limited to 3 chars
 constexpr const char* kPhysicsModeFlag = "pm";
 
 // MPlug has no setValue(MMatrix) overload — wrap the matrix in an
@@ -125,7 +125,11 @@ MSyntax MmdRigidBodyCmd::syntaxCreator()
     syntax.addFlag(kFrictionFlag, "friction", MSyntax::kDouble);
     syntax.addFlag(kRestitutionFlag, "restitution", MSyntax::kDouble);
     syntax.addFlag(kGroupFlag, "group", MSyntax::kLong);
-    syntax.addFlag(kNonCollisionGroupFlag, "nonCollisionGroup", MSyntax::kLong);
+    // Collision mask as a 16-bit "collides with" bitmask (bit i = collides
+    // with group i) — the PMX non_collision_group field stored VERBATIM (MMD
+    // feeds it to Bullet directly; no inversion).  Written into the
+    // bodyMaskGroup0..15 boolean children.
+    syntax.addFlag(kMaskFlag, "mask", MSyntax::kLong);
     syntax.addFlag(kPhysicsModeFlag, "physicsMode", MSyntax::kString);
 
     syntax.enableEdit(true);
@@ -384,11 +388,11 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
         restitution = parser.flagArgumentDouble(kRestitutionFlag, 0);
 
     int group = 0;
-    int ncg = 0xFFFF;
+    int mask = 0xFFFF; // default: collide with every group
     if (parser.isFlagSet(kGroupFlag))
         group = static_cast<int>(parser.flagArgumentInt(kGroupFlag, 0));
-    if (parser.isFlagSet(kNonCollisionGroupFlag))
-        ncg = static_cast<int>(parser.flagArgumentInt(kNonCollisionGroupFlag, 0));
+    if (parser.isFlagSet(kMaskFlag))
+        mask = static_cast<int>(parser.flagArgumentInt(kMaskFlag, 0)) & 0xFFFF;
 
     // PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
     // damping/friction match the import path exactly.
@@ -489,7 +493,8 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     setDouble3(elem.child(MMDPhysicsNode::aBodyExtents), size);
     elem.child(MMDPhysicsNode::aBodyLength).setDouble(size.y);
     elem.child(MMDPhysicsNode::aBodyGroupId).setShort(group);
-    elem.child(MMDPhysicsNode::aBodyNonCollisionGroup).setInt(ncg & 0xFFFF);
+    for (int g = 0; g < 16; ++g)
+        elem.child(MMDPhysicsNode::aBodyMaskGroup[g]).setBool((mask >> g) & 1);
     elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     // Wiring fields stay at defaults — simulation disabled (no write-back).
     elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);

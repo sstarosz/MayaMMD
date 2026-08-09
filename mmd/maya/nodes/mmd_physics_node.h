@@ -80,8 +80,7 @@ class MMDPhysicsNode : public MPxLocatorNode
     };
 
     // PMX rigid-body collider shape — stored in the bodyColliderType enum
-    // attribute and used by the mmdRigidBody command.  Values match the
-    // collision-mask resolver's own enum (mmd_physics_masks.h).
+    // attribute and used by the mmdRigidBody command.
     enum ColliderType : short
     {
         kColliderBox = 1,
@@ -181,21 +180,23 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
     static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none
     static MObject aBodyGroupId;       // enum — PMX group_id 0..15 ("Group 0".."Group 15")
-    static MObject
-        aBodyNonCollisionGroup;         // long raw PMX non_collision_group (-1 = explicit bodyMask)
-    static MObject aBodyColliderType;   // enum — PMX shape (kColliderBox/Sphere/Capsule)
-    static MObject aBodyRadius;         // double — PMX shape_size.x (sphere/capsule radius)
-    static MObject aBodyExtents;        // float3 — PMX shape_size (box half extents)
-    static MObject aBodyLength;         // double — PMX shape_size.y (capsule cylinder length)
-    static MObject aBodyRestTranslate;  // float3 — PMX shape_position (rest, group space)
-    static MObject aBodyRestRotate;     // float3 — PMX shape_rotation (degrees)
-    static MObject aBodyMass;           // double — PMX mass
-    static MObject aBodyLinearDamping;  // double — PMX move_attenuation
-    static MObject aBodyAngularDamping; // double — PMX rotation_damping
-    static MObject aBodyRestitution;    // double — PMX repulsion
-    static MObject aBodyFriction;       // double — PMX friction_force
-    static MObject aBodyPhysicsMode;    // enum — PMX physics_mode (BodyPhysicsMode)
-    static MObject aBodyMaskGroup[16];  // bool per collision group (0..15) — manual mask override
+    // THE collision mask — one bool per collision group (0..15), True = the
+    // body collides with that group.  This is the PMX non_collision_group
+    // field stored VERBATIM (bit i set = collides with group i — MMD feeds it
+    // to Bullet directly, no inversion); the node uses it exactly as read.
+    static MObject aBodyMaskGroup[16];
+    static MObject aBodyColliderType;    // enum — PMX shape (kColliderBox/Sphere/Capsule)
+    static MObject aBodyRadius;          // double — PMX shape_size.x (sphere/capsule radius)
+    static MObject aBodyExtents;         // float3 — PMX shape_size (box half extents)
+    static MObject aBodyLength;          // double — PMX shape_size.y (capsule cylinder length)
+    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
+    static MObject aBodyMass;            // double — PMX mass
+    static MObject aBodyLinearDamping;   // double — PMX move_attenuation
+    static MObject aBodyAngularDamping;  // double — PMX rotation_damping
+    static MObject aBodyRestitution;     // double — PMX repulsion
+    static MObject aBodyFriction;        // double — PMX friction_force
+    static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (BodyPhysicsMode)
     static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
     static MObject
         aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
@@ -235,13 +236,11 @@ class MMDPhysicsNode : public MPxLocatorNode
         double extents[3];
         double length;
         long group; // Bullet collision group bit (derived from groupId in buildWorld)
-        long mask;  // collision mask (computed in buildWorld, or bodyMask override)
-        // Raw PMX collision inputs (Phase 2): the node derives the Bullet
-        // group bit from groupId, and the effective mask itself when
-        // nonCollisionGroup is set (>= 0); `mask` stays as an explicit
-        // override used otherwise (legacy scenes).
+        long mask;  // collision mask (built from the aBodyMaskGroup bools in
+                    // readBodyData — the PMX non_collision_group stored verbatim)
+        // PMX collision inputs: the Bullet group bit is derived from groupId
+        // and the mask is the aBodyMaskGroup bools used exactly as read.
         short groupId;
-        long nonCollisionGroup;
         bool kinematic;
         bool enabled = true;   // Remove support: false skips this body (and joints referencing it)
         short physicsMode = 1; // PMX physics mode 0/1/2 (write-back mode)

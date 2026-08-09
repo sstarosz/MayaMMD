@@ -31,7 +31,6 @@ if(BUILD_TESTS)
 
     add_executable(mmd_tools_tests
         test_mmd_physics_math.cpp
-        test_mmd_physics_masks.cpp
     )
     target_include_directories(mmd_tools_tests PRIVATE
         "${CMAKE_SOURCE_DIR}"
@@ -45,7 +44,7 @@ if(BUILD_TESTS)
     include(Catch)
     catch_discover_tests(mmd_tools_tests)
 
-    message(STATUS "Catch2 available — registered mmd_tools_tests (test_mmd_physics_math.cpp, test_mmd_physics_masks.cpp)")
+    message(STATUS "Catch2 available — registered mmd_tools_tests (test_mmd_physics_math.cpp)")
 endif()
 
 # =========================================================================

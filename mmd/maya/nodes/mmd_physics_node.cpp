@@ -43,7 +43,6 @@
 #include <btBulletCollisionCommon.h>
 #include <btBulletDynamicsCommon.h>
 
-#include "mmd_physics_masks.h"
 #include "mmd_physics_math.h"
 
 #include <algorithm>
@@ -93,26 +92,25 @@ MObject MMDPhysicsNode::aBodyParentInverseMatrix;
 MObject MMDPhysicsNode::aBodyParentJointOffset;
 
 MObject MMDPhysicsNode::aBodies;
+MObject MMDPhysicsNode::aBodyEnabled;
+MObject MMDPhysicsNode::aBodyNameLocal;
+MObject MMDPhysicsNode::aBodyNameUniversal;
+MObject MMDPhysicsNode::aBodyGroupId;
+MObject MMDPhysicsNode::aBodyMaskGroup[16];
+MObject MMDPhysicsNode::aBodyColliderType;
+MObject MMDPhysicsNode::aBodyRadius;
+MObject MMDPhysicsNode::aBodyExtents;
+MObject MMDPhysicsNode::aBodyLength;
 MObject MMDPhysicsNode::aBodyRestTranslate;
 MObject MMDPhysicsNode::aBodyRestRotate;
 MObject MMDPhysicsNode::aBodyMass;
 MObject MMDPhysicsNode::aBodyLinearDamping;
 MObject MMDPhysicsNode::aBodyAngularDamping;
-MObject MMDPhysicsNode::aBodyFriction;
 MObject MMDPhysicsNode::aBodyRestitution;
-MObject MMDPhysicsNode::aBodyColliderType;
-MObject MMDPhysicsNode::aBodyRadius;
-MObject MMDPhysicsNode::aBodyExtents;
-MObject MMDPhysicsNode::aBodyLength;
-MObject MMDPhysicsNode::aBodyMaskGroup[16];
-MObject MMDPhysicsNode::aBodyGroupId;
-MObject MMDPhysicsNode::aBodyNonCollisionGroup;
+MObject MMDPhysicsNode::aBodyFriction;
 MObject MMDPhysicsNode::aBodyPhysicsMode;
 MObject MMDPhysicsNode::aBodyParentBodyIndex;
 MObject MMDPhysicsNode::aBodyResetAnchorIndex;
-MObject MMDPhysicsNode::aBodyNameLocal;
-MObject MMDPhysicsNode::aBodyNameUniversal;
-MObject MMDPhysicsNode::aBodyEnabled;
 
 MObject MMDPhysicsNode::aJoints;
 MObject MMDPhysicsNode::aJointBodyA;
@@ -402,9 +400,19 @@ MStatus MMDPhysicsNode::initialize()
         eAttr.setStorable(true);
         eAttr.setKeyable(false);
     }
-    aBodyNonCollisionGroup =
-        nAttr.create("bodyNonCollisionGroup", "bncg", MFnNumericData::kLong, -1, &stat);
-    CHECK_MSTATUS(stat);
+
+    // THE collision mask: one boolean toggle per collision group (0..15),
+    // True = collides with that group (default 0xFFFF = everything).  This is
+    // the PMX non_collision_group field stored VERBATIM (bit i set = the body
+    // collides with group i — MMD feeds it to Bullet directly, no inversion),
+    // and the node uses it exactly as read.
+    for (int g = 0; g < 16; ++g)
+    {
+        MString lname(("bodyMaskGroup" + std::to_string(g)).c_str());
+        MString sname(("bmg" + std::to_string(g)).c_str());
+        aBodyMaskGroup[g] = nAttr.create(lname, sname, MFnNumericData::kBoolean, true, &stat);
+        CHECK_MSTATUS(stat);
+    }
 
     // PMX collider type — enum: box / sphere / capsule (field values match
     // MMDPhysicsNode::ColliderType).  Field names mirror the enumerators.
@@ -461,16 +469,6 @@ MStatus MMDPhysicsNode::initialize()
     }
 
     // Derived / wiring fields (no PMX JSON counterpart).
-    // Manual collision-mask override as one boolean toggle per collision group
-    // (0..15) — no raw bitmask to compute.  Only used when bodyNonCollisionGroup
-    // is < 0 (the PMX non-collision path always overrides it in buildWorld).
-    for (int g = 0; g < 16; ++g)
-    {
-        MString lname(("bodyMaskGroup" + std::to_string(g)).c_str());
-        MString sname(("bmg" + std::to_string(g)).c_str());
-        aBodyMaskGroup[g] = nAttr.create(lname, sname, MFnNumericData::kBoolean, true, &stat);
-        CHECK_MSTATUS(stat);
-    }
     // Rigid-body index of the related joint's PARENT joint's body (the
     // write-back derives the parent inverse from that body's solved Bullet
     // transform); -1 = parent bone has no body (DG parentInverse fallback).
@@ -481,10 +479,10 @@ MStatus MMDPhysicsNode::initialize()
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
 
-    for (MObject* a : {&aBodyEnabled, &aBodyNonCollisionGroup, &aBodyRadius, &aBodyExtents,
-                       &aBodyLength, &aBodyRestTranslate, &aBodyRestRotate, &aBodyMass,
-                       &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution, &aBodyFriction,
-                       &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a :
+         {&aBodyEnabled, &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyRestTranslate,
+          &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping,
+          &aBodyRestitution, &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -507,7 +505,8 @@ MStatus MMDPhysicsNode::initialize()
     cAttr.addChild(aBodyNameLocal);
     cAttr.addChild(aBodyNameUniversal);
     cAttr.addChild(aBodyGroupId);
-    cAttr.addChild(aBodyNonCollisionGroup);
+    for (int g = 0; g < 16; ++g)
+        cAttr.addChild(aBodyMaskGroup[g]);
     cAttr.addChild(aBodyColliderType);
     cAttr.addChild(aBodyRadius);
     cAttr.addChild(aBodyExtents);
@@ -520,8 +519,6 @@ MStatus MMDPhysicsNode::initialize()
     cAttr.addChild(aBodyRestitution);
     cAttr.addChild(aBodyFriction);
     cAttr.addChild(aBodyPhysicsMode);
-    for (int g = 0; g < 16; ++g)
-        cAttr.addChild(aBodyMaskGroup[g]);
     cAttr.addChild(aBodyParentBodyIndex);
     cAttr.addChild(aBodyResetAnchorIndex);
 
@@ -724,7 +721,6 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.group = 1;
         b.mask = 0;
         b.groupId = -1;
-        b.nonCollisionGroup = -1;
         b.enabled = true;
 
         auto read3 = [&](const MObject& attr, double out[3])
@@ -750,7 +746,6 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
             if (bodyHandle.child(aBodyMaskGroup[g]).asBool())
                 b.mask |= 1L << g;
         b.groupId = bodyHandle.child(aBodyGroupId).asShort();
-        b.nonCollisionGroup = bodyHandle.child(aBodyNonCollisionGroup).asInt();
         b.physicsMode = bodyHandle.child(aBodyPhysicsMode).asShort();
         b.kinematic = (b.physicsMode == MMDPhysicsNode::kBodyPhysicsFollowBone);
         b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asShort();
@@ -850,7 +845,6 @@ uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
         for (int g = 0; g < 16; ++g)
             h = hashValue(h, bh.child(aBodyMaskGroup[g]).asBool());
         h = hashValue(h, bh.child(aBodyGroupId).asShort());
-        h = hashValue(h, bh.child(aBodyNonCollisionGroup).asInt());
         h = hashValue(h, bh.child(aBodyPhysicsMode).asShort());
         h = hashValue(h, bh.child(aBodyParentBodyIndex).asShort());
         h = hashValue(h, bh.child(aBodyResetAnchorIndex).asInt());
@@ -927,59 +921,17 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     btVector3 gravity(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1],
                       gravHandle.asDouble3()[2]);
 
-    // Resolve the collision group + effective mask (Phase 2).  Python feeds the
-    // RAW PMX data (bodyGroupId + bodyNonCollisionGroup); the node derives the
-    // Bullet group bit and the effective mask itself — an exact port of the
-    // previous Python-side proximity + cloth-on-cloth corrections (see
-    // mmd_physics_masks.h).  The bodyMaskGroup* toggles stay as an explicit
-    // override used only when bodyNonCollisionGroup is < 0 (legacy scenes).
-    bool needMasks = false;
-    for (const Body& b : mBodies)
-        if (b.nonCollisionGroup != -1)
-            needMasks = true;
-
-    std::vector<long> computedMasks;
-    if (needMasks)
-    {
-        std::vector<mmd_physics_masks::BodyInput> inputs;
-        inputs.reserve(mBodies.size());
-        for (const Body& b : mBodies)
-        {
-            mmd_physics_masks::BodyInput bi;
-            bi.pos[0] = b.restPos[0];
-            bi.pos[1] = b.restPos[1];
-            bi.pos[2] = b.restPos[2];
-            bi.colliderType = static_cast<mmd_physics_masks::ColliderType>(b.colliderType);
-            bi.radius = b.radius;
-            bi.extents[0] = b.extents[0];
-            bi.extents[1] = b.extents[1];
-            bi.extents[2] = b.extents[2];
-            bi.length = b.length;
-            // Use the raw PMX group id (legacy scenes without it default to 0).
-            bi.groupId = b.groupId >= 0 ? b.groupId : 0;
-            bi.kinematic = b.kinematic;
-            bi.nonCollisionGroup = b.nonCollisionGroup;
-            inputs.push_back(bi);
-        }
-        std::vector<mmd_physics_masks::JointInput> jins;
-        jins.reserve(mJoints.size());
-        for (const Joint& j : mJoints)
-        {
-            mmd_physics_masks::JointInput ji;
-            ji.bodyA = static_cast<int>(j.bodyA);
-            ji.bodyB = static_cast<int>(j.bodyB);
-            jins.push_back(ji);
-        }
-        mmd_physics_masks::computeEffectiveMasks(inputs, jins, computedMasks);
-    }
-
+    // Collision group + mask.  The aBodyMaskGroup bools ARE the collision mask
+    // (True = collides with group i) — a verbatim copy of the PMX
+    // non_collision_group field, which MMD feeds to Bullet directly (bit i set
+    // = the body collides with group i; no inversion, no corrections).  b.mask
+    // was already built from those bools in readBodyData; here we only derive
+    // the Bullet group bit from the raw PMX group id.
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         // Bullet group bit from the raw PMX group id (legacy scenes without
         // it keep the default group 0).
         mBodies[i].group = 1L << ((mBodies[i].groupId >= 0 ? mBodies[i].groupId : 0) & 0x0F);
-        if (mBodies[i].nonCollisionGroup != -1 && needMasks)
-            mBodies[i].mask = computedMasks[i];
     }
 
     // World-level objects.  The world does NOT own the dispatcher / broadphase

@@ -45,7 +45,7 @@ Audience: developers adding or maintaining the physics feature.
 | `repulsion`                   | restitution                                       | clamped [0,1]                                                                                                                                                                                                                                                                 |
 | `friction_force`              | friction                                          | clamped [0,1]                                                                                                                                                                                                                                                                 |
 | `group_id` (byte)             | collision group                                   | `1 << group_id`                                                                                                                                                                                                                                                               |
-| `non_collision_group` (int16) | collision mask                                    | `(~non_collision_group) & 0xFFFF` base, then corrected with proximity-based group unions (see Collision masks below)                                                                                                                                                          |
+| `non_collision_group` (int16) | collision mask                                    | Stored verbatim into `bodies[i].bodyMaskGroup0..15` (bit i set = collides with group i) — MMD feeds this field straight to Bullet; used as-is (see Collision masks below)                                                                                                     |
 | `physics_mode`                | kinematic / dynamic                               | See modes below                                                                                                                                                                                                                                                               |
 | `related_bone_index`          | —                                                 | Bone binding for the per-frame loop                                                                                                                                                                                                                                           |
 
@@ -85,64 +85,24 @@ joints, or springy skirt joints) keep their limits/springs on the same
 spring-2 constraint (a locked axis uses the constraint's `STOP_ERP`, a
 spring-enabled axis uses the PMX spring constant).
 
-**Collision masks:** the PMX `non_collision_group` is the base mask, but
-converted game models frequently ship **degenerate** collision data where every
-body only collides with its OWN group (e.g. the Tololo PMX: skirt mask
-`0x0004`, legs mask `0x0002`) — in that state the skirt passes straight through
-the legs because neither mask includes the other's group, in both directions.
-The **node** applies a **proximity-based correction** instead of blanket unions
-(Phase 2: this logic moved out of `rigid_body_builder._compute_collision_masks`
-into `mmd/maya/nodes/mmd_physics_masks.h`, compiled into the plugin):
+**Collision masks:** the PMX `non_collision_group` field is the **"collides
+with"** mask — bit i set = the body collides with group i.  MikuMikuDance
+feeds it straight to Bullet as the collision filter mask (`group = 1 <<
+group_id`, `mask = non_collision_group & 0xFFFF`, Bullet's mutual-AND pair
+rule).  We store it VERBATIM into `bodies[i].bodyMaskGroup0..15` and the node
+uses it exactly as read — no inversion, no geometry repair.
 
-- For each pair of bodies the builder tests whether their rest-pose extents
-  overlap (`center distance < extentᵢ + extentⱼ + 0.2`). Only *overlapping*
-  kinematic groups are OR'd into a dynamic body's mask, and only overlapping
-  dynamic groups into a kinematic body's mask. This preserves the intended
-  body↔cloth contact (skirt vs legs/hips, which touch at rest) without
-  over-broadening: a blanket "collide with every kinematic group" made small
-  cloth bodies (e.g. the bangs) collide with a huge torso capsule they rest
-  inside of, which kept shoving them around (jitter). Proximity keeps Beg
-  colliding only with the head group it rests on.
-- **Dynamic bodies** still clear their OWN group bit: MMD models store chain
-  bodies (hair/skirt spheres) deeply overlapping, and if they self-collide the
-  overlap contacts push the chain apart — because the locked weld axes are
-  compliant (ERP 0.2) the chain slowly extends ("the bang is longer than
-  normal"). Like a well-configured MMD model, hair strands pass through each
-  other but still collide with the body.
-- **Cloth-on-cloth (bangs/skirt):** the kinematic correction only covers
-  body↔cloth. Converted game models also ship masks where e.g. the bangs
-  (Beg chain, anchored to the torso) do NOT collide with the skirt (also
-  anchored to the torso) — so the bangs hang free, sag into the skirt and
-  swing "under the arm" instead of resting ON the jacket colliders. A second
-  correction adds the skirt group to the bangs (and vice-versa), guarded by:
-  - *Chains* — connectivity uses dynamic bodies only (kinematic bodies never
-    merge chains); jointed bodies in the same chain never collide, and a cape
-    that merely shares the torso anchor with the bangs is a separate chain.
-  - *Anchor* — two cloth chains only interact when jointed to the SAME body
-    part (same collision group of their FOLLOW_BONE anchor, e.g. both anchored
-    to the torso). The bangs and the skirt both hang off the torso; the sleeve
-    hangs off the arm and the hair off the head, so bangs↔sleeve/hair are
-    never added (colliding two hanging chains shoves both around).
-  - *Drape* — the chains must actually drape: some body of one chain must
-    genuinely interpenetrate a body of the other at rest (centre distance <
-    extents sum − 0.15). A mere touch (the cape tips brushing the jacket back
-    0.11 deep) does NOT qualify. Once a chain drapes, EVERY body of it that
-    overlaps the other chain gains its group, so the bangs tail (which only
-    touches the skirt) still rests on it — it hangs off the draping middle.
-  - *Small drapes large* — only a SHORT cloth chain (≤ 10 bodies) resting on
-    a LARGE cloth sheet (≥ 50 bodies) qualifies: the bangs (8 bodies) draping
-    the skirt (144) is exactly this. This keeps the rule from adding
-    collisions in models with different cloth layouts (a big skirt draping
-    small belts/ribbons, two small ribbons, long hair chains) — validated
-    that such additions destabilize the sim.
-
-The bangs rest ON the jacket colliders (they are displaced to the jacket
-surface by the contact; the skirt, which rests on the legs, barely moves).
-
-This *adds* collisions (body ↔ cloth, cloth ↔ cloth), so it can make
-previously-clipping cloth interact properly; the hair self-collision removal
-is the one *removing* change. Both verified stable across all 17 bundled
-models.
+> History (2026-08-09): earlier code inverted the field
+> (`(~non_collision_group) & 0xFFFF`), which flipped every model's masks into
+> "own group only": converted game models (skirt `0xFFFB` = "everything except
+> the skirt group") became "skirt collides only with skirt" → the skirt fell
+> through the legs, and kinematic colliders (torso/head/knees = `0xFFFF` =
+> "collide with everything") became ghosts.  The proximity + cloth-on-cloth
+> corrections that used to live in `rigid_body_builder._compute_collision_masks`
+> / `mmd_physics_masks.h` were a workaround for that inversion bug and have
+> been removed.  Verified across all 20 bundled PMX models: the raw field read
+> directly yields sensible collision graphs (skirt↔torso, hair↔head, breast↔
+> chest, and each dynamic chain = "everything except its own group").
 
 **Gravity:** exactly **-9.8** (MMD's value, in the model's own unit scale). Do
 not scale it by model size — the bundled models are stored 10x (the Tololo PMX
@@ -239,9 +199,9 @@ flowchart LR
   matrix + the physics group's world INVERSE, plus a baked `anchorOffset[k]`
   body<->bone rest offset); `bodies` compound array (rest pose, mass, damping,
   friction, restitution, collider type/size, kinematic flag, `bodyPhysicsMode`
-  (0/1/2), raw `bodyGroupId` + `bodyNonCollisionGroup` — the node computes
-  each body's effective collision mask itself in `buildWorld` via
-  `mmd_physics_masks.h`); `joints` compound array (body A/B, type, frame,
+  (0/1/2), raw `bodyGroupId` + `bodyMaskGroup0..15` (the collide-with mask,
+  stored verbatim from the PMX `non_collision_group`)); `joints` compound
+  array (body A/B, type, frame,
   limits, springs); Phase 3 direct write-back: `groupWorldMatrix` (the physics
   group's world matrix), `bodyWriteBackOffset` (dense body-indexed baked
   world offset K = jointRestWorld * bodyRestWorld^-1), `bodyParentJointOffset`
@@ -391,10 +351,10 @@ scene is the source of truth — discover physics state later with
    the visible collider (wireframe box/sphere/capsule, group-colored) through
    its C++ draw override.
 3. Populate `node.bodies[i]` for every body (indices = PMX rigid-body index).
-   Each element carries the **raw PMX** `bodyGroupId` + `bodyNonCollisionGroup`,
-   `bodyPhysicsMode`; the node resolves effective masks itself
-   (Phase 2 — the Python `_compute_collision_masks` was deleted, its logic lives
-   in the plugin).
+   Each element carries the **raw PMX** `bodyGroupId` + the collide-with mask
+   `bodyMaskGroup0..15` (the `non_collision_group` field stored verbatim — bit
+   i set = collides with group i) and `bodyPhysicsMode`; the node derives the
+   Bullet group bit from `bodyGroupId` and uses the mask as-is.
 4. Feed the kinematic anchors from the JOINTS directly: `joint.worldMatrix[0]`
    → `anchorWorldMatrix[k]`, `group.worldInverseMatrix[0]` →
    `anchorParentInverseMatrix[k]`, and bake `anchorOffset[k]` (the world-frame
@@ -418,18 +378,17 @@ scene is the source of truth — discover physics state later with
 
 ### Collision filtering
 
-Resolved in the **node** at `buildWorld` time (Phase 2) — the Python builder no
-longer pre-computes masks; it passes the raw PMX values through as attributes:
+Direct PMX → Bullet mapping, resolved in the **node** at `buildWorld` time —
+the Python builder passes the raw PMX group id + the collide-with mask
+(`non_collision_group` stored verbatim) through as attributes:
 
 - `bodyGroupId` (enum `Group 0`..`Group 15`, default 0) → Bullet group bit
-  `1 << group_id`. A value ≥ 0 overrides `bodyGroup` (the legacy explicit
-  64-bit group bit).
-- `bodyNonCollisionGroup` (long, default −1) → groups this body does **not**
-  collide with; Bullet's "collides with" mask is the complement
-  `(~non_collision_group) & 0xFFFF`, then corrected by the proximity +
-  cloth-on-cloth rules in `mmd/maya/nodes/mmd_physics_masks.h`
-  (`computeEffectiveMasks`). When both are −1 the explicit `bodyGroup` /
-  `bodyMaskGroup*` toggles are used verbatim.
+  `1 << group_id`.
+- `bodyMaskGroup0..15` (bool, default all `True` = 0xFFFF) → the collide-with
+  mask: group set = the body collides with that group.  This is the PMX
+  `non_collision_group` field stored VERBATIM (bit i set = collides with group
+  i — MMD feeds it to Bullet directly, no inversion), and the node uses it
+  exactly as read.
 
 ### Gravity / units
 
@@ -481,7 +440,6 @@ exactly as MMD animation does.
 | `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + build functions (node + bodies/joints arrays + direct joint wiring + baked write-back offsets) |
 | `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                                         |
 | `mmd/maya/nodes/mmd_physics_math.h`                                     | Maya-free math: Euler<->quat, row/column transpose, row-matrix multiply                                                         |
-| `mmd/maya/nodes/mmd_physics_masks.h`                                    | Collision-mask resolver (`computeEffectiveMasks`: proximity + cloth-on-cloth corrections)                                       |
 | `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                                           |
 | `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                                             |
 | `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                                             |

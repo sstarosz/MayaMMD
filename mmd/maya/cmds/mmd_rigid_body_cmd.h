@@ -34,7 +34,10 @@
  *         -friction <double>
  *         -restitution <double>
  *         -group <int>
- *         -nonCollisionGroup <int>
+ *         -mask <int>              collide-with mask: bit i set = collides with
+ *                                  group i (the PMX non_collision_group field
+ *                                  stored verbatim; written into
+ *                                  bodies[i].bodyMaskGroup0..15).  Default 0xFFFF.
  *         -physicsMode <followBone|physics|physicsBone>
  *
  * SIMULATION IS DISABLED: create writes the body DATA and binds FOLLOW_BONE

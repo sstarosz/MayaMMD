@@ -145,39 +145,38 @@ The node is `mmdPhysicsNode`, registered natively by `MayaMMD.mll`
 
 ### 4.1 Inputs
 
-| Attribute                                             | Type                     | Indexing                | Meaning                                                                                                                                                                                             |
-| ----------------------------------------------------- | ------------------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `time`                                                | time                     | —                       | Frame clock (`time1.outTime`). Drives stepping.                                                                                                                                                     |
-| `gravity`                                             | double3                  | —                       | World gravity. **Must stay `(0, −9.8, 0)`** (MMD's value in model units).                                                                                                                           |
-| `fps`                                                 | double                   | —                       | Retained for backward compatibility + as the Phase-4 rebuild trigger (`pmx_model_utils` toggles it); `dt` is derived from the scene's time unit via `MTime`, so it no longer drives the conversion. |
-| `anchorWorldMatrix`                                   | matrix[]                 | kinematic order         | World matrix of each kinematic (`FOLLOW_BONE`) body's joint.                                                                                                                                        |
-| `anchorParentInverseMatrix`                           | matrix[]                 | kinematic order         | Physics group's world inverse — keeps anchors in group space.                                                                                                                                       |
-| `anchorOffset`                                        | matrix[]                 | kinematic order         | Baked world-frame body↔bone rest offset (`bodyRestWorld · jointRestWorld⁻¹`).                                                                                                                       |
-| `groupWorldMatrix`                                    | matrix                   | single                  | Physics group's world matrix (write-back composition).                                                                                                                                              |
-| `bodyWriteBackOffset`                                 | matrix[]                 | **dense, body-indexed** | `K = jointRestWorld · bodyRestWorld⁻¹` per body (identity for non-write-back).                                                                                                                      |
-| `bodyParentInverseMatrix`                             | matrix[]                 | dense, body-indexed     | Related joint's `parentInverseMatrix` — **DG fallback only** (bodies whose parent joint has no body).                                                                                               |
-| `bodyParentJointOffset`                               | matrix[]                 | dense, body-indexed     | `M_parent = parentJointRestWorld · parentBodyRestWorld⁻¹` (constant).                                                                                                                               |
-| `bodies[i].bodyRestTranslate`                         | float3                   | PMX rb index            | Rest position in group space.                                                                                                                                                                       |
-| `bodies[i].bodyRestRotate`                            | float3                   | PMX rb index            | Rest rotation, **degrees**.                                                                                                                                                                         |
-| `bodies[i].bodyMass`                                  | double                   | PMX rb index            | Mass (kinematic bodies get 0).                                                                                                                                                                      |
-| `bodies[i].bodyLinearDamping` / `bodyAngularDamping`  | double                   | PMX rb index            | Damping = PMX `move_attenuation` / `rotation_damping` (clamped [0,1]).                                                                                                                              |
-| `bodies[i].bodyFriction` / `bodyRestitution`          | double                   | PMX rb index            | From `friction_force` / `repulsion` (clamped [0,1]).                                                                                                                                                |
-| `bodies[i].bodyColliderType`                          | short                    | PMX rb index            | 1 box, 2 sphere, 3 capsule.                                                                                                                                                                         |
-| `bodies[i].bodyRadius` / `bodyExtents` / `bodyLength` | double / float3 / double | PMX rb index            | Collider size (sphere: radius; box: half-extents; capsule: radius + cylinder length).                                                                                                               |
-| `bodies[i].bodyMaskGroup0..15`                        | bool ×16                 | PMX rb index            | **Explicit collision mask override** — one boolean toggle per collision group (0..15), used when raw PMX data is absent (all default `True` = 0xFFFF).                                              |
-| `bodies[i].bodyGroupId`                               | enum                     | PMX rb index            | Raw PMX group id 0..15 (enum fields `Group 0`..`Group 15`) — the node derives the Bullet group bit `1 << (id & 0x0F)`.                                                                              |
-| `bodies[i].bodyNonCollisionGroup`                     | long                     | PMX rb index            | Raw PMX `non_collision_group` (unsigned) — the node computes the effective mask in `buildWorld` (`mmd_physics_masks.h`); `−1` = use the `bodyMaskGroup*` toggles.                                   |
-| `bodies[i].bodyPhysicsMode`                           | short                    | PMX rb index            | PMX mode 0 FOLLOW_BONE / 1 PHYSICS / 2 PHYSICS_BONE (0 = kinematic).                                                                                                                                |
-| `bodies[i].bodyParentBodyIndex`                       | short                    | PMX rb index            | Rigid-body index of the related joint's **parent joint's body** (write-back parent-inverse source); `−1` = none.                                                                                    |
-| `bodies[i].bodyResetAnchorIndex`                      | long                     | PMX rb index            | Kinematic anchor whose delta drives this body's scrub-back reset; `−1` = none.                                                                                                                      |
-| `bodies[i].bodyNameLocal`                             | string                   | PMX rb index            | PMX body name local (`上半身2`, `Beg1`, …) for Query/UI; `""` = none.                                                                                                                               |
-| `bodies[i].bodyNameUniversal`                         | string                   | PMX rb index            | PMX body name universal (`Jacket_0_0`/`Skirt_0_0`, …) for Query/UI; `""` = none.                                                                                                                    |
-| `bodies[i].bodyEnabled`                               | bool                     | PMX rb index            | Remove support: `buildWorld` skips disabled bodies and joints referencing them.                                                                                                                     |
-| `joints[j].bodyA` / `bodyB`                           | long                     | joint index             | Rigid-body indices (PMX rb indices).                                                                                                                                                                |
-| `joints[j].type`                                      | long                     | joint index             | PMX joint type 0..5.                                                                                                                                                                                |
-| `joints[j].frameTranslate` / `frameRotate`            | float3                   | joint index             | Joint frame position / rotation (rotation in **degrees**).                                                                                                                                          |
-| `joints[j].linearMin/Max`, `angularMin/Max`           | float3                   | joint index             | Limits — angular in **radians** (passed straight to Bullet).                                                                                                                                        |
-| `joints[j].linearSpring`, `angularSpring`             | float3                   | joint index             | Spring constants.                                                                                                                                                                                   |
+| Attribute                                             | Type                     | Indexing                | Meaning                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------- | ------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time`                                                | time                     | —                       | Frame clock (`time1.outTime`). Drives stepping.                                                                                                                                                                                                                                    |
+| `gravity`                                             | double3                  | —                       | World gravity. **Must stay `(0, −9.8, 0)`** (MMD's value in model units).                                                                                                                                                                                                          |
+| `fps`                                                 | double                   | —                       | Retained for backward compatibility + as the Phase-4 rebuild trigger (`pmx_model_utils` toggles it); `dt` is derived from the scene's time unit via `MTime`, so it no longer drives the conversion.                                                                                |
+| `anchorWorldMatrix`                                   | matrix[]                 | kinematic order         | World matrix of each kinematic (`FOLLOW_BONE`) body's joint.                                                                                                                                                                                                                       |
+| `anchorParentInverseMatrix`                           | matrix[]                 | kinematic order         | Physics group's world inverse — keeps anchors in group space.                                                                                                                                                                                                                      |
+| `anchorOffset`                                        | matrix[]                 | kinematic order         | Baked world-frame body↔bone rest offset (`bodyRestWorld · jointRestWorld⁻¹`).                                                                                                                                                                                                      |
+| `groupWorldMatrix`                                    | matrix                   | single                  | Physics group's world matrix (write-back composition).                                                                                                                                                                                                                             |
+| `bodyWriteBackOffset`                                 | matrix[]                 | **dense, body-indexed** | `K = jointRestWorld · bodyRestWorld⁻¹` per body (identity for non-write-back).                                                                                                                                                                                                     |
+| `bodyParentInverseMatrix`                             | matrix[]                 | dense, body-indexed     | Related joint's `parentInverseMatrix` — **DG fallback only** (bodies whose parent joint has no body).                                                                                                                                                                              |
+| `bodyParentJointOffset`                               | matrix[]                 | dense, body-indexed     | `M_parent = parentJointRestWorld · parentBodyRestWorld⁻¹` (constant).                                                                                                                                                                                                              |
+| `bodies[i].bodyRestTranslate`                         | float3                   | PMX rb index            | Rest position in group space.                                                                                                                                                                                                                                                      |
+| `bodies[i].bodyRestRotate`                            | float3                   | PMX rb index            | Rest rotation, **degrees**.                                                                                                                                                                                                                                                        |
+| `bodies[i].bodyMass`                                  | double                   | PMX rb index            | Mass (kinematic bodies get 0).                                                                                                                                                                                                                                                     |
+| `bodies[i].bodyLinearDamping` / `bodyAngularDamping`  | double                   | PMX rb index            | Damping = PMX `move_attenuation` / `rotation_damping` (clamped [0,1]).                                                                                                                                                                                                             |
+| `bodies[i].bodyFriction` / `bodyRestitution`          | double                   | PMX rb index            | From `friction_force` / `repulsion` (clamped [0,1]).                                                                                                                                                                                                                               |
+| `bodies[i].bodyColliderType`                          | short                    | PMX rb index            | 1 box, 2 sphere, 3 capsule.                                                                                                                                                                                                                                                        |
+| `bodies[i].bodyRadius` / `bodyExtents` / `bodyLength` | double / float3 / double | PMX rb index            | Collider size (sphere: radius; box: half-extents; capsule: radius + cylinder length).                                                                                                                                                                                              |
+| `bodies[i].bodyMaskGroup0..15`                        | bool ×16                 | PMX rb index            | **Collision mask** — one boolean per group, True = collides with that group.  This is the PMX `non_collision_group` field stored VERBATIM (bit i set = collides with group i — MMD feeds it to Bullet directly, no inversion); all default `True` = 0xFFFF.  Used exactly as read. |
+| `bodies[i].bodyGroupId`                               | enum                     | PMX rb index            | Raw PMX group id 0..15 (enum fields `Group 0`..`Group 15`) — the node derives the Bullet group bit `1 << (id & 0x0F)`.                                                                                                                                                             |
+| `bodies[i].bodyPhysicsMode`                           | short                    | PMX rb index            | PMX mode 0 FOLLOW_BONE / 1 PHYSICS / 2 PHYSICS_BONE (0 = kinematic).                                                                                                                                                                                                               |
+| `bodies[i].bodyParentBodyIndex`                       | short                    | PMX rb index            | Rigid-body index of the related joint's **parent joint's body** (write-back parent-inverse source); `−1` = none.                                                                                                                                                                   |
+| `bodies[i].bodyResetAnchorIndex`                      | long                     | PMX rb index            | Kinematic anchor whose delta drives this body's scrub-back reset; `−1` = none.                                                                                                                                                                                                     |
+| `bodies[i].bodyNameLocal`                             | string                   | PMX rb index            | PMX body name local (`上半身2`, `Beg1`, …) for Query/UI; `""` = none.                                                                                                                                                                                                              |
+| `bodies[i].bodyNameUniversal`                         | string                   | PMX rb index            | PMX body name universal (`Jacket_0_0`/`Skirt_0_0`, …) for Query/UI; `""` = none.                                                                                                                                                                                                   |
+| `bodies[i].bodyEnabled`                               | bool                     | PMX rb index            | Remove support: `buildWorld` skips disabled bodies and joints referencing them.                                                                                                                                                                                                    |
+| `joints[j].bodyA` / `bodyB`                           | long                     | joint index             | Rigid-body indices (PMX rb indices).                                                                                                                                                                                                                                               |
+| `joints[j].type`                                      | long                     | joint index             | PMX joint type 0..5.                                                                                                                                                                                                                                                               |
+| `joints[j].frameTranslate` / `frameRotate`            | float3                   | joint index             | Joint frame position / rotation (rotation in **degrees**).                                                                                                                                                                                                                         |
+| `joints[j].linearMin/Max`, `angularMin/Max`           | float3                   | joint index             | Limits — angular in **radians** (passed straight to Bullet).                                                                                                                                                                                                                       |
+| `joints[j].linearSpring`, `angularSpring`             | float3                   | joint index             | Spring constants.                                                                                                                                                                                                                                                                  |
 
 ### 4.2 Outputs
 
@@ -209,10 +208,11 @@ and the angle-unit `joint.rotate` — discovery must follow its `output` plug.
    - **Config change** (bodies/joints/gravity/fps/anchors-count differ from the
      hashed build-time signature) → rebuild the world in place, keeping the
      chains glued to the current pose (no rewind teleport).
-4. **Collision masks are computed in the node** from `bodyGroupId` +
-   `bodyNonCollisionGroup` (proximity + cloth-on-cloth correction in
-   `mmd_physics_masks.h`). Dynamic bodies' own group bit is cleared; kinematic
-   bodies keep their exact PMX mask.
+4. **Collision masks are used verbatim.** The node derives the Bullet group
+   bit `1 << bodyGroupId` and uses `bodyMaskGroup0..15` (the PMX
+   `non_collision_group` stored verbatim — bit i set = collides with group i)
+   directly as the Bullet collision filter mask.  No inversion, no proximity /
+   cloth-on-cloth corrections.
 5. **Write-back is direct and cycle-free.** `boneLocal = K · bodyLocal ·
    B_parent⁻¹ · M_parent⁻¹` — the parent inverse comes from the **parent
    body's solved Bullet transform**, never from the DG, so node-driven parent
@@ -233,8 +233,9 @@ and the angle-unit `joint.rotate` — discovery must follow its `output` plug.
 - Kinematic anchors are in **kinematic order** (the order FOLLOW_BONE bodies
   appear in the bodies array), NOT body-index order.
 - Matrix arrays that feed the write-back are **dense body-indexed**.
-- `bodyGroupId`/`bodyNonCollisionGroup` are the raw PMX values; explicit
-  `bodyMaskGroup*`/`bodyGroup` overrides are only used when the raw values are `−1`.
+- `bodyGroupId` + `bodyMaskGroup0..15` are the only collision inputs: the raw
+  PMX group id and the collide-with mask (the `non_collision_group` field
+  stored verbatim).  No separate override fields.
 - Adding/removing child attributes of `bodies`/`joints` changes the config
   signature hash — old scenes stay valid (missing children default), but tests
   must be re-run. `bodyNameLocal`/`bodyNameUniversal` (string, default `""`)
@@ -283,14 +284,14 @@ special "apply" step needed. This is the hook the v1 UI (§7) and the
 The rigid-body feature is scoped by a **capability matrix** — the contract
 for what the current scope supports and what is deferred to the export era:
 
-| Capability | Status    | What it means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Import** | ✅ current | One `mmdPhysicsNode` per model with every PMX rigid body + joint, built automatically at model import (`build_pmx_scene`). **SIMULATION IS DISABLED**: the node is not time-driven and no write-back wiring exists — import creates bodies (data + bone binding) and constraints via the native commands, then stops. **No command-level re-import** — re-importing the model is the way to restore physics. There is **no separate bulk importer and no Python wiring** (single body-modification path via `mmdRigidBody` + `mmdRigidBodyConstraint`). |
-| **Query**  | 🚧 later   | Read body/joint data from the scene for the UI (list, counts, per-body detail). Backed by `bodyNameLocal`/`bodyNameUniversal` + the discovery helpers (§5.2).                                                                                                                                                                                                                                                                                                                                                                                           |
-| **Apply**  | 🚧 later   | Batch configuration push (inverse of Query).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| **Edit**   | 🚧 later   | Modify individual PMX-exposed body fields via `mmdRigidBody -e`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| **Remove** | 🚧 later   | Disable individual bodies via `bodyEnabled` (no array reindexing).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| **Export** | 🚧 future  | Write the (possibly edited) bodies + joints back into the PMX file. Deferred — matches the plugin-wide read-only scope (§1).                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Capability | Status    | What it means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Import** | ✅ current | One `mmdPhysicsNode` per model with every PMX rigid body + joint, built automatically at model import (`build_pmx_scene`). **SIMULATION IS ENABLED**: the solver is time-driven (`time1.outTime → node.time`) and the solved pose is written straight into the related joints (Phase 3 direct write-back) — import creates bodies (data + bone binding) + constraints via the native commands and then wires the simulation in one pass (**no `-finalize` step**). **No command-level re-import** — re-importing the model is the way to restore physics. There is **no separate bulk importer and no Python wiring** (single body-modification path via `mmdRigidBody` + `mmdRigidBodyConstraint`). |
+| **Query**  | 🚧 later   | Read body/joint data from the scene for the UI (list, counts, per-body detail). Backed by `bodyNameLocal`/`bodyNameUniversal` + the discovery helpers (§5.2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Apply**  | 🚧 later   | Batch configuration push (inverse of Query).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Edit**   | 🚧 later   | Modify individual PMX-exposed body fields via `mmdRigidBody -e`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Remove** | 🚧 later   | Disable individual bodies via `bodyEnabled` (no array reindexing).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| **Export** | 🚧 future  | Write the (possibly edited) bodies + joints back into the PMX file. Deferred — matches the plugin-wide read-only scope (§1).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 #### The `mmdRigidBody` command
 
@@ -305,7 +306,7 @@ time a command is invoked, and in mayapy 2026 that crashed the process inside
 OpenMaya's `MSyntax` constructor (the Python `MArgParser` multi-double flag
 reads were also flaky).  Native `MSyntax` / `MArgParser` have neither issue.
 
-**v1.0 — create (SIMULATION DISABLED)** (implemented):
+**v1.0 — create (SIMULATION ENABLED)** (implemented):
 
 ```
 mmdRigidBody <solver | modelRoot>      # create is the default mode
@@ -319,7 +320,7 @@ mmdRigidBody <solver | modelRoot>      # create is the default mode
     -rotation <x y z>         # MMD radians (handedness flip) → restR
     -mass <double> -linearDamping <double> -angularDamping <double>
     -friction <double> -restitution <double>
-    -group <int> -nonCollisionGroup <int>
+    -group <int> -mask <int>      # collide-with mask (bit i = collides with group i)
     -physicsMode <followBone|physics|physicsBone>
 ```
 
@@ -327,28 +328,28 @@ Create mode (the default — there is no `-create` flag) appends ONE rigid body
 as **DATA + bone binding** and returns the new body index.  FOLLOW_BONE bodies
 are bound to their related joint through the kinematic-anchor INPUT
 (`joint.worldMatrix → anchorWorldMatrix` + baked body<->bone offset) — the
-collider "lives on the correct bone" and displays from its rest pose (the
-draw override falls back to the plugs when the world is never built).  Dynamic
-bodies are **data-only** (no write-back, no stepping) — the simulation is
-disabled because the write-back that drove joints exploded on import.
-Edit/query/remove, batch modes, and re-enabling the simulation are later steps.
+collider "lives on the correct bone".  Dynamic bodies are **data-only at
+create time**; the write-back (outTranslate/outRotate → joints + the baked
+K / M_parent offsets) is added by the Python builder AFTER all bodies and
+joints exist — there is **no `-finalize` command**.
 
-**Single body-modification path — no Python wiring.**  The Python builder's
-`create_physics_from_pmx_data` is now just:
+**Single body-modification path — no Python body wiring.**  The Python
+builder's `create_physics_from_pmx_data` is:
 
 ```
 group = _create_physics_group(...)
-node  = _create_physics_solver(...)                    # gravity / fps (NOT time-driven)
+node  = _create_physics_solver(...)                    # time-driven (time1.outTime)
 for rb in pmx_data.rigid_bodies:
-    cmds.mmdRigidBody(node, ...)                # data + bone binding (no wiring)
+    cmds.mmdRigidBody(node, ...)                # data + kinematic-anchor binding
 for jt in pmx_data.joints:
     cmds.mmdRigidBodyConstraint(node, ...)      # constraints AFTER bodies
+_wire_dynamic_write_back(node, group, ...)      # bake K/M_parent + outTranslate/outRotate → joints
+_exclude_from_dg_cache(node, driven_joints)     # caching=0 on the subgraph
 ```
 
-SIMULATION IS DISABLED: the solver is not connected to `time1.outTime`, no
-write-back output is connected, and no `-finalize`/step runs — so import
-cannot drive (or explode) any joint.  The node still holds every body's and
-joint's data and displays the colliders from their rest poses.
+SIMULATION IS ENABLED: the solver is connected to `time1.outTime`, the
+write-back outputs drive the related joints (parent inverse from the parent
+BODY, so no DG feedback cycle), and the node steps every frame.
 
 #### The `mmdRigidBodyConstraint` command
 
@@ -482,10 +483,10 @@ C++ command following the Maya create/edit/query mode convention, **no JSON**
 (plain flags only); body names live in C++ `bodyNameLocal`/`bodyNameUniversal`
 children; Remove uses a C++ `bodyEnabled` flag (no reindexing); create = one
 body per call (auto-append index); constraints go through the separate
-`mmdRigidBodyConstraint` command; **SIMULATION IS DISABLED** (no write-back, no
-stepping, node not time-driven); Edit/Query/Remove/Export and re-enabling the
-simulation are later steps; there is no command-level re-import (Import = model
-import only).
+`mmdRigidBodyConstraint` command; the simulation is wired by the Python
+builder in one pass (**SIMULATION ENABLED**, time-driven + direct joint
+write-back, **no `-finalize` step**); Edit/Query/Remove/Export are later steps;
+there is no command-level re-import (Import = model import only).
 
 ---
 
