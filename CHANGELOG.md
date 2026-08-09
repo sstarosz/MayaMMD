@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`simulation.hpp`/`simulation.cpp`, `physics_math.hpp`, `common.hpp`)
   as a static library, covered by Catch2 unit tests (18 cases, no Maya SDK
   required). Internal building block for the upcoming native physics node.
+- **Native rigid-body physics node (`pmxPhysicsNode`)** — the C++
+  `MPxLocatorNode` that owns the embedded Bullet world is now registered by
+  the plugin and created as an **empty node per imported model** (under a
+  `{model}_Physics` group). The `bodies`/`joints` arrays and the solved-pose
+  write-back are populated by the upcoming rigid-body commands PR.
 
 ### Fixed
 

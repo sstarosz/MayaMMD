@@ -170,15 +170,22 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     # Source:
     #   - mmd/MayaMMD.cpp               → entry point (initializePlugin/uninitializePlugin)
     #   - mmd/maya/nodes/ccd_ik_solver_node.h/cpp  → C++ CCD IK solver node
+    #   - mmd/maya/nodes/physics_node.h/cpp        → C++ rigid-body physics node
+    #     (embedded Bullet; links mmd_core + Bullet — see below)
     # =====================================================================
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/physics_node.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
+        ${BULLET_INCLUDE_DIRS}
     )
-    target_link_libraries(MayaMMD PRIVATE Maya::Maya)
+    # The physics node includes Bullet headers directly and links the
+    # Maya-free engine (mmd_core) — its PUBLIC include dir (mmd/core) comes
+    # along with the target link.
+    target_link_libraries(MayaMMD PRIVATE Maya::Maya mmd_core ${BULLET_LIBRARIES})
 
     # Maya plugin extension — .mll (Windows), .so (Linux), .bundle (macOS)
     if(WIN32)

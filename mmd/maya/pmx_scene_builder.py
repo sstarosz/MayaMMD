@@ -14,6 +14,7 @@ from mmd.core.data_types import PmxModel, ShapeType
 from mmd.maya.maya_data_types import MayaPmxData
 from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones  # noqa: F401
 from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data  # noqa: F401
+from mmd.maya.pmx.rigid_body_builder import create_physics_from_pmx_data  # noqa: F401
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
@@ -886,13 +887,21 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
         root_name,
     )
 
-    # Create rigid body visual guides (v1.0 feature - visual only, no physics)
-    # rigid_body_guides = create_rigid_body_guides_from_pmx_data(
-    #    pmx_data,
-    #    root_transform_obj=root_obj,
-    #    joints=joints,
-    #    name_registry=name_registry,
-    # )
+    # Rigid-body physics: one native pmxPhysicsNode per model (embedded
+    # Bullet).  Currently an EMPTY node — the bodies/joints arrays are
+    # populated by the rigid-body commands PR.  Stamp the solver name on the
+    # root so discovery can find it directly.
+    # (The v1.0 visual guide shapes above are superseded by this node.)
+    solver_node = create_physics_from_pmx_data(
+        pmx_data,
+        joints=joints,
+        name_registry=name_registry,
+        root_transform_obj=root_obj,
+    )
+    if solver_node:
+        if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
+            cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
+        cmds.setAttr(f"{root_name}.pmxPhysicsNode", solver_node, type="string")
 
     return MayaPmxData(
         root_obj=root_obj,
