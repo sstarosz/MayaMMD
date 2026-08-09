@@ -180,7 +180,7 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyEnabled;       // bool (custom) — disabled bodies are skipped by buildWorld
     static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
     static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none
-    static MObject aBodyGroupId; // short PMX group_id 0..15 (Bullet group bit derived from it)
+    static MObject aBodyGroupId;       // enum — PMX group_id 0..15 ("Group 0".."Group 15")
     static MObject
         aBodyNonCollisionGroup;         // long raw PMX non_collision_group (-1 = explicit bodyMask)
     static MObject aBodyColliderType;   // enum — PMX shape (kColliderBox/Sphere/Capsule)

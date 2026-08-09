@@ -421,8 +421,9 @@ scene is the source of truth — discover physics state later with
 Resolved in the **node** at `buildWorld` time (Phase 2) — the Python builder no
 longer pre-computes masks; it passes the raw PMX values through as attributes:
 
-- `bodyGroupId` (short, default −1) → Bullet group bit `1 << group_id`. A value
-  ≥ 0 overrides `bodyGroup` (the legacy explicit 64-bit group bit).
+- `bodyGroupId` (enum `Group 0`..`Group 15`, default 0) → Bullet group bit
+  `1 << group_id`. A value ≥ 0 overrides `bodyGroup` (the legacy explicit
+  64-bit group bit).
 - `bodyNonCollisionGroup` (long, default −1) → groups this body does **not**
   collide with; Bullet's "collides with" mask is the complement
   `(~non_collision_group) & 0xFFFF`, then corrected by the proximity +

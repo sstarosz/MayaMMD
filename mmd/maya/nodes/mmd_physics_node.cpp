@@ -387,12 +387,21 @@ MStatus MMDPhysicsNode::initialize()
     tAttr.setStorable(true);
     tAttr.setKeyable(false);
 
-    // Raw PMX collision inputs: the node derives the Bullet group bit from
-    // bodyGroupId, and the effective mask itself when nonCollisionGroup >= 0;
-    // the bodyMaskGroup* toggles stay as an explicit override used otherwise
-    // (legacy scenes).
-    aBodyGroupId = nAttr.create("bodyGroupId", "bgid", MFnNumericData::kShort, -1, &stat);
-    CHECK_MSTATUS(stat);
+    // PMX collision group — enum: one field per group (0..15, "Group 0"..
+    // "Group 15").  The Bullet group bit (1 << groupId) is derived in
+    // buildWorld.  Read back via .asShort() like any other numeric attribute.
+    {
+        MFnEnumAttribute eAttr;
+        aBodyGroupId = eAttr.create("bodyGroupId", "bgid", 0, &stat);
+        CHECK_MSTATUS(stat);
+        for (int g = 0; g < 16; ++g)
+        {
+            MString name(("Group " + std::to_string(g)).c_str());
+            eAttr.addField(name, static_cast<short>(g));
+        }
+        eAttr.setStorable(true);
+        eAttr.setKeyable(false);
+    }
     aBodyNonCollisionGroup =
         nAttr.create("bodyNonCollisionGroup", "bncg", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
@@ -472,10 +481,10 @@ MStatus MMDPhysicsNode::initialize()
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
 
-    for (MObject* a : {&aBodyEnabled, &aBodyGroupId, &aBodyNonCollisionGroup, &aBodyRadius,
-                       &aBodyExtents, &aBodyLength, &aBodyRestTranslate, &aBodyRestRotate,
-                       &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution,
-                       &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a : {&aBodyEnabled, &aBodyNonCollisionGroup, &aBodyRadius, &aBodyExtents,
+                       &aBodyLength, &aBodyRestTranslate, &aBodyRestRotate, &aBodyMass,
+                       &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution, &aBodyFriction,
+                       &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);

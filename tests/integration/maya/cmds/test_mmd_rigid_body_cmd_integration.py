@@ -449,6 +449,7 @@ def test_enum_fields_exposed():
         "bodyColliderType", node=solver, listEnum=True
     )
     fields_mode = cmds.attributeQuery("bodyPhysicsMode", node=solver, listEnum=True)
+    fields_group = cmds.attributeQuery("bodyGroupId", node=solver, listEnum=True)
     assert_true(
         fields_collider
         and "Box" in fields_collider[0]
@@ -463,7 +464,15 @@ def test_enum_fields_exposed():
         and "PhysicsBone" in fields_mode[0],
         f"bodyPhysicsMode fields missing {fields_mode}",
     )
-    print("✓ enum fields exposed (Box/Sphere/Capsule, FollowBone/Physics/PhysicsBone)")
+    assert_true(
+        fields_group
+        and "Group 0" in fields_group[0]
+        and "Group 15" in fields_group[0],
+        f"bodyGroupId fields missing {fields_group}",
+    )
+    print(
+        "✓ enum fields exposed (Box/Sphere/Capsule, FollowBone/Physics/PhysicsBone, Group 0..15)"
+    )
     return True
 
 
