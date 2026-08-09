@@ -314,11 +314,11 @@ def test_pmx_rigid_body_attributes(pmx_data: PmxModel, maya_pmx_data):
             mode,
             f"body {rb_idx} bodyPhysicsMode != {mode}",
         )
-        # Collision group encodes 1 << group_id.
+        # Raw PMX collision group id feeds the node's group/mask derivation.
         assert_eq(
-            cmds.getAttr(f"{base}.bodyGroup"),
-            1 << rb.group_id,
-            f"body {rb_idx} bodyGroup != 1 << group_id",
+            cmds.getAttr(f"{base}.bodyGroupId"),
+            rb.group_id,
+            f"body {rb_idx} bodyGroupId != group_id",
         )
         assert_true(
             cmds.attributeQuery("bodyRestTranslate", node=node, exists=True),

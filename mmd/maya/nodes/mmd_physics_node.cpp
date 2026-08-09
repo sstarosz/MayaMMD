@@ -100,7 +100,6 @@ MObject MMDPhysicsNode::aBodyColliderType;
 MObject MMDPhysicsNode::aBodyRadius;
 MObject MMDPhysicsNode::aBodyExtents;
 MObject MMDPhysicsNode::aBodyLength;
-MObject MMDPhysicsNode::aBodyGroup;
 MObject MMDPhysicsNode::aBodyMask;
 MObject MMDPhysicsNode::aBodyGroupId;
 MObject MMDPhysicsNode::aBodyNonCollisionGroup;
@@ -165,15 +164,11 @@ void readDrawBodyFromPlug(const MPlug& el, MMDPhysicsNode::DrawBody& db)
     db.extents[2] = e[2];
     db.length = el.child(MMDPhysicsNode::aBodyLength).asDouble();
     db.kinematic = el.child(MMDPhysicsNode::aBodyKinematic).asBool();
-    // group id from the collision group bit (group = 1 << id).
-    long g = el.child(MMDPhysicsNode::aBodyGroup).asInt();
-    int gid = 0;
-    while (g > 1)
-    {
-        g >>= 1;
-        ++gid;
-    }
-    db.groupId = gid;
+    // group id straight from the raw PMX id (the Bullet group bit is derived
+    // from it in buildWorld); clamp legacy scenes where it is -1.
+    db.groupId = el.child(MMDPhysicsNode::aBodyGroupId).asShort();
+    if (db.groupId < 0)
+        db.groupId = 0;
     const double* p = el.child(MMDPhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
     db.pos[0] = p[0];
     db.pos[1] = p[1];
@@ -388,13 +383,11 @@ MStatus MMDPhysicsNode::initialize()
     CHECK_MSTATUS(stat);
     aBodyLength = nAttr.create("bodyLength", "blen", MFnNumericData::kDouble, 1.0, &stat);
     CHECK_MSTATUS(stat);
-    aBodyGroup = nAttr.create("bodyGroup", "bg", MFnNumericData::kLong, 1, &stat);
-    CHECK_MSTATUS(stat);
     aBodyMask = nAttr.create("bodyMask", "bmk", MFnNumericData::kLong, 0xFFFF, &stat);
     CHECK_MSTATUS(stat);
-    // Raw PMX collision inputs: when >= 0 the node derives the effective
-    // group bit / mask itself (bodyGroup/bodyMask above are the explicit
-    // overrides used when these are < 0).
+    // Raw PMX collision inputs: the node derives the Bullet group bit from
+    // bodyGroupId, and the effective mask itself when nonCollisionGroup >= 0;
+    // bodyMask stays as an explicit override used otherwise (legacy scenes).
     aBodyGroupId = nAttr.create("bodyGroupId", "bgid", MFnNumericData::kShort, -1, &stat);
     CHECK_MSTATUS(stat);
     aBodyNonCollisionGroup =
@@ -417,11 +410,11 @@ MStatus MMDPhysicsNode::initialize()
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
     CHECK_MSTATUS(stat);
 
-    for (MObject* a : {&aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
-                       &aBodyAngularDamping, &aBodyFriction, &aBodyRestitution, &aBodyColliderType,
-                       &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyGroup, &aBodyMask,
-                       &aBodyGroupId, &aBodyNonCollisionGroup, &aBodyKinematic, &aBodyPhysicsMode,
-                       &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a :
+         {&aBodyRestTranslate, &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping,
+          &aBodyAngularDamping, &aBodyFriction, &aBodyRestitution, &aBodyColliderType, &aBodyRadius,
+          &aBodyExtents, &aBodyLength, &aBodyMask, &aBodyGroupId, &aBodyNonCollisionGroup,
+          &aBodyKinematic, &aBodyPhysicsMode, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -445,7 +438,6 @@ MStatus MMDPhysicsNode::initialize()
     cAttr.addChild(aBodyRadius);
     cAttr.addChild(aBodyExtents);
     cAttr.addChild(aBodyLength);
-    cAttr.addChild(aBodyGroup);
     cAttr.addChild(aBodyMask);
     cAttr.addChild(aBodyGroupId);
     cAttr.addChild(aBodyNonCollisionGroup);
@@ -673,7 +665,6 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.radius = bodyHandle.child(aBodyRadius).asDouble();
         read3(aBodyExtents, b.extents);
         b.length = bodyHandle.child(aBodyLength).asDouble();
-        b.group = bodyHandle.child(aBodyGroup).asInt();
         b.mask = bodyHandle.child(aBodyMask).asInt();
         b.groupId = bodyHandle.child(aBodyGroupId).asShort();
         b.nonCollisionGroup = bodyHandle.child(aBodyNonCollisionGroup).asInt();
@@ -771,7 +762,6 @@ uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
         read3(bh, aBodyExtents, v3);
         h = hashDouble3(h, v3);
         h = hashValue(h, bh.child(aBodyLength).asDouble());
-        h = hashValue(h, bh.child(aBodyGroup).asInt());
         h = hashValue(h, bh.child(aBodyMask).asInt());
         h = hashValue(h, bh.child(aBodyGroupId).asShort());
         h = hashValue(h, bh.child(aBodyNonCollisionGroup).asInt());
@@ -854,8 +844,8 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
     // RAW PMX data (bodyGroupId + bodyNonCollisionGroup); the node derives the
     // Bullet group bit and the effective mask itself — an exact port of the
     // previous Python-side proximity + cloth-on-cloth corrections (see
-    // mmd_physics_masks.h).  bodyGroup/bodyMask stay as explicit overrides used
-    // only when bodyGroupId/bodyNonCollisionGroup are < 0.
+    // mmd_physics_masks.h).  bodyMask stays as an explicit override used only
+    // when bodyNonCollisionGroup is < 0 (legacy scenes).
     bool needMasks = false;
     for (const Body& b : mBodies)
         if (b.nonCollisionGroup != -1)
@@ -878,20 +868,8 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
             bi.extents[1] = b.extents[1];
             bi.extents[2] = b.extents[2];
             bi.length = b.length;
-            // Use the raw PMX group id; fall back to deriving it from the
-            // explicit bodyGroup bit if the id was not provided.
-            short gid = b.groupId;
-            if (gid < 0)
-            {
-                long g = b.group;
-                gid = 0;
-                while (g > 1)
-                {
-                    g >>= 1;
-                    ++gid;
-                }
-            }
-            bi.groupId = gid;
+            // Use the raw PMX group id (legacy scenes without it default to 0).
+            bi.groupId = b.groupId >= 0 ? b.groupId : 0;
             bi.kinematic = b.kinematic;
             bi.nonCollisionGroup = b.nonCollisionGroup;
             inputs.push_back(bi);
@@ -910,9 +888,9 @@ bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
 
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        // Group bit from the raw group id when provided (explicit otherwise).
-        if (mBodies[i].groupId >= 0)
-            mBodies[i].group = 1L << (mBodies[i].groupId & 0x0F);
+        // Bullet group bit from the raw PMX group id (legacy scenes without
+        // it keep the default group 0).
+        mBodies[i].group = 1L << ((mBodies[i].groupId >= 0 ? mBodies[i].groupId : 0) & 0x0F);
         if (mBodies[i].nonCollisionGroup != -1 && needMasks)
             mBodies[i].mask = computedMasks[i];
     }
@@ -1430,15 +1408,8 @@ void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
         db.extents[2] = b.extents[2];
         db.length = b.length;
         db.kinematic = b.kinematic;
-        // group id from the collision group bit (group = 1 << id).
-        long g = b.group;
-        int gid = 0;
-        while (g > 1)
-        {
-            g >>= 1;
-            ++gid;
-        }
-        db.groupId = gid;
+        // group id straight from the raw PMX group id (clamp legacy -1).
+        db.groupId = b.groupId >= 0 ? b.groupId : 0;
         if (mWorldBuilt && i < mRigidBodies.size() && mRigidBodies[i])
         {
             // Solved pose — what the simulation actually has right now.

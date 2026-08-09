@@ -101,7 +101,6 @@ _BODY_ATTR_NAMES = (
     "bodyColliderType",
     "bodyRadius",
     "bodyLength",
-    "bodyGroup",
     "bodyGroupId",
     "bodyNonCollisionGroup",
     "bodyKinematic",
@@ -292,6 +291,22 @@ def _matrix_from_tr(t, r) -> om.MMatrix:
     return mt.asMatrix()
 
 
+# Dense-array default value (identity 4x4, row-major) — every body-indexed
+# array the node reads with jumpToArrayElement needs an element at EVERY
+# index (a sparse array would read the wrong physical slot for high indices).
+_IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+
+
+def _body_world_rest(spec, group_world_rest) -> om.MMatrix:
+    """A body spec's rest pose lifted into world space (restT/restR * groupWorld)."""
+    return _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
+
+
+def _joint_world_rest(jpath: str) -> om.MMatrix:
+    """A joint's REST world matrix, read at build time (before any solve)."""
+    return om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
+
+
 def _local_rest_in_group(world_t, world_r, group_world_rest):
     """Group-local rest translate+rotate for a PMX body.
 
@@ -342,8 +357,7 @@ def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optiona
         # The node computes the effective collision mask itself (Phase 2) from
         # the raw PMX data below (bodyGroupId + bodyNonCollisionGroup) — the
         # proximity + cloth-on-cloth corrections live in
-        # mmd/maya/nodes/mmd_physics_masks.h.  `group` (the bit) is still fed
-        # so the draw override can color guides before the node's first solve.
+        # mmd/maya/nodes/mmd_physics_masks.h.
         return {
             "restT": local_t,
             "restR": local_r,
@@ -363,7 +377,6 @@ def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optiona
             "radius": size.x,
             "extents": (size.x, size.y, size.z),
             "length": size.y,
-            "group": 1 << body.group_id,
             "groupId": body.group_id,
             # PMX non_collision_group is a 16-bit bitmask read as a SIGNED
             # int16 (so 0xFF6D comes back as -147).  Store it as unsigned so
@@ -415,10 +428,8 @@ def _set_body_attributes(
             el.child(attr["bodyColliderType"]).setShort(int(spec["collider"]))
             el.child(attr["bodyRadius"]).setDouble(float(spec["radius"]))
             el.child(attr["bodyLength"]).setDouble(float(spec["length"]))
-            el.child(attr["bodyGroup"]).setInt(int(spec["group"]))
-            # Raw PMX collision inputs — the node derives the effective mask
-            # itself (Phase 2); bodyGroup is kept so the draw override can
-            # color guides before the node's first solve.
+            # Raw PMX collision input — the node derives the effective mask
+            # and the Bullet group bit itself (Phase 2).
             el.child(attr["bodyGroupId"]).setShort(int(spec["groupId"]))
             el.child(attr["bodyNonCollisionGroup"]).setInt(
                 int(spec["nonCollisionGroup"])
@@ -458,7 +469,6 @@ def _connect_kinematic_anchors(
     """
     if not node:
         return
-    identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
     for k, rb_idx in enumerate(kinematic_order):
         spec = body_specs[rb_idx]
         jpath = spec.get("joint")
@@ -474,29 +484,26 @@ def _connect_kinematic_anchors(
                     f"{node}.anchorParentInverseMatrix[{k}]",
                     force=True,
                 )
-                # K_kin = colliderRestWorld * jointRestWorld^-1
-                # (worldMatrix[0] is ~6x cheaper than a xform ws query and
-                # identical at rest — the joints were just created).
-                joint_rest = om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
-                body_world_rest = (
-                    _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
-                )
-                offset = body_world_rest * joint_rest.inverse()
+                # K_kin = colliderRestWorld * jointRestWorld^-1 (worldMatrix[0]
+                # is ~6x cheaper than a xform ws query and identical at rest —
+                # the joints were just created).
+                offset = _body_world_rest(
+                    spec, group_world_rest
+                ) * _joint_world_rest(jpath).inverse()
                 cmds.setAttr(f"{node}.anchorOffset[{k}]", list(offset), type="matrix")
             else:
                 # No related joint: a static collider pinned at its rest pose.
-                body_world_rest = (
-                    _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
-                )
                 cmds.setAttr(
-                    f"{node}.anchorWorldMatrix[{k}]", list(body_world_rest), type="matrix"
+                    f"{node}.anchorWorldMatrix[{k}]",
+                    list(_body_world_rest(spec, group_world_rest)),
+                    type="matrix",
                 )
                 cmds.setAttr(
                     f"{node}.anchorParentInverseMatrix[{k}]",
                     list(group_world_rest.inverse()),
                     type="matrix",
                 )
-                cmds.setAttr(f"{node}.anchorOffset[{k}]", identity, type="matrix")
+                cmds.setAttr(f"{node}.anchorOffset[{k}]", _IDENTITY, type="matrix")
         except Exception as e:
             log.warning("Could not connect anchor %d (%s): %s", rb_idx, jpath, e)
 
@@ -584,7 +591,6 @@ def _connect_dynamic_outputs(
     """
     if not node:
         return
-    identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
     # The node needs the physics group's world matrix to lift the solved
     # group-space pose into world space before the joint-local write-back.
     try:
@@ -596,9 +602,9 @@ def _connect_dynamic_outputs(
     n = max(body_specs) + 1 if body_specs else 0
     for i in range(n):
         try:
-            cmds.setAttr(f"{node}.bodyWriteBackOffset[{i}]", identity, type="matrix")
-            cmds.setAttr(f"{node}.bodyParentInverseMatrix[{i}]", identity, type="matrix")
-            cmds.setAttr(f"{node}.bodyParentJointOffset[{i}]", identity, type="matrix")
+            cmds.setAttr(f"{node}.bodyWriteBackOffset[{i}]", _IDENTITY, type="matrix")
+            cmds.setAttr(f"{node}.bodyParentInverseMatrix[{i}]", _IDENTITY, type="matrix")
+            cmds.setAttr(f"{node}.bodyParentJointOffset[{i}]", _IDENTITY, type="matrix")
         except Exception:
             pass
     # PMX bone index -> rigid-body index (only bodies that made it into the
@@ -618,11 +624,9 @@ def _connect_dynamic_outputs(
             # Related joint's rest world + baked world offset
             # K = jointRestWorld * bodyRestWorld^-1 (worldMatrix[0] is ~6x
             # cheaper than a xform ws query; the joints are at rest now).
-            joint_rest = om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
-            body_world_rest = (
-                _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
-            )
-            k = joint_rest * body_world_rest.inverse()
+            k = _joint_world_rest(jpath) * _body_world_rest(
+                spec, group_world_rest
+            ).inverse()
             cmds.setAttr(f"{node}.bodyWriteBackOffset[{rb_idx}]", list(k), type="matrix")
 
             # Parent joint's body (Phase 3 cycle fix): the write-back parent
@@ -647,14 +651,9 @@ def _connect_dynamic_outputs(
                 if parent_joint:
                     # M_parent = parentJointRestWorld * parentBodyRestWorld^-1
                     # (same constant for kinematic and dynamic parents).
-                    parent_joint_rest = om.MMatrix(
-                        cmds.getAttr(f"{parent_joint}.worldMatrix[0]")
-                    )
-                    parent_body_rest_world = (
-                        _matrix_from_tr(parent_spec["restT"], parent_spec["restR"])
-                        * group_world_rest
-                    )
-                    m_parent = parent_joint_rest * parent_body_rest_world.inverse()
+                    m_parent = _joint_world_rest(
+                        parent_joint
+                    ) * _body_world_rest(parent_spec, group_world_rest).inverse()
                     cmds.setAttr(
                         f"{node}.bodyParentJointOffset[{rb_idx}]",
                         list(m_parent),

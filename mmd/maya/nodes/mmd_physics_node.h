@@ -162,9 +162,8 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyRadius;         // double (sphere/capsule)
     static MObject aBodyExtents;        // float3 (box half extents)
     static MObject aBodyLength;         // double (capsule)
-    static MObject aBodyGroup;          // long collision group
     static MObject aBodyMask;           // long collision mask
-    static MObject aBodyGroupId;        // short PMX group id 0..15 (-1 = explicit bodyGroup)
+    static MObject aBodyGroupId; // short PMX group id 0..15 (Bullet group bit derived from it)
     static MObject
         aBodyNonCollisionGroup;    // long raw PMX non-collision mask (-1 = explicit bodyMask)
     static MObject aBodyKinematic; // bool — kinematic (anchor) vs dynamic
@@ -211,11 +210,12 @@ class MMDPhysicsNode : public MPxLocatorNode
         double radius;
         double extents[3];
         double length;
-        long group;
-        long mask;
+        long group; // Bullet collision group bit (derived from groupId in buildWorld)
+        long mask;  // collision mask (computed in buildWorld, or bodyMask override)
         // Raw PMX collision inputs (Phase 2): the node derives the Bullet
-        // group bit and the effective mask itself when these are set (>= 0);
-        // `group`/`mask` above remain as explicit overrides (used otherwise).
+        // group bit from groupId, and the effective mask itself when
+        // nonCollisionGroup is set (>= 0); `mask` stays as an explicit
+        // override used otherwise (legacy scenes).
         short groupId;
         long nonCollisionGroup;
         bool kinematic;
