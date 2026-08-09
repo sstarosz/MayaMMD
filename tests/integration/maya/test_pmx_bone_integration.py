@@ -21,7 +21,7 @@ from __future__ import annotations
 import maya.api.OpenMaya as om  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
 from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
-from mmd.maya.pmx_model_utils import find_physics_constraints, find_physics_node  # noqa: E402
+from mmd.maya.pmx_model_utils import find_physics_driven_joints, find_physics_node  # noqa: E402
 
 # ── Project imports ─────────────────────────────────────────────────────────
 from mmd.core.data_types import PMXBoneFlagBits, PmxModel  # noqa: E402
@@ -97,12 +97,12 @@ def _world_position(joint_obj: om.MObject) -> tuple[float, float, float]:
 def _physics_driven_bone_indices(maya_pmx_data, pmx_data) -> set[int]:
     """Return the set of bone indices driven by the physics write-back.
 
-    Milestone 2: dynamic rigid bodies (PHYSICS / PHYSICS_BONE) write their
-    solved pose back to their related bone through a ``parentConstraint`` /
-    ``orientConstraint`` (guide → bone).  That constraint legitimately drives
-    the bone's ``rotate`` channels — even at rest the solver pose is applied
-    through the constraint (the world matrix stays exactly at rest; the raw
-    rotate values may be a non-canonical Euler representation of identity).
+    Phase 3: dynamic rigid bodies (PHYSICS / PHYSICS_BONE) are written
+    DIRECTLY into their related joints by the node (no parentConstraint /
+    orientConstraint exists any more).  The write-back legitimately drives the
+    bone's ``rotate`` channels — even at rest the solver pose is applied, and
+    the raw rotate values may be a non-canonical Euler representation of
+    identity.
 
     Skeleton-construction tests that assert ``rotate == 0`` / ``rotate ==
     pmxRest*`` therefore exempt physics-driven bones — their rotation is owned
@@ -111,7 +111,7 @@ def _physics_driven_bone_indices(maya_pmx_data, pmx_data) -> set[int]:
     if find_physics_node(maya_pmx_data.root_name) is None:
         return set()
     driven: set[int] = set()
-    for rb_idx in find_physics_constraints(maya_pmx_data.root_name):
+    for rb_idx in find_physics_driven_joints(maya_pmx_data.root_name):
         if 0 <= rb_idx < len(pmx_data.rigid_bodies):
             related = pmx_data.rigid_bodies[rb_idx].related_bone_index
             if related >= 0:

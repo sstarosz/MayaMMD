@@ -35,7 +35,7 @@ from mmd.maya.pmx_model_utils import (
     find_bone_morph_node,
     find_ik_handles,
     find_model_root_from_selection,
-    find_physics_constraints,
+    find_physics_driven_joints,
     find_physics_group,
     find_physics_node,
     find_physics_rigid_bodies,
@@ -239,7 +239,7 @@ class ModelContext(QObject):
         return "" if result is _SENTINEL else result
 
     def physicsRigidBodies(self) -> Dict[int, str]:
-        """Map of PMX rigid-body index -> guide transform for the active model.
+        """Map of PMX rigid-body index -> related joint for the active model.
 
         Returns ``{}`` if the model has no physics.
         """
@@ -256,24 +256,26 @@ class ModelContext(QObject):
         result = self._cache.get("physics_bodies", {})
         return {} if result is _SENTINEL else result
 
-    def physicsConstraints(self) -> Dict[int, str]:
-        """Map of PMX rigid-body index -> DG constraint for the active model.
+    def physicsDrivenJoints(self) -> Dict[int, str]:
+        """Map of PMX rigid-body index -> joint driven by the node (write-back).
 
-        Returns ``{}`` if the model has no physics.
+        Phase 3: the node writes the solved pose directly into these joints
+        (no write-back constraints exist any more).  Returns ``{}`` if the
+        model has no physics.
         """
-        if "physics_constraints" not in self._cache and self._root_name:
+        if "physics_driven" not in self._cache and self._root_name:
             try:
-                self._cache["physics_constraints"] = find_physics_constraints(
+                self._cache["physics_driven"] = find_physics_driven_joints(
                     self._root_name
                 )
             except Exception as exc:
                 log.error(
-                    "Failed to find physics constraints for %s: %s",
+                    "Failed to find physics-driven joints for %s: %s",
                     self._root_name,
                     exc,
                 )
-                self._cache["physics_constraints"] = _SENTINEL
-        result = self._cache.get("physics_constraints", {})
+                self._cache["physics_driven"] = _SENTINEL
+        result = self._cache.get("physics_driven", {})
         return {} if result is _SENTINEL else result
 
     # ── Resolve ──────────────────────────────────────────────────────────

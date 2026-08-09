@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Full guide removal + direct joint write-back (Phase 3).** Guide transforms
+  and `parentConstraint`/`orientConstraint` write-back are **gone** — the
+  `mmdPhysicsNode` writes the solved JOINT-LOCAL pose straight into the related
+  joints (`outTranslate[i]`/`outRotate[i]` → `joint.translate`/`rotate`), and
+  the physics group now contains only the solver locator.  The write-back
+  reproduces `parentConstraint(maintainOffset)` exactly: `boneLocal =
+  K · bodyLocal · B_parent⁻¹ · M_parent⁻¹` (rest poses stay EXACT — 0
+  mismatched bones across all models).
+- **Fixed: simulation exploded during animation (DG feedback cycle).** The
+  write-back used to read `joint.parentInverseMatrix` from the DG; for a body
+  whose parent joint is also node-driven (86% of dynamic bodies — whole
+  skirt/hair/cape chains), that is a live DG feedback cycle (Maya allows the
+  connection) that amplified every frame (bones displaced up to 54 units).
+  The parent inverse is now derived from the **parent body's** solved Bullet
+  transform (`bodies[i].bodyParentBodyIndex` + the baked
+  `bodyParentJointOffset[i]`), so no write-back depends on a node-driven
+  joint's DG matrix.
+- **Faster import.** The physics build set ~15k attributes through
+  `cmds.setAttr`; scalar body/joint children now use the OpenMaya plug API and
+  joint rest matrices are read via `worldMatrix` (physics build ≈ 5.9s → 4.4s
+  on a 300-body model).
+
+### Added
+
 - **Physics engine replaced: mayaBullet → native `mmdPhysicsNode` (embedded
   Bullet 3.25).** The mayaBullet binding layer is **gone**. `bulletSolverShape`
   is a *stateful* node — Cached Playback's evaluation cache treats node outputs

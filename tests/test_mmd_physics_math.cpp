@@ -100,15 +100,9 @@ TEST_CASE("euler round-trips through the Maya XYZ convention", "[math]")
     // ry must stay within [-90, 90] — that is the canonical range of the XYZ
     // extraction (asin).  rx/rz may be anywhere in [-180, 180] (atan2).
     const double angles[][3] = {
-        {0.0, 0.0, 0.0},
-        {30.0, 0.0, 0.0},
-        {0.0, -45.0, 0.0},
-        {0.0, 0.0, 90.0},
-        {10.0, 20.0, 30.0},
-        {-170.0, 15.0, 120.0},
-        {89.0, -89.0, 1.0},
-        {45.0, 0.0, 180.0},
-        {-180.0, 45.0, -180.0},
+        {0.0, 0.0, 0.0},    {30.0, 0.0, 0.0},   {0.0, -45.0, 0.0},
+        {0.0, 0.0, 90.0},   {10.0, 20.0, 30.0}, {-170.0, 15.0, 120.0},
+        {89.0, -89.0, 1.0}, {45.0, 0.0, 180.0}, {-180.0, 45.0, -180.0},
     };
     for (const auto& a : angles)
     {
@@ -217,4 +211,101 @@ TEST_CASE("anchor pose stores and rebuilds the same transform", "[math]")
     storeAnchorPose(sp, sq, src);
     btTransform rebuilt = anchorPoseToTransform(sp, sq);
     requireTransformClose(rebuilt, src);
+}
+
+TEST_CASE("btTransformToRowMatrix is the exact inverse of doubleMatrixToBtTransform", "[math]")
+{
+    // A rotated + translated transform; round-trip must be exact.
+    const double pos[3] = {1.5, -2.0, 3.25};
+    const double rot[3] = {30.0, -45.0, 60.0};
+    btTransform src = transformFromRest(pos, rot);
+
+    double row[4][4];
+    btTransformToRowMatrix(src, row);
+    btTransform rebuilt = doubleMatrixToBtTransform(row);
+    requireTransformClose(rebuilt, src, 1e-5);
+
+    // The row-vector translation lands in the LAST row (Maya convention).
+    REQUIRE(row[3][0] == Approx(1.5).margin(1e-5));
+    REQUIRE(row[3][1] == Approx(-2.0).margin(1e-5));
+    REQUIRE(row[3][2] == Approx(3.25).margin(1e-5));
+    REQUIRE(row[0][3] == Approx(0.0).margin(1e-6));
+    REQUIRE(row[1][3] == Approx(0.0).margin(1e-6));
+    REQUIRE(row[2][3] == Approx(0.0).margin(1e-6));
+    REQUIRE(row[3][3] == Approx(1.0).margin(1e-6));
+}
+
+TEST_CASE("rowMatrixMultiply composes 4x4 row-vector matrices", "[math]")
+{
+    // T(1,2,3) * Rx(90) in row-vector convention: translation (1,2,3), basis
+    // (Rx^T).  Verify against explicit multiplication.
+    double t[4][4] = {};
+    t[0][0] = t[1][1] = t[2][2] = t[3][3] = 1.0;
+    t[3][0] = 1.0;
+    t[3][1] = 2.0;
+    t[3][2] = 3.0;
+
+    double r[4][4] = {};
+    r[3][3] = 1.0;
+    r[0][0] = 1.0;
+    r[1][2] = 1.0;
+    r[2][1] = -1.0; // Rx(90) as a Maya ROW matrix (transpose of the column form)
+
+    double out[4][4];
+    rowMatrixMultiply(t, r, out);
+
+    // T(1,2,3) * Rx(90): the translation is ROTATED by the rotation in the
+    // row-vector convention, so it lands on (1, -3, 2), not (1, 2, 3).
+    REQUIRE(out[0][0] == Approx(1.0).margin(1e-6));
+    REQUIRE(out[1][2] == Approx(1.0).margin(1e-6));
+    REQUIRE(out[2][1] == Approx(-1.0).margin(1e-6));
+    REQUIRE(out[3][0] == Approx(1.0).margin(1e-6));
+    REQUIRE(out[3][1] == Approx(-3.0).margin(1e-6));
+    REQUIRE(out[3][2] == Approx(2.0).margin(1e-6));
+
+    // Associative vs the equivalent Bullet compose (transposed): the row
+    // product T*R transposed must equal the column product R^T * T^T.
+    btTransform tt = doubleMatrixToBtTransform(t);
+    btTransform rt = doubleMatrixToBtTransform(r);
+    btTransform prod = rt * tt; // column-vector: R^T * T^T
+    double prodRow[4][4];
+    btTransformToRowMatrix(prod, prodRow);
+    for (int rc = 0; rc < 16; ++rc)
+        REQUIRE(prodRow[rc / 4][rc % 4] == Approx(out[rc / 4][rc % 4]).margin(1e-5));
+}
+
+TEST_CASE("rowMatrixMultiply inverse composes to identity", "[math]")
+{
+    double a[4][4] = {};
+    a[0][0] = 0.8;
+    a[0][1] = -0.6;
+    a[1][0] = 0.6;
+    a[1][1] = 0.8;
+    a[2][2] = 1.0;
+    a[3][3] = 1.0;
+    a[3][0] = 4.0;
+    a[3][1] = -7.0;
+    a[3][2] = 2.0;
+
+    double inv[4][4] = {};
+    inv[0][0] = 0.8;
+    inv[0][1] = 0.6;
+    inv[1][0] = -0.6;
+    inv[1][1] = 0.8;
+    inv[2][2] = 1.0;
+    inv[3][3] = 1.0;
+    // Row-vector inverse translation: -t * R^T = -((4,-7,2) * R^T)
+    // = -(7.4, -3.2, 2) = (-7.4, 3.2, -2.0).
+    inv[3][0] = -7.4;
+    inv[3][1] = 3.2;
+    inv[3][2] = -2.0;
+
+    double out[4][4];
+    rowMatrixMultiply(a, inv, out);
+    for (int rc = 0; rc < 16; ++rc)
+    {
+        const int r = rc / 4;
+        const int c = rc % 4;
+        REQUIRE(out[r][c] == Approx(r == c ? 1.0 : 0.0).margin(1e-6));
+    }
 }

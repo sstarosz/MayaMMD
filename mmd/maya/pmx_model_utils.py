@@ -352,12 +352,12 @@ def find_ik_handles(root_name: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# Physics discovery — the scene is the source of truth.  These mirror the
-# bone/morph reconstruction helpers: they read self-describing attributes
-# stamped at import (the ``{model}_Physics`` group, the root's
-# ``pmxPhysicsNode`` attr, per-guide ``pmxRigidBodyIndex``) so a binding can
-# be reconstructed from any saved scene.  ModelContext wraps these as lazy
-# getters (see mmd/maya/model_context.py).
+# Physics discovery — the scene is the source of truth.  These read the
+# node's own data (the ``{model}_Physics`` group, the root's ``pmxPhysicsNode``
+# attr, and the node's ``bodies[i]`` / ``anchorWorldMatrix[k]`` /
+# ``outRotate[i]`` connections) so the binding can be reconstructed from any
+# saved scene.  ModelContext wraps these as lazy getters
+# (see mmd/maya/model_context.py).
 # ---------------------------------------------------------------------------
 
 
@@ -378,8 +378,9 @@ def find_physics_node(root_name: str) -> Optional[str]:
     """Return the ``mmdPhysicsNode`` solver for a PMX model root, or ``None``.
 
     Prefers the ``pmxPhysicsNode`` attribute stamped on the root at import;
-    falls back to tracing a guide's connection to the solver (scenes imported
-    before the attribute existed).
+    falls back to scanning the physics group's children (the solver is a
+    locator shape parented under the group — scenes imported before the
+    attribute existed).
     """
     if cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
         node = cmds.getAttr(f"{root_name}.pmxPhysicsNode")
@@ -388,49 +389,123 @@ def find_physics_node(root_name: str) -> Optional[str]:
     group = find_physics_group(root_name)
     if group is None:
         return None
-    for child in cmds.listRelatives(group, children=True, type="transform") or []:
-        links = cmds.listConnections(child, type="mmdPhysicsNode") or []
-        if links:
-            return links[0]
+    for child in cmds.listRelatives(group, children=True, fullPath=True) or []:
+        if cmds.nodeType(child) == "mmdPhysicsNode":
+            return child
+    return None
+
+
+def _body_physics_mode(node: str, rb_idx: int) -> int:
+    """Read a body's PMX physics mode (0 FOLLOW_BONE, 1 PHYSICS, 2 PHYSICS_BONE).
+
+    Falls back to ``bodyKinematic`` for scenes built before ``bodyPhysicsMode``
+    existed (a kinematic body is mode 0, anything else is dynamic).
+    """
+    if cmds.attributeQuery("bodyPhysicsMode", node=node, exists=True):
+        try:
+            return int(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyPhysicsMode"))
+        except Exception:
+            pass
+    try:
+        return 0 if bool(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyKinematic")) else 1
+    except Exception:
+        return 1
+
+
+def _driven_joint_from_out(node: str, i: int, mode: int) -> Optional[str]:
+    """Return the joint driven by body *i*'s write-back output (or ``None``).
+
+    Mode 1 (PHYSICS) drives translate AND rotate: the translate connection
+    goes STRAIGHT to the joint (no unit conversion), so it is the reliable
+    discovery path.  Mode 2 (PHYSICS_BONE) drives rotate only, and Maya
+    auto-inserts a ``unitConversion`` between the raw double3
+    ``outRotateValue`` and the angle-unit ``joint.rotate`` — follow its
+    ``output`` plug.
+    """
+    if mode == 1:
+        for dest in (
+            cmds.listConnections(
+                f"{node}.outTranslate[{i}].outTranslateValue", destination=True
+            )
+            or []
+        ):
+            if dest and dest != node:
+                return dest
+        return None
+    # mode 2: rotation-only, through the auto-inserted unitConversion.
+    for dest in (
+        cmds.listConnections(f"{node}.outRotate[{i}].outRotateValue", destination=True)
+        or []
+    ):
+        if cmds.nodeType(dest) == "unitConversion":
+            for j in (
+                cmds.listConnections(f"{dest}.output", destination=True) or []
+            ):
+                if j and j != node:
+                    return j
+        elif dest and dest != node:
+            return dest
     return None
 
 
 def find_physics_rigid_bodies(root_name: str) -> Dict[int, str]:
-    """Return ``{pmx_rigid_body_index: guide_name}`` for a model root.
+    """Return ``{pmx_rigid_body_index: related_joint}`` for a model root.
 
-    Guides are the physics group's child transforms carrying the
-    ``pmxRigidBodyIndex`` metadata attribute (stamped at import).
+    Phase 3: guide transforms are gone — each body's related joint is traced
+    from the node's own connections:
+      * kinematic (FOLLOW_BONE) bodies via ``anchorWorldMatrix[k]`` (the
+        anchors are in kinematic order), and
+      * dynamic bodies via the write-back output connections (``outTranslate``
+        for mode 1, ``outRotate`` for mode 2 — the node writes the solved pose
+        straight into the related joint).
     """
-    group = find_physics_group(root_name)
-    if group is None:
+    node = find_physics_node(root_name)
+    if node is None:
+        return {}
+    try:
+        n = int(cmds.getAttr(f"{node}.bodies", size=True) or 0)
+    except Exception:
         return {}
     bodies: Dict[int, str] = {}
-    for child in cmds.listRelatives(group, children=True, type="transform") or []:
-        if not cmds.attributeQuery("pmxRigidBodyIndex", node=child, exists=True):
-            continue
-        try:
-            rb_idx = int(cmds.getAttr(f"{child}.pmxRigidBodyIndex"))
-        except Exception:
-            continue
-        bodies[rb_idx] = child
+    kin_idx = 0
+    for i in range(n):
+        if _body_physics_mode(node, i) == 0:
+            srcs = (
+                cmds.listConnections(f"{node}.anchorWorldMatrix[{kin_idx}]", source=True)
+                or []
+            )
+            kin_idx += 1
+        else:
+            srcs = [_driven_joint_from_out(node, i, _body_physics_mode(node, i))]
+        if srcs and srcs[0]:
+            bodies[i] = srcs[0]
     return bodies
 
 
-def find_physics_constraints(root_name: str) -> Dict[int, str]:
-    """Return ``{pmx_rigid_body_index: constraint_name}`` for a model root.
+def find_physics_driven_joints(root_name: str) -> Dict[int, str]:
+    """Return ``{pmx_rigid_body_index: joint}`` for DYNAMIC bodies (write-back).
 
-    The DG constraint touching each guide (a ``parentConstraint`` or
-    ``orientConstraint`` binding the guide to its related bone).  This is what
-    the skeleton tests use to exempt physics-driven bones from rest-pose
-    assertions.
+    Phase 3: the node writes the solved pose straight into these joints, so
+    they are the write-back targets (this replaces the old
+    parentConstraint/orientConstraint discovery — no constraints exist any
+    more).  The related joint is traced from the write-back output connections
+    (``outTranslate`` for mode 1, ``outRotate`` through any auto-inserted
+    unitConversion for mode 2).
     """
+    node = find_physics_node(root_name)
+    if node is None:
+        return {}
+    try:
+        n = int(cmds.getAttr(f"{node}.bodies", size=True) or 0)
+    except Exception:
+        return {}
     result: Dict[int, str] = {}
-    for rb_idx, guide in find_physics_rigid_bodies(root_name).items():
-        for ctype in ("parentConstraint", "orientConstraint"):
-            cons = cmds.listConnections(guide, type=ctype) or []
-            if cons:
-                result[rb_idx] = cons[0]
-                break
+    for i in range(n):
+        if _body_physics_mode(node, i) == 0:
+            continue
+        joint = _driven_joint_from_out(node, i, _body_physics_mode(node, i))
+        if joint:
+            result[i] = joint
     return result
 
 
@@ -856,6 +931,35 @@ def reset_model_to_bind_pose(
 
     # Reset all bones (IK disabled → no IK override on chain joints)
     reset_all_bones_to_rest_pose(bone_map)
+
+    # Phase 3: physics-driven joints are owned by the mmdPhysicsNode (their
+    # translate/rotate are connected to its outputs, so setAttr cannot touch
+    # them).  Rewind the solver so it rebuilds from the CURRENT (now rest)
+    # skeleton pose and writes the exact rest pose into the driven joints —
+    # without this, a model that was mid-simulation keeps its last solved pose
+    # on those joints after a reset.
+    solver = find_physics_node(pmx_root_name or "")
+    if solver:
+        try:
+            from mmd.maya.pmx.rigid_body_builder import step_physics
+
+            # Phase 3: the node owns the physics-driven joints (their
+            # translate/rotate are connected to its outputs, so setAttr cannot
+            # touch them).  Force a config-change REBUILD (Phase 4) by toggling
+            # fps: the node destroys + rebuilds its Bullet world and re-anchors
+            # every dynamic body to the CURRENT (now rest) skeleton pose, so
+            # the driven joints land EXACTLY on their rest pose.  This is
+            # deterministic — it does not depend on the current time or a
+            # rewind (dt < 0).
+            fps = float(cmds.getAttr(f"{solver}.fps"))
+            cmds.setAttr(f"{solver}.fps", fps + 0.001)
+            step_physics(solver)  # signature changed -> rebuild at rest pose
+            cmds.setAttr(f"{solver}.fps", fps)
+            step_physics(solver)  # restore fps -> rebuild again (still at rest)
+        except Exception as exc:
+            log.debug("Could not reset physics solver %s: %s", solver, exc)
+        except Exception as exc:
+            log.debug("Could not reset physics solver %s: %s", solver, exc)
 
     # Restore original ikBlend values so the rig solver state is unchanged.
     for _ik_h, _orig_blend in _ik_blend_orig.items():

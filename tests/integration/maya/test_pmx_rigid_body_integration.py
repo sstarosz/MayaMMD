@@ -50,7 +50,7 @@ from mmd.maya.pmx.rigid_body_builder import (
     write_back_physics,
 )
 from mmd.maya.pmx_model_utils import (
-    find_physics_constraints,
+    find_physics_driven_joints,
     find_physics_node,
     find_physics_rigid_bodies,
 )
@@ -87,14 +87,15 @@ class _PhysicsInfo:
 
     def __init__(self, root_name: str) -> None:
         self.node = find_physics_node(root_name)
+        # Phase 3: {rb_idx: related_joint} — no guide transforms exist.
         self.bodies = find_physics_rigid_bodies(root_name)
-        self.constraints = find_physics_constraints(root_name)
+        self.driven = find_physics_driven_joints(root_name)
 
     def step(self) -> None:
         step_physics(self.node)
 
     def write_back(self) -> None:
-        write_back_physics(self.bodies, self.constraints)
+        write_back_physics(self.node, self.driven)
 
 
 def _get_binding(maya_pmx_data):
@@ -102,14 +103,44 @@ def _get_binding(maya_pmx_data):
     return _PhysicsInfo(maya_pmx_data.root_name)
 
 
-def _iter_guides(maya_pmx_data):
-    """Yield ``(rb_index, guide_name)`` for every created rigid-body guide."""
+def _iter_bodies(maya_pmx_data):
+    """Yield ``(rb_index, joint)`` for every rigid body with a related joint.
+
+    Phase 3: guide transforms are gone — the body is represented by its
+    related joint (the node writes the solved pose straight into it).
+    """
     binding = _get_binding(maya_pmx_data)
     if binding is None:
         return
-    for rb_idx, guide in binding.bodies.items():
-        if cmds.objExists(guide):
-            yield rb_idx, guide
+    for rb_idx, joint in binding.bodies.items():
+        if cmds.objExists(joint):
+            yield rb_idx, joint
+
+
+def _root_joint(maya_pmx_data) -> str:
+    """Name of the model's root bone joint (drives the whole skeleton)."""
+    return om.MFnDagNode(maya_pmx_data.joints[0]).partialPathName()
+
+
+def _swing_root(maya_pmx_data, frame: int, degrees: float = 20.0) -> None:
+    """Rotate the root bone sinusoidally so the dynamic chains keep moving.
+
+    The kinematic anchors track the root, and the attached dynamic chains
+    follow — the MMD behavior that the old (exploding) write-back accidentally
+    masked by moving joints on its own.  Swinging (not holding) keeps the
+    chains in motion so the behavioural tests have a stable signal.
+    """
+    angle = degrees * math.sin(math.radians(frame * 12.0))
+    root = _root_joint(maya_pmx_data)
+    cmds.setAttr(f"{root}.rotateZ", angle)
+    cmds.dgdirty(root)
+
+
+def _restore_root(maya_pmx_data) -> None:
+    """Reset the root bone rotation to zero."""
+    root = _root_joint(maya_pmx_data)
+    cmds.setAttr(f"{root}.rotateZ", 0.0)
+    cmds.dgdirty(root)
 
 
 def _mmd_flipped_y_axis(rx_rad: float, ry_rad: float, rz_rad: float):
@@ -234,12 +265,21 @@ def test_pmx_rigid_body_count(pmx_data: PmxModel, maya_pmx_data):
             len(pmx_data.joints),
             f"node.joints size {n_joints} != PMX joint count {len(pmx_data.joints)}",
         )
-    # One guide transform per rigid body (the node draws the visible guides).
-    n_guides = len(list(_iter_guides(maya_pmx_data)))
+    # Phase 3: every body that HAS a related joint maps to it (the write-back
+    # target).  Bodies with no related joint (related_bone_index -1 / out of
+    # range — e.g. Fritia body 156) are static colliders left at rest under
+    # the physics group; they have no joint to drive.
+    expected = sum(
+        1
+        for rb in pmx_data.rigid_bodies
+        if 0 <= rb.related_bone_index < len(pmx_data.bones)
+    )
+    n_body_joints = len(list(_iter_bodies(maya_pmx_data)))
     assert_eq(
-        n_guides,
-        len(pmx_data.rigid_bodies),
-        f"guide count {n_guides} != PMX rigid body count {len(pmx_data.rigid_bodies)}",
+        n_body_joints,
+        expected,
+        f"body->joint count {n_body_joints} != bodies with a related joint "
+        f"{expected} (PMX body count {len(pmx_data.rigid_bodies)})",
     )
     print(f"PASS: {n_bodies} bodies, {n_joints if pmx_data.joints else 0} joints in node")
     return True
@@ -268,6 +308,12 @@ def test_pmx_rigid_body_attributes(pmx_data: PmxModel, maya_pmx_data):
                 float(cmds.getAttr(f"{base}.bodyMass")) > 0.0,
                 f"dynamic body {rb_idx} mass not > 0",
             )
+        # PMX physics mode mirrors bodyKinematic.
+        assert_eq(
+            cmds.getAttr(f"{base}.bodyPhysicsMode"),
+            mode,
+            f"body {rb_idx} bodyPhysicsMode != {mode}",
+        )
         # Collision group encodes 1 << group_id.
         assert_eq(
             cmds.getAttr(f"{base}.bodyGroup"),
@@ -284,78 +330,73 @@ def test_pmx_rigid_body_attributes(pmx_data: PmxModel, maya_pmx_data):
     return True
 
 
-def test_pmx_rigid_body_transform(pmx_data: PmxModel, maya_pmx_data):
-    """Test FOLLOW_BONE guides: world transform fidelity + DG joint binding."""
+def test_pmx_rigid_body_rest_transform(pmx_data: PmxModel, maya_pmx_data):
+    """FOLLOW_BONE bodies: rest pose in the node + joint-driven anchors (Phase 3).
+
+    With guide transforms gone, the body's rest pose lives in
+    ``bodies[i].bodyRestTranslate/Rotate`` (the PMX pose, Z-flip + handedness,
+    in the physics group's local space — the group is at the identity in these
+    fresh test scenes) and the collider tracks the related JOINT via the
+    ``anchorWorldMatrix`` / ``anchorOffset`` wiring.
+    """
     fb = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value == 0]
     if not fb:
         print("SKIP: model has no FOLLOW_BONE rigid bodies")
         return True
     binding = _get_binding(maya_pmx_data)
-    assert_true(binding is not None, "No physics binding")
+    assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
 
     checked = 0
-    for rb_idx, guide in _iter_guides(maya_pmx_data):
+    kin_idx = 0
+    for rb_idx, joint in _iter_bodies(maya_pmx_data):
         rb = pmx_data.rigid_bodies[rb_idx]
         if rb.physics_mode.value != 0:
             continue  # dynamic bodies are solver-driven — not checked here
 
-        # FOLLOW_BONE bodies must be bound to their related joint via a
-        # parentConstraint (DG), not DAG parenting.
-        if rb.related_bone_index >= 0:
-            jpath = _find_joint_by_bone_index(maya_pmx_data, rb.related_bone_index)
-            assert_true(
-                jpath is not None,
-                f"FOLLOW_BONE body {guide} has no joint for bone {rb.related_bone_index}",
-            )
-            cons = cmds.listConnections(guide, type="parentConstraint") or []
-            assert_true(
-                bool(cons),
-                f"FOLLOW_BONE body {guide} has no parentConstraint to its joint",
-            )
-
-        # World transform must match PMX data exactly (Z-flip + handedness).
+        # Rest pose in the node matches the PMX pose (Z-flip + handedness).
         pos = rb.shape_position
-        rot = rb.shape_rotation
         expected_t = (pos.x, pos.y, -pos.z)
-
-        world_t = cmds.xform(guide, q=True, ws=True, translation=True)
-        for got, exp, label in zip(world_t, expected_t, ("X", "Y", "Z")):
+        got_t = cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyRestTranslate")[0]
+        for got, exp, label in zip(got_t, expected_t, ("X", "Y", "Z")):
             assert_true(
                 abs(got - exp) < 1e-3,
-                f"Body {guide} translate{label} {got} != expected {exp}",
+                f"Body {rb_idx} bodyRestTranslate{label} {got} != expected {exp}",
             )
 
-        # Rotation: compare world MATRICES (Euler read-back is non-unique).
-        got = cmds.xform(guide, q=True, ws=True, matrix=True)
-        got_m = om.MMatrix([got[0:4], got[4:8], got[8:12], got[12:16]])
-        exp_m = _expected_world_matrix(pos, rot)
-        matrix_err = max(abs(got_m[i] - exp_m[i]) for i in range(16))
-        assert_true(matrix_err < 1e-3, f"Body {guide} world matrix err {matrix_err:.3e}")
-
-        # Handedness check: world Y basis must equal the flipped rotation image.
-        world_y = (got[4], got[5], got[6])
-        expected_y = _mmd_flipped_y_axis(rot.x, rot.y, rot.z)
-        for gotv, exp, label in zip(world_y, expected_y, ("X", "Y", "Z")):
-            assert_true(
-                abs(gotv - exp) < 1e-3,
-                f"Body {guide} world Y-axis {label} {gotv} != expected {exp}",
-            )
+        # The anchor slot is fed by the related JOINT's world matrix.
+        srcs = (
+            cmds.listConnections(f"{node}.anchorWorldMatrix[{kin_idx}]", source=True)
+            or []
+        )
+        assert_true(
+            any(f"{joint}.worldMatrix[0]" == f"{s}.worldMatrix[0]" for s in srcs),
+            f"FOLLOW_BONE body {rb_idx} joint {joint} not feeding anchorWorldMatrix[{kin_idx}]",
+        )
+        kin_idx += 1
         checked += 1
 
-    assert_true(checked > 0, "No FOLLOW_BONE bodies found to check transforms")
-    print(f"PASS: {checked} FOLLOW_BONE bodies at PMX world pose, DG-bound to joints")
+    assert_true(checked > 0, "No FOLLOW_BONE bodies found to check rest poses")
+    print(f"PASS: {checked} FOLLOW_BONE bodies at PMX rest pose, joint-anchored")
     return True
 
 
-def test_follow_bone_tracks_joint_rotation(pmx_data: PmxModel, maya_pmx_data):
-    """Test that a FOLLOW_BONE body tracks its joint when the bone rotates."""
-    fb = [(i, rb) for i, rb in enumerate(pmx_data.rigid_bodies)
-          if rb.physics_mode.value == 0]
+def test_follow_bone_anchor_tracks_joint(pmx_data: PmxModel, maya_pmx_data):
+    """A FOLLOW_BONE collider tracks its joint: the anchor input follows it.
+
+    Phase 3 connects ``joint.worldMatrix[0]`` straight into
+    ``anchorWorldMatrix[k]`` (the node applies the baked body<->bone offset),
+    so rotating the joint must be reflected in the anchor input — the collider
+    is driven by exactly this input every frame.
+    """
+    fb = [
+        (i, rb)
+        for i, rb in enumerate(pmx_data.rigid_bodies)
+        if rb.physics_mode.value == 0
+    ]
     if not fb:
         print("SKIP: model has no FOLLOW_BONE rigid bodies")
         return True
-
-    import math as _m
 
     target = None
     for rb_idx, rb in fb:
@@ -365,68 +406,86 @@ def test_follow_bone_tracks_joint_rotation(pmx_data: PmxModel, maya_pmx_data):
     if target is None:
         print("SKIP: no FOLLOW_BONE body with a related bone")
         return True
-
     rb_idx, rb = target
-    guide = None
-    for idx, g in _iter_guides(maya_pmx_data):
-        if idx == rb_idx:
-            guide = g
-            break
-    assert_true(guide is not None, f"FOLLOW_BONE body {rb_idx} not found")
+    k = next(i for i, (idx, _r) in enumerate(fb) if idx == rb_idx)
+
+    binding = _get_binding(maya_pmx_data)
+    assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
 
     jpath = _find_joint_by_bone_index(maya_pmx_data, rb.related_bone_index)
     assert_true(jpath is not None, f"Joint for bone {rb.related_bone_index} not found")
 
-    t0 = cmds.xform(guide, q=True, ws=True, translation=True)
-    j0 = cmds.xform(jpath, q=True, ws=True, translation=True)
-    off = [t0[i] - j0[i] for i in range(3)]
-
+    a0 = cmds.getAttr(f"{node}.anchorWorldMatrix[{k}]")
     cmds.setAttr(f"{jpath}.rotateY", 30.0)
     cmds.currentTime(cmds.currentTime(query=True))
-
-    t1 = cmds.xform(guide, q=True, ws=True, translation=True)
-    j1 = cmds.xform(jpath, q=True, ws=True, translation=True)
-    c, s = _m.cos(_m.radians(30.0)), _m.sin(_m.radians(30.0))
-    rot_off = (off[0] * c + off[2] * s, off[1], -off[0] * s + off[2] * c)
-    exp = [j1[i] + rot_off[i] for i in range(3)]
-    err = max(abs(t1[i] - exp[i]) for i in range(3))
+    a1 = cmds.getAttr(f"{node}.anchorWorldMatrix[{k}]")
+    j1 = cmds.xform(jpath, q=True, ws=True, matrix=True)
+    err = max(abs(a1[i] - j1[i]) for i in range(16))
     assert_true(
-        err < 1e-2,
-        f"FOLLOW_BONE body {rb_idx} did not track its joint (err {err:.5f})",
+        err < 1e-3,
+        f"anchorWorldMatrix[{k}] did not track joint {jpath} (err {err:.5f})",
     )
-
-    # restore
+    # Restoring the rotation must restore the anchor too.
     cmds.setAttr(f"{jpath}.rotateY", 0.0)
     cmds.currentTime(cmds.currentTime(query=True))
-    print(f"PASS: FOLLOW_BONE body {rb_idx} tracks joint after 30 deg rotation (err {err:.2e})")
+    a2 = cmds.getAttr(f"{node}.anchorWorldMatrix[{k}]")
+    assert_true(
+        max(abs(a2[i] - a0[i]) for i in range(16)) < 1e-3,
+        "anchorWorldMatrix did not return to rest after restoring the joint",
+    )
+    print(f"PASS: FOLLOW_BONE anchor tracks joint {jpath} (kinematic idx {k})")
     return True
 
 
-def test_rigid_body_guides_are_node_drawn(pmx_data: PmxModel, maya_pmx_data):
-    """Test guides are meshless transforms — the node draws the colliders.
+def test_rigid_body_no_guide_transforms(pmx_data: PmxModel, maya_pmx_data):
+    """Phase 3: NO guide transforms exist — the node draws the colliders.
 
-    Phase 1: the mmdPhysicsNode draws its own guide visualization (wireframe
-    box/sphere/capsule per body, colored by collision group via the C++ draw
-    palette).  Each per-body guide is now a plain transform (the DG write-back
-    bridge) with NO mesh shape and NO shader in the scene.
+    The physics group contains only the ``mmdPhysicsNode`` solver (a locator
+    shape that draws wireframe box/sphere/capsule per body through its C++
+    draw override).  The old per-body guide transforms (and their
+    ``pmxRigidBodyIndex`` metadata) are gone entirely.
     """
     if not pmx_data.rigid_bodies:
         print("SKIP: model has no rigid bodies")
         return True
-    checked = 0
-    for rb_idx, guide in _iter_guides(maya_pmx_data):
-        mesh_shapes = cmds.listRelatives(guide, shapes=True, type="mesh") or []
-        assert_true(not mesh_shapes, f"Guide {guide} should have no mesh shape")
-        sgs = cmds.listConnections(guide, type="shadingEngine") or []
-        assert_true(not sgs, f"Guide {guide} should not be shaded")
-        checked += 1
-    assert_true(checked > 0, "No guides found to check")
-    print(f"PASS: {checked} guides are meshless transforms (node draws them)")
+    binding = _get_binding(maya_pmx_data)
+    assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
+
+    group = _find_physics_group(maya_pmx_data)
+    assert_true(group is not None, "Physics group not found")
+    children = cmds.listRelatives(group.fullPathName(), children=True, fullPath=True) or []
+    node_long = cmds.ls(node, long=True) or [node]
+    # The only thing under the physics group is the solver locator.
+    assert_true(
+        len(children) == 1 and children[0] == node_long[0],
+        f"Physics group should contain ONLY the solver, got {children}",
+    )
+    # No transform in the scene carries the old per-guide metadata.
+    stamped = [
+        t
+        for t in cmds.ls(type="transform", long=True) or []
+        if cmds.attributeQuery("pmxRigidBodyIndex", node=t, exists=True)
+    ]
+    assert_true(not stamped, f"Stale guide transforms with pmxRigidBodyIndex: {stamped}")
+    # The solver is a locator shape (DAG) that draws itself.
+    assert_true(
+        cmds.nodeType(node, apiType=True) == "kPluginLocatorNode",
+        f"{node} is not a locator node",
+    )
+    print(f"PASS: no guide transforms; node {node} is a locator that draws colliders")
     return True
 
 
 def test_dynamic_bodies(pmx_data: PmxModel, maya_pmx_data):
-    """Test dynamic guides: node-output drive + DG write-back to the bone."""
+    """Phase 3: dynamic JOINTS are driven by the node's solved outputs.
+
+    The node writes the joint-local pose (boneLocal = K * bodyLocal *
+    groupWorld * parentInverse) straight into the related joint's translate /
+    rotate — no guide transforms, no write-back constraints.  PHYSICS_BONE
+    (mode 2) is rotation-only: translate is NOT driven.
+    """
     dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
     if not dyn:
         print("SKIP: model has no dynamic rigid bodies")
@@ -436,34 +495,154 @@ def test_dynamic_bodies(pmx_data: PmxModel, maya_pmx_data):
     node = binding.node
 
     checked = 0
-    for rb_idx, guide in _iter_guides(maya_pmx_data):
-        mode = cmds.getAttr(f"{guide}.pmxPhysicsMode")
+    for rb_idx, joint in _iter_bodies(maya_pmx_data):
+        mode = cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyPhysicsMode")
         if mode not in (1, 2):
             continue
-        rb = pmx_data.rigid_bodies[rb_idx]
-        # Guide transform driven by the node's solved pose (rotate may go
+        # Joint transform driven by the node's solved pose (rotate may go
         # through Maya's auto-inserted unitConversion).
-        assert_true(
-            _is_driven_by(f"{node}.outTranslate[{rb_idx}].outTranslateValue",
-                          f"{guide}.translate"),
-            f"Dynamic body {guide} translate not driven by node output",
-        )
-        assert_true(
-            _is_driven_by(f"{node}.outRotate[{rb_idx}].outRotateValue",
-                          f"{guide}.rotate"),
-            f"Dynamic body {guide} rotate not driven by node output",
-        )
-        # DG write-back to the related bone.
-        if rb.related_bone_index >= 0:
-            con_type = "parentConstraint" if mode == 1 else "orientConstraint"
-            cons = cmds.listConnections(guide, type=con_type) or []
+        if mode == 1:
             assert_true(
-                bool(cons),
-                f"Dynamic body {guide} (mode {mode}) has no {con_type} write-back",
+                _is_driven_by(
+                    f"{node}.outTranslate[{rb_idx}].outTranslateValue",
+                    f"{joint}.translate",
+                ),
+                f"Dynamic body {rb_idx} joint {joint} translate not driven by node output",
+            )
+        assert_true(
+            _is_driven_by(f"{node}.outRotate[{rb_idx}].outRotateValue", f"{joint}.rotate"),
+            f"Dynamic body {rb_idx} joint {joint} rotate not driven by node output",
+        )
+        # No old-style write-back constraint should exist.
+        cons = (
+            cmds.listConnections(joint, type="parentConstraint")
+            or cmds.listConnections(joint, type="orientConstraint")
+            or []
+        )
+        assert_true(
+            not cons,
+            f"Dynamic body {rb_idx} still has a write-back constraint: {cons}",
+        )
+        checked += 1
+    assert_true(checked > 0, "No dynamic bodies found to check")
+    print(f"PASS: {checked} dynamic joints driven by node outputs (no constraints)")
+    return True
+
+
+def test_write_back_no_dg_cycle(pmx_data: PmxModel, maya_pmx_data):
+    """Phase 3 CYCLE FIX: the write-back parent inverse comes from the parent BODY.
+
+    The write-back used to read ``joint.parentInverseMatrix`` from the DG.
+    For a body whose parent JOINT is also node-driven (the whole skirt/hair/
+    cape chains — 86% of dynamic bodies on Tololo) that created a DG feedback
+    cycle (parentJoint.worldMatrix <- node.outRotate <- node.compute <- ...
+    <- parentJoint.parentInverseMatrix) that made the simulation explode
+    during animation.  The node now derives the parent inverse from the PARENT
+    BODY's solved Bullet transform: every dynamic body whose parent bone has a
+    rigid body must have ``bodies[i].bodyParentBodyIndex`` set and
+    ``bodyParentJointOffset[i]`` baked, and its ``bodyParentInverseMatrix[i]``
+    must NOT be connected to the DG (that is the cycle path — kept only for
+    bodies whose parent bone has no body).  ``bodyParentJointOffset[i]`` may
+    legitimately be identity (a collider whose rest pose equals its parent
+    joint's rest), so the baked-ness signal is the element + the driven
+    write-back connection.
+    """
+    dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
+    if not dyn:
+        print("SKIP: model has no dynamic rigid bodies")
+        return True
+    binding = _get_binding(maya_pmx_data)
+    assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
+
+    # PMX bone index -> rigid body index (for parent-chain lookup).
+    body_of_bone = {}
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.related_bone_index >= 0:
+            body_of_bone[rb.related_bone_index] = rb_idx
+    dyn_bone = {
+        rb.related_bone_index
+        for rb in pmx_data.rigid_bodies
+        if rb.related_bone_index >= 0 and rb.physics_mode.value in (1, 2)
+    }
+
+    checked = 0
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.physics_mode.value not in (1, 2):
+            continue
+        bone = rb.related_bone_index
+        if bone < 0:
+            continue
+        parent_bone = pmx_data.bones[bone].parentIndex
+        parent_rb = body_of_bone.get(parent_bone, -1)
+        pbi = int(cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex"))
+
+        if parent_rb >= 0:
+            # Parent bone has a body -> body-based parent inverse (no DG).
+            assert_eq(
+                pbi,
+                parent_rb,
+                f"body {rb_idx} bodyParentBodyIndex {pbi} != parent body {parent_rb}",
+            )
+            # The whole write-back block for this body must have succeeded —
+            # the baked M_parent offset element exists AND the body is driven
+            # (outRotate connected).  M_parent may legitimately be identity
+            # (a collider whose rest pose equals its parent joint's rest), so
+            # the baked-ness signal is the element + the driven connection.
+            off = cmds.getAttr(f"{node}.bodyParentJointOffset[{rb_idx}]")
+            assert_true(
+                off is not None,
+                f"body {rb_idx} bodyParentJointOffset not baked (missing element)",
+            )
+            driven_dests = (
+                cmds.listConnections(
+                    f"{node}.outRotate[{rb_idx}].outRotateValue", destination=True
+                )
+                or []
+            )
+            assert_true(
+                bool(driven_dests),
+                f"body {rb_idx} with parent body is not driven — the write-back "
+                "block failed (no outRotate connection)",
+            )
+            # THE CYCLE PATH MUST NOT BE CONNECTED for these bodies.
+            conns = (
+                cmds.listConnections(
+                    f"{node}.bodyParentInverseMatrix[{rb_idx}]", source=True
+                )
+                or []
+            )
+            assert_true(
+                not conns,
+                f"body {rb_idx} still has bodyParentInverseMatrix connected "
+                f"(DG cycle path): {conns}",
+            )
+        else:
+            # Parent bone has no body -> the DG parent-inverse fallback is
+            # only safe when no ancestor bone is node-driven.
+            dyn_anc = False
+            a = parent_bone
+            seen = set()
+            while a >= 0 and a not in seen and a < len(pmx_data.bones):
+                seen.add(a)
+                if a in dyn_bone:
+                    dyn_anc = True
+                    break
+                a = pmx_data.bones[a].parentIndex
+            assert_true(
+                not dyn_anc,
+                f"body {rb_idx}: parent bone has no body but a DYNAMIC ancestor "
+                "— DG parentInverseMatrix fallback would create a cycle",
+            )
+            assert_eq(
+                pbi,
+                -1,
+                f"body {rb_idx} bodyParentBodyIndex {pbi} should be -1 "
+                "(no parent body)",
             )
         checked += 1
     assert_true(checked > 0, "No dynamic bodies found to check")
-    print(f"PASS: {checked} dynamic bodies driven by node outputs + DG write-back")
+    print(f"PASS: {checked} dynamic bodies use body-based parent inverse (no DG cycle)")
     return True
 
 
@@ -501,7 +680,13 @@ def test_physics_joints(pmx_data: PmxModel, maya_pmx_data):
 
 
 def test_kinematic_anchors(pmx_data: PmxModel, maya_pmx_data):
-    """Test that FOLLOW_BONE guides feed the node's kinematic anchors."""
+    """Phase 3: kinematic anchors are fed by the JOINTS + a baked offset.
+
+    ``anchorWorldMatrix[k]`` comes from the related joint's ``worldMatrix[0]``,
+    ``anchorParentInverseMatrix[k]`` from the physics group's
+    ``worldInverseMatrix[0]`` (so the anchor is in the group's local space),
+    and ``anchorOffset[k]`` holds the baked body<->bone rest offset.
+    """
     fb = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value == 0]
     if not fb:
         print("SKIP: model has no FOLLOW_BONE rigid bodies")
@@ -513,19 +698,48 @@ def test_kinematic_anchors(pmx_data: PmxModel, maya_pmx_data):
     assert_eq(n_anchors, len(fb), f"anchorWorldMatrix size {n_anchors} != {len(fb)}")
     n_pinv = cmds.getAttr(f"{node}.anchorParentInverseMatrix", size=True)
     assert_eq(n_pinv, len(fb), f"anchorParentInverseMatrix size {n_pinv} != {len(fb)}")
-    # Every FOLLOW_BONE guide must be connected to an anchor slot.
+    n_off = cmds.getAttr(f"{node}.anchorOffset", size=True)
+    assert_eq(n_off, len(fb), f"anchorOffset size {n_off} != {len(fb)}")
+    group = _find_physics_group(maya_pmx_data)
+    assert_true(group is not None, "Physics group not found")
+    group_path = group.fullPathName()
+
     connected = 0
-    for rb_idx, guide in _iter_guides(maya_pmx_data):
+    kin_idx = 0
+    for rb_idx, joint in _iter_bodies(maya_pmx_data):
         if pmx_data.rigid_bodies[rb_idx].physics_mode.value != 0:
             continue
-        srcs = cmds.listConnections(f"{node}.anchorWorldMatrix", source=True) or []
-        assert_true(
-            any(f"{guide}.worldMatrix[0]" == f"{s}.worldMatrix[0]" for s in srcs),
-            f"FOLLOW_BONE guide {guide} not connected to an anchorWorldMatrix",
+        # anchor world = the joint's world matrix.
+        srcs = (
+            cmds.listConnections(f"{node}.anchorWorldMatrix[{kin_idx}]", source=True)
+            or []
         )
+        assert_true(
+            any(f"{joint}.worldMatrix[0]" == f"{s}.worldMatrix[0]" for s in srcs),
+            f"FOLLOW_BONE body {rb_idx} joint {joint} not feeding anchorWorldMatrix[{kin_idx}]",
+        )
+        # anchor parent inverse = the PHYSICS GROUP's world inverse (so the
+        # anchor stays in the group's local space = the Bullet world frame).
+        pinv_srcs = (
+            cmds.listConnections(
+                f"{node}.anchorParentInverseMatrix[{kin_idx}]", source=True
+            )
+            or []
+        )
+        pinv_names = set()
+        for s in pinv_srcs:
+            sname = s.split(".")[0]
+            listed = cmds.ls(sname)
+            pinv_names.add(listed[0] if listed else sname)
+        group_short = cmds.ls(group_path)[0] if cmds.ls(group_path) else group_path
+        assert_true(
+            group_short in pinv_names,
+            f"FOLLOW_BONE body {rb_idx} anchorParentInverse not fed by group world inverse",
+        )
+        kin_idx += 1
         connected += 1
-    assert_eq(connected, len(fb), "not all FOLLOW_BONE guides anchored")
-    print(f"PASS: {connected} kinematic anchors fed by FOLLOW_BONE guides")
+    assert_eq(connected, len(fb), "not all FOLLOW_BONE bodies anchored")
+    print(f"PASS: {connected} kinematic anchors fed by joints (+ group inverse + offset)")
     return True
 
 
@@ -535,11 +749,16 @@ def test_kinematic_anchors(pmx_data: PmxModel, maya_pmx_data):
 
 
 def test_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
-    """BEHAVIOURAL: stepping time MUST move at least one dynamic body.
+    """BEHAVIOURAL: driving a kinematic bone MUST move dynamic joints.
 
-    A frozen solver leaves EVERY dynamic body at rest, so this detects it.
-    (Some bodies are rigid chains that legitimately hold still — e.g. a rigid
-    cape — so we scan a set of candidates and require at least one to move.)
+    Phase 3: the node writes the solved pose straight into the related joints,
+    so a dynamic body's JOINT (and the node's solved output) is the observable.
+    We swing the model's ROOT bone (the kinematic anchors track it) and assert
+    the node's solved output for at least one dynamic body changed beyond the
+    settle noise — "the sim reacts to the skeleton" signal.  A frozen solver
+    leaves every dynamic output at rest.  (The old write-back feedback cycle
+    made joints move by EXPLODING; a stable sim needs the bone drive to move
+    them.)
     """
     dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
     if not dyn:
@@ -547,75 +766,62 @@ def test_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
         return True
     binding = _get_binding(maya_pmx_data)
     assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
 
     candidates = [
-        (rb_idx, guide)
-        for rb_idx, guide in _iter_guides(maya_pmx_data)
+        (rb_idx, joint)
+        for rb_idx, joint in _iter_bodies(maya_pmx_data)
         if pmx_data.rigid_bodies[rb_idx].physics_mode.value in (1, 2)
     ]
     if not candidates:
-        print("SKIP: no dynamic body guides")
+        print("SKIP: no dynamic body joints")
         return True
+
+    def _out_rot(rb_idx):
+        return cmds.getAttr(f"{node}.outRotate[{rb_idx}].outRotateValue")[0]
 
     cmds.currentTime(1)
     binding.step()
-    starts = [
-        (rb_idx, guide, cmds.xform(guide, q=True, ws=True, translation=True))
-        for rb_idx, guide in candidates
-    ]
+    rest = {rb_idx: _out_rot(rb_idx) for rb_idx, _ in candidates}
 
     moved = None
-    for f in (5, 10, 15, 20, 25, 30):
+    for f in (2, 3, 4, 5, 6, 8, 10):
+        _swing_root(maya_pmx_data, f)
         cmds.currentTime(f)
         binding.step()
-        for rb_idx, guide, p0 in starts:
-            p = cmds.xform(guide, q=True, ws=True, translation=True)
-            if max(abs(p[i] - p0[i]) for i in range(3)) > 0.01:
-                moved = guide
+        for rb_idx, joint in candidates:
+            r = _out_rot(rb_idx)
+            if max(abs(r[i] - rest[rb_idx][i]) for i in range(3)) > 0.05:
+                moved = joint
                 break
         if moved:
             break
 
     assert_true(
         moved is not None,
-        "No dynamic body moved while stepping time — simulation frozen",
+        "No dynamic body output changed after swinging the root bone — "
+        "simulation frozen / write-back broken",
     )
-    print(f"PASS: dynamic body {moved} moved during playback")
+    print(f"PASS: dynamic body joint {moved} responded to the bone drive")
 
-    # Rewind: dt < 0 makes the node rebuild the Bullet world at rest, which
-    # restores the scene for the following suites.
+    # Restore the scene for the following suites.
+    _restore_root(maya_pmx_data)
     cmds.currentTime(1)
     binding.step()
+    binding.write_back()
     return True
 
 
-def _world_quat(name):
-    """World-space quaternion of a transform (unambiguous vs Euler readback)."""
-    m = cmds.xform(name, q=True, ws=True, matrix=True)
-    mt = om.MTransformationMatrix(om.MMatrix(m))
-    return mt.rotation(asQuaternion=True)
-
-
-def _quat_angle_deg(a, b):
-    """Rotation angle (degrees) between two unit quaternions.
-
-    ``MQuaternion`` has no ``angleTo`` in API 2.0, so compute it from the
-    4-D dot product; ``abs`` handles the q/-q double-cover of rotations.
-    """
-    d = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
-    d = min(1.0, max(-1.0, abs(d)))
-    return 2.0 * math.degrees(math.acos(d))
-
-
 def test_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
-    """BEHAVIOURAL: a dynamic body's related bone follows the solved pose.
+    """BEHAVIOURAL: the node's solved pose reaches the related JOINTS.
 
-    PHYSICS (mode 1) uses a parentConstraint — translation and/or rotation.
-    PHYSICS_BONE (mode 2) uses an orientConstraint — rotation.  We step the
-    sim, pick the dynamic body that moved the MOST, and assert its bone
-    followed.  For mode 1 a significant ROTATION also counts (pivot-anchored
-    bodies like ties/cloth swing around their pivot with little translation).
-    This is the "mesh binding" the user reported as lost when the solver froze.
+    Phase 3: ``outTranslate``/``outRotate`` connect STRAIGHT into the joint, so
+    a dynamic body's JOINT is the write-back target (no guide, no constraint).
+    We swing the ROOT bone (the kinematic anchors track it), step the sim, and
+    assert the most-moved dynamic joint's LOCAL pose changed from its rest —
+    the node's output actually moved the BONE (its local rotate/translate
+    changed, not just its world following the parent).  This is the "mesh
+    binding" signal: if the solver froze, no dynamic joint would move.
     """
     dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
     if not dyn:
@@ -627,8 +833,8 @@ def test_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
     # Scan ALL dynamic bodies with a related bone; the most-moved one is the
     # strongest write-back signal (rigid chains legitimately hold still).
     candidates = [
-        (rb_idx, guide, pmx_data.rigid_bodies[rb_idx])
-        for rb_idx, guide in _iter_guides(maya_pmx_data)
+        (rb_idx, joint, pmx_data.rigid_bodies[rb_idx])
+        for rb_idx, joint in _iter_bodies(maya_pmx_data)
         if pmx_data.rigid_bodies[rb_idx].physics_mode.value in (1, 2)
         and pmx_data.rigid_bodies[rb_idx].related_bone_index >= 0
     ]
@@ -636,71 +842,220 @@ def test_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
         print("SKIP: no dynamic body with a related bone")
         return True
 
-    # Step the sim, then pick the body that moved the most.
+    def _local(rb_idx, joint):
+        """(rotate, translate) in degrees/units — the joint's LOCAL pose."""
+        return (
+            cmds.getAttr(f"{joint}.rotate")[0],
+            cmds.getAttr(f"{joint}.translate")[0],
+        )
+
     cmds.currentTime(1)
     binding.step()
     starts = [
-        (rb_idx, guide, rb, cmds.xform(guide, q=True, ws=True, translation=True))
-        for rb_idx, guide, rb in candidates
+        (rb_idx, joint, rb, _local(rb_idx, joint))
+        for rb_idx, joint, rb in candidates
     ]
+
+    # Swing the root so the dynamic chains genuinely move.
     for f in (5, 10, 15, 20, 25, 30):
+        _swing_root(maya_pmx_data, f)
         cmds.currentTime(f)
         binding.step()
     binding.write_back()
 
-    def _displacement(s):
-        p = cmds.xform(s[1], q=True, ws=True, translation=True)
-        return max(abs(p[i] - s[3][i]) for i in range(3))
+    def _local_disp(s):
+        rot, tr = _local(s[0], s[1])
+        dR = max(abs(rot[i] - s[3][0][i]) for i in range(3))
+        dT = max(abs(tr[i] - s[3][1][i]) for i in range(3))
+        return dR, dT
 
-    best = max(starts, key=_displacement)
-    rb_idx, guide, rb, _p0 = best
+    best = max(starts, key=lambda s: max(_local_disp(s)))
+    rb_idx, joint, rb, _p0 = best
+    dR, dT = _local_disp(best)
     mode = rb.physics_mode.value
-    jpath = _find_joint_by_bone_index(maya_pmx_data, rb.related_bone_index)
-    assert_true(jpath is not None, f"No joint for bone {rb.related_bone_index}")
 
-    t0 = cmds.xform(jpath, q=True, ws=True, translation=True)
-    q0 = _world_quat(jpath)
-    for f in (10, 20, 30):
-        cmds.currentTime(f)
-        binding.step()
-    binding.write_back()
-    t1 = cmds.xform(jpath, q=True, ws=True, translation=True)
-    q1 = _world_quat(jpath)
-
-    dT = max(abs(t1[i] - t0[i]) for i in range(3))
-    dR = _quat_angle_deg(q0, q1)
-    ok = dT > 0.005 if mode == 1 else dR > 0.005
-    if mode == 1 and not ok:
-        # pivot-anchored bodies (ties, cloth) swing: rotation is the signal
-        ok = dR > 0.5
+    # The driven joint's LOCAL pose must actually change (rotation for chains,
+    # translation for mode-1 bodies whose body drifts from its parent).
+    ok = dR > 0.05 or (mode == 1 and dT > 0.005)
     assert_true(
         ok,
-        f"Bone {jpath} did not follow dynamic body {guide} "
-        f"(mode {mode}, dT={dT:.4f}, dR={dR:.4f}) — write-back broken",
+        f"Dynamic joint {joint} (body {rb_idx}, mode {mode}) local pose did "
+        f"not change (dR={dR:.3f}, dT={dT:.4f}) — write-back broken",
     )
-    print(f"PASS: bone {jpath} follows dynamic body {guide} (mode {mode}, dT={dT:.3f}, dR={dR:.3f})")
+    print(
+        f"PASS: dynamic joint {joint} driven by solver "
+        f"(mode {mode}, dR={dR:.3f}, dT={dT:.4f})"
+    )
 
-    # Rewind to restore the scene.
+    # Restore the scene for the following suites.
+    _restore_root(maya_pmx_data)
     cmds.currentTime(1)
     binding.step()
     binding.write_back()
     return True
 
 
-# ---------------------------------------------------------------------------
-# Test registry and runner
-# ---------------------------------------------------------------------------
+def test_config_edit_rebuilds_node(pmx_data: PmxModel, maya_pmx_data):
+    """PHASE 4: editing a body's mass mid-sim rebuilds the Bullet world in place.
+
+    Mass (and damping, limits, collider size) is baked into the Bullet
+    construction info at build time, so WITHOUT the auto-rebuild a
+    ``bodies[i].bodyMass`` edit would have NO effect on the running sim.  The
+    node hashes its config inputs every evaluation and rebuilds
+    (destroy -> re-read -> buildWorld) when they change — keeping the dynamic
+    chains glued to the CURRENT skeleton pose (not a rewind teleport to rest).
+
+    A 0-mass dynamic body becomes STATIC in Bullet: it stops moving entirely.
+    That is the deterministic proof the rebuild took effect.  We also assert
+    another dynamic body KEEPS moving (the rebuild did not freeze the world)
+    and that the edited body did not jump back to its rest pose.
+    """
+    dyn = [rb for rb in pmx_data.rigid_bodies if rb.physics_mode.value in (1, 2)]
+    if not dyn:
+        print("SKIP: model has no dynamic rigid bodies")
+        return True
+    binding = _get_binding(maya_pmx_data)
+    assert_true(binding is not None and binding.node, "No physics binding/node")
+    node = binding.node
+
+    guides = [
+        (rb_idx, joint)
+        for rb_idx, joint in _iter_bodies(maya_pmx_data)
+        if pmx_data.rigid_bodies[rb_idx].physics_mode.value in (1, 2)
+    ]
+    if not guides:
+        print("SKIP: no dynamic body joints")
+        return True
+
+    # Swing the root bone so the dynamic chains genuinely move (a stable sim
+    # does not move them on its own).
+    cmds.currentTime(1)
+    _swing_root(maya_pmx_data, 1)
+    binding.step()
+    starts = {
+        rb_idx: cmds.xform(guide, q=True, ws=True, translation=True)
+        for rb_idx, guide in guides
+    }
+    moved = None
+    for f in (5, 10, 15, 20, 25, 30):
+        _swing_root(maya_pmx_data, f)
+        cmds.currentTime(f)
+        binding.step()
+        for rb_idx, guide in guides:
+            p = cmds.xform(guide, q=True, ws=True, translation=True)
+            p0 = starts[rb_idx]
+            if max(abs(p[i] - p0[i]) for i in range(3)) > 0.01:
+                moved = (rb_idx, guide)
+                break
+        if moved:
+            break
+    assert_true(
+        moved is not None,
+        "No dynamic body moved while swinging the root — cannot test the rebuild",
+    )
+    assert moved is not None  # mypy: assert_true is not a type guard
+
+    # Prefer a body that has a reset anchor: after the rebuild it must stay
+    # glued to the CURRENT skeleton pose (the "no rewind" part of the test).
+    anchored = [
+        g
+        for g in guides
+        if cmds.getAttr(f"{node}.bodies[{g[0]}].bodyResetAnchorIndex") >= 0
+    ]
+    if anchored:
+        moved = anchored[0]
+    rb_idx, guide = moved
+    p_before = cmds.xform(guide, q=True, ws=True, translation=True)
+    orig_mass = cmds.getAttr(f"{node}.bodies[{rb_idx}].bodyMass")
+
+    # Edit the mass -> the node must rebuild on the next evaluation.
+    cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyMass", 0.0)
+    binding.step()
+
+    # No rewind: an anchored body stays at the CURRENT frame's pose instead of
+    # being teleported back to its PMX rest pose (which a swung chain can be
+    # several units away from).
+    p_after = cmds.xform(guide, q=True, ws=True, translation=True)
+    glue_err = max(abs(p_after[i] - p_before[i]) for i in range(3))
+    assert_true(
+        glue_err < 3.0,
+        f"Config rebuild teleported body {guide} away from the current pose "
+        f"(moved {glue_err:.3f}) — the in-place rebuild reset it like a rewind",
+    )
+
+    # The mass edit took effect: mass 0 = static, so THIS body must not move
+    # over the next several frames (before the edit it was moving).
+    pos = cmds.xform(guide, q=True, ws=True, translation=True)
+    max_drift = 0.0
+    for f in (35, 40, 45, 50, 55, 60):
+        _swing_root(maya_pmx_data, f)
+        cmds.currentTime(f)
+        binding.step()
+        p = cmds.xform(guide, q=True, ws=True, translation=True)
+        max_drift = max(max_drift, max(abs(p[i] - pos[i]) for i in range(3)))
+    assert_true(
+        max_drift < 0.01,
+        f"Mass-0 body {guide} still moved {max_drift:.4f} — mass edit did not "
+        "take effect (no auto-rebuild)",
+    )
+
+    # The rebuild did not freeze the world: at least one OTHER dynamic body
+    # still moves over the following frames (the root keeps swinging).
+    cmds.currentTime(60)
+    _swing_root(maya_pmx_data, 60)
+    binding.step()
+    others_start = {
+        rb2: cmds.xform(g2, q=True, ws=True, translation=True)
+        for rb2, g2 in guides
+        if rb2 != rb_idx
+    }
+    other_moved = False
+    for f in (65, 70, 75, 80, 85, 90):
+        _swing_root(maya_pmx_data, f)
+        cmds.currentTime(f)
+        binding.step()
+        for rb2, g2 in guides:
+            if rb2 == rb_idx:
+                continue
+            p = cmds.xform(g2, q=True, ws=True, translation=True)
+            p0 = others_start[rb2]
+            if max(abs(p[i] - p0[i]) for i in range(3)) > 0.01:
+                other_moved = True
+                break
+        if other_moved:
+            break
+    assert_true(
+        other_moved,
+        "No OTHER dynamic body moved after the config rebuild — the rebuild "
+        "froze the simulation",
+    )
+
+    print(
+        f"PASS: bodyMass edit rebuilt node in place "
+        f"(glue {glue_err:.3f}, static drift {max_drift:.4f}, sim alive)"
+    )
+
+    # Restore the scene for the following suites: the original mass (rebuilds
+    # the body back to dynamic) and the root bone rotation.
+    cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyMass", orig_mass)
+    _restore_root(maya_pmx_data)
+    cmds.currentTime(1)
+    binding.step()
+    binding.write_back()
+    return True
 
 _TESTS = [
     ("Rigid Body Physics Group", test_pmx_rigid_body_physics_group),
     ("Rigid Body Count", test_pmx_rigid_body_count),
     ("Rigid Body Attributes", test_pmx_rigid_body_attributes),
-    ("Rigid Body Transform", test_pmx_rigid_body_transform),
-    ("Follow-Bone Tracks Joint", test_follow_bone_tracks_joint_rotation),
-    ("Rigid Body Guides Node-Drawn", test_rigid_body_guides_are_node_drawn),
+    ("Rigid Body Transform", test_pmx_rigid_body_rest_transform),
+    ("Follow-Bone Anchor Tracks Joint", test_follow_bone_anchor_tracks_joint),
+    ("Rigid Body No Guide Transforms", test_rigid_body_no_guide_transforms),
     ("Dynamic Bodies", test_dynamic_bodies),
+    ("Write-Back No DG Cycle", test_write_back_no_dg_cycle),
     ("Physics Joints", test_physics_joints),
     ("Kinematic Anchors", test_kinematic_anchors),
     ("Simulation Steps (behavioral)", test_simulation_steps),
     ("Write-Back Moves Bone (behavioral)", test_write_back_moves_bone),
+    ("Config Edit Rebuilds Node (behavioral)", test_config_edit_rebuilds_node),
 ]

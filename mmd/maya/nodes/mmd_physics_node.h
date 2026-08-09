@@ -43,6 +43,7 @@
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -121,9 +122,33 @@ class MMDPhysicsNode : public MPxLocatorNode
     // one per kinematic body.  The node computes each anchor's LOCAL matrix as
     // world * parentInverse so the Bullet world runs in the physics group's
     // local space (mirrors mayaBullet's inWorldMatrix/inParentInverseMatrix).
+    // Phase 3: the anchor world is the JOINT's world matrix, the parent
+    // inverse is the PHYSICS GROUP's world inverse, and `anchorOffset` is a
+    // baked world-frame offset (bodyRestWorld * jointRestWorld^-1) so the
+    // collider tracks the joint with the PMX body<->bone offset preserved.
     static MObject aAnchorWorldMatrix;
     static MObject aAnchorParentInverseMatrix;
+    static MObject aAnchorOffset; // matrix array, kinematic-order indexed (Phase 3)
 
+    // Phase 3 direct write-back inputs — the node outputs the JOINT-LOCAL
+    // pose directly (boneLocal = K * bodyLocal * groupWorld * parentInverse),
+    // so Python connects outTranslate/outRotate straight into the joints and
+    // the guide transforms + write-back constraints are gone.
+    static MObject aGroupWorldMatrix; // physics group's world matrix (single)
+    static MObject
+        aBodyWriteBackOffset; // matrix array, body-indexed: K = jointRestWorld * bodyRestWorld^-1
+    static MObject
+        aBodyParentInverseMatrix; // matrix array, body-indexed: related joint's parentInverseMatrix
+                                  // (DG fallback, no-body parent only)
+    // Phase 3 cycle fix: the parent inverse for the write-back is derived from
+    // the PARENT BODY's solved Bullet transform instead of the DG
+    // (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1).  This removes
+    // the dependency on `joint.parentInverseMatrix` — which for a body whose
+    // parent JOINT is also node-driven created a DG feedback cycle that
+    // exploded the simulation.  M_parent = parentJointRestWorld *
+    // parentBodyRestWorld^-1 is baked by Python (the same constant for
+    // kinematic and dynamic parents).
+    static MObject aBodyParentJointOffset; // matrix array, body-indexed: M_parent baked constant
     // Per-body compound array: aBodies[i].
     static MObject aBodies;
     static MObject aBodyRestTranslate;  // float3 (degrees? no — translate units)
@@ -143,6 +168,11 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject
         aBodyNonCollisionGroup;    // long raw PMX non-collision mask (-1 = explicit bodyMask)
     static MObject aBodyKinematic; // bool — kinematic (anchor) vs dynamic
+    static MObject
+        aBodyPhysicsMode; // short — PMX physics mode 0/1/2 (FOLLOW_BONE/PHYSICS/PHYSICS_BONE)
+    static MObject aBodyParentBodyIndex; // short — rigid-body index of the related
+                                         // joint's parent joint's body (write-back parent-inverse
+                                         // source); -1 = none
     static MObject
         aBodyResetAnchorIndex; // long — index of the kinematic
                                // anchor whose delta drives this body's scrub-back reset; -1 = none
@@ -189,6 +219,15 @@ class MMDPhysicsNode : public MPxLocatorNode
         short groupId;
         long nonCollisionGroup;
         bool kinematic;
+        short physicsMode = 1; // PMX physics mode 0/1/2 (write-back mode)
+        // Write-back parent-inverse source (Phase 3 cycle fix): rigid-body
+        // index of this body's related joint's PARENT joint's body, or -1 if
+        // the parent bone has no body (the node then falls back to the DG
+        // bodyParentInverseMatrix input — safe, that parent is never
+        // node-driven).  The parent inverse is derived from the PARENT BODY's
+        // solved Bullet transform so the write-back never depends on a
+        // node-driven joint's DG matrix (which created a feedback cycle).
+        int parentBodyIndex = -1;
         // Scrub-back reset: index of the kinematic ANCHOR whose current pose
         // drives this body's reset (or -1), plus the constant offset
         // (anchorRest^-1 * bodyRest) captured at build time.
@@ -243,11 +282,20 @@ class MMDPhysicsNode : public MPxLocatorNode
 
     bool mWorldBuilt = false;
     double mLastTime = -1.0;
+    // Phase 4: FNV-1a hash of the config inputs (gravity/fps/bodies/joints/
+    // anchor counts) captured at build time.  When compute() sees a different
+    // signature the world is rebuilt in place — a body/joint/gravity edit takes
+    // effect immediately, without a rewind.
+    uint64_t mConfigSignature = 0;
 
     // Helpers
     bool readBodyData(MDataBlock& dataBlock);
     bool readJointData(MDataBlock& dataBlock);
     bool buildWorld(MDataBlock& dataBlock);
+    // Phase 4: hash of all config inputs (the values that define the Bullet
+    // world).  The anchor matrix VALUES are excluded — they change every frame
+    // — only the anchor COUNTS are part of the signature.
+    uint64_t computeConfigSignature(MDataBlock& dataBlock) const;
     void destroyWorld();
     // Refresh the kinematic anchor transforms from their inputs; returns true
     // if any anchor MOVED since the previous frame (used to step the sim when

@@ -232,18 +232,38 @@ flowchart LR
 `mmd/maya/nodes/mmd_physics_node.h/.cpp` — a plain `MPxNode` that owns a
 `btDiscreteDynamicsWorld`:
 
-- **Inputs**: `time`, `gravity`, `fps`; `anchorWorldMatrix` +
-  `anchorParentInverseMatrix` (matrix arrays, one per kinematic body);
-  `bodies` compound array (rest pose, mass, damping, friction, restitution,
-  collider type/size, kinematic flag, raw `bodyGroupId` + `bodyNonCollisionGroup`
-  — the node computes each body's effective collision mask itself in
-  `buildWorld` via `mmd_physics_masks.h`); `joints` compound array (body A/B,
-  type, frame, limits, springs).
+- **Inputs**: `time`, `gravity`, `fps`; `anchorWorldMatrix` + `anchorParentInverseMatrix`
+  (matrix arrays, one per kinematic body — Phase 3 feeds the JOINT's world
+  matrix + the physics group's world INVERSE, plus a baked `anchorOffset[k]`
+  body<->bone rest offset); `bodies` compound array (rest pose, mass, damping,
+  friction, restitution, collider type/size, kinematic flag, `bodyPhysicsMode`
+  (0/1/2), raw `bodyGroupId` + `bodyNonCollisionGroup` — the node computes
+  each body's effective collision mask itself in `buildWorld` via
+  `mmd_physics_masks.h`); `joints` compound array (body A/B, type, frame,
+  limits, springs); Phase 3 direct write-back: `groupWorldMatrix` (the physics
+  group's world matrix), `bodyWriteBackOffset` (dense body-indexed baked
+  world offset K = jointRestWorld * bodyRestWorld^-1), `bodyParentJointOffset`
+  (dense body-indexed baked M_parent = parentJointRestWorld *
+  parentBodyRestWorld^-1) plus the per-body child `bodyParentBodyIndex` (the
+  parent joint's body index — the node derives the parent inverse from that
+  body's solved Bullet transform; -1 = no parent body → DG
+  `bodyParentInverseMatrix` fallback).
 - **compute()**: on first evaluation reads bodies/joints and builds the world
   (`buildWorld`); on time change updates the kinematic anchors (`local =
   world * parentInverse`), steps `stepSimulation(dt, 8, 1/60)`, and writes each
   dynamic body's solved local translate/rotate to the outputs. Scrubbing
   backwards (`dt < 0`) rebuilds the world (deterministic rewind).
+- **Config auto-rebuild (Phase 4)**: every evaluation hashes the config inputs
+  (gravity, fps, every bodies/joints value + count, anchor counts) with FNV-1a
+  (`computeConfigSignature`).  If the hash differs from the one captured at
+  build time, the node destroys + re-reads + rebuilds the world in place —
+  mass/damping/limits/collider edits take effect immediately (they are baked
+  into the Bullet construction info, so without a rebuild an edit is a no-op),
+  and the dynamic chains stay glued to the CURRENT skeleton pose (no rewind
+  teleport to rest).  Every config input is wired with
+  `attributeAffects` → `outTranslate`/`outRotate` so the node re-evaluates
+  when they change, even while paused (the anchor matrix VALUES change every
+  frame and are excluded from the hash — only their counts matter).
 - **Cached Playback**: `getCacheSetup` calls
   `MNodeCacheDisablingInfoHelper::setUnsafeNode` so the node is **never cached**
   and is re-evaluated every frame. This is the single fix that makes a stateful
@@ -252,8 +272,11 @@ flowchart LR
 
 The node solves in the **physics group's local space** (anchors are converted
 with `world * parentInverse`), so the whole model can be placed anywhere and the
-simulation stays attached. Outputs are keyed by **body index** — kinematic
-bodies produce no output element.
+simulation stays attached.  Outputs are keyed by **body index** — kinematic
+bodies produce no output element.  Phase 3: the outputs are the **JOINT-LOCAL**
+pose (`boneLocal = K * bodyLocal * groupWorld * parentInverse`, see
+[Write-back to the skeleton](#write-back-to-the-skeleton)), so they connect
+straight into the joints.
 
 **Teardown order (crash fix):** `btCollisionWorld`'s destructor iterates its
 collision objects and destroys their broadphase proxies, so `destroyWorld()`
@@ -265,15 +288,17 @@ was a use-after-free that crashed Maya intermittently during scene teardown.
 
 ### Node graph per model
 
-| Node                                         | Type                              | Purpose                                                                 |
-| -------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------- |
-| `{model}_Physics`                            | transform group                   | Bullet world frame; parents the solver locator                          |
-| `{model}_PhysicsSolver`                      | `mmdPhysicsNode` (MPxLocatorNode) | Owns the Bullet world, steps every frame, DRAWS the guide visualization |
-| `{model}_Physics_RB{i}`                      | invisible transform               | DG write-back bridge (no mesh — the node draws it)                      |
-| `{model}_Physics_RB{i}_Jnt_parentConstraint` | DG constraint                     | FOLLOW_BONE: bone→guide; PHYSICS: guide→bone                            |
-| (PHYSICS_BONE)                               | `orientConstraint`                | guide→bone, rotation only                                               |
+| Node                    | Type                              | Purpose                                                                                                                |
+| ----------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `{model}_Physics`       | transform group                   | Bullet world frame; parents the solver locator                                                                         |
+| `{model}_PhysicsSolver` | `mmdPhysicsNode` (MPxLocatorNode) | Owns the Bullet world, steps every frame, DRAWS the colliders, writes the solved pose DIRECTLY into the related joints |
 
-### Guide visualization (Phase 1 — node-drawn)
+Phase 3: **no guide transforms and no write-back constraints exist** — the
+physics group contains ONLY the solver locator.  The node draws the colliders
+(wireframe box/sphere/capsule per body via its `MPxDrawOverride`) and drives the
+joints directly.
+
+### Guide visualization (Phase 1 — node-drawn; no scene guides since Phase 3)
 
 The `mmdPhysicsNode` is an **`MPxLocatorNode`** that draws its own rigid-body
 visualization through a C++ **`MPxDrawOverride`** (`mmd_physics_draw_override`):
@@ -282,31 +307,64 @@ wireframe box / sphere / capsule per body, colored by collision group from the
 draw geometry is pulled in `prepareForDraw()` from the node's **current solver
 state** — solved world poses when the Bullet world is built, rest poses before
 first evaluation — so the viewport always shows exactly what the simulation
-has.  No guide meshes or surface shaders are created in the scene: each
-`{model}_Physics_RB{i}` is a plain invisible transform that exists purely as
-the DG bridge (FOLLOW_BONE anchor source / dynamic write-back target).
+has.  Since Phase 3 there is no per-body scene object at all (no guide
+transforms, no meshes, no shaders): the colliders exist only inside the node.
 
 ### Write-back to the skeleton
 
-The guide transform is the **driver**; the bone is the **driven** object:
+Phase 3: the node writes the solved pose **directly into the related joints** —
+no guide transforms, no parentConstraint/orientConstraint.  The write-back
+exactly reproduces what `parentConstraint(maintainOffset)` maintained (verified
+empirically: `targetWorld = K * sourceWorld` with K constant in world space), so
+rest poses stay EXACT and the model can be moved freely:
 
-- `FOLLOW_BONE`: `parentConstraint(joint, guide, maintainOffset=True)` — the bone
-  drives the guide (and its collider).
-- `PHYSICS`: `parentConstraint(guide, joint, maintainOffset=True)` — the solved
-  guide drives the bone's full transform.
-- `PHYSICS_BONE`: `orientConstraint(guide, joint, maintainOffset=True)` — the
-  solved guide drives the bone's rotation only (pivoted at the bone).
+```
+boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
+```
 
-`maintainOffset` captures the guide↔bone offset at creation, so at rest (solved
-pose == rest pose) every bone stays exactly at its PMX position — verified
-0 mismatches across all 17 models (the earlier Euler bug displaced them).
+where `bodyLocal` is the solved body pose in the physics group's space (from
+Bullet), `B_parent` is the **parent body's** solved Bullet transform (the node
+owns every body), and `K = jointRestWorld * (bodyRestWorld)^-1` and
+`M_parent = parentJointRestWorld * (parentBodyRestWorld)^-1` are **baked
+world-frame offsets** (captured by Python at build; `bodyWriteBackOffset[i]`
+and `bodyParentJointOffset[i]`).  Because `parentJointWorld = M_parent *
+B_parent * groupWorld`, the `groupWorld` term cancels and the formula is EXACT
+at rest for both kinematic and dynamic parents.  Kinematic anchors use the
+mirror image: `anchorLocal = K_kin * jointWorld * groupWorldInverse` with
+`K_kin = (bodyRestWorld) * jointRestWorld^-1` (`anchorOffset[k]`).
+
+**Why the parent inverse comes from the parent BODY (cycle fix):** the original
+write-back read the related joint's `parentInverseMatrix` from the DG.  For a
+body whose parent JOINT is also node-driven (the whole skirt/hair/cape chains —
+86% of dynamic bodies on Tololo), `parentInverseMatrix` depends on the parent
+joint's `worldMatrix`, which depends on the node's own `outRotate` — a live DG
+feedback cycle (Maya allows the connection) that made the simulation explode
+during animation (up to 54-unit bone displacements).  The node now derives the
+parent inverse from the parent BODY's Bullet transform, so the write-back of
+every joint depends only on its own body and the parent body — never on a
+node-driven joint's DG matrix.  `bodyParentInverseMatrix` is kept ONLY as a
+fallback for bodies whose parent bone has no rigid body (that parent is never
+node-driven, so it cannot feed back).
+
+- `FOLLOW_BONE` (mode 0): `joint.worldMatrix[0]` feeds `anchorWorldMatrix[k]`
+  and `group.worldInverseMatrix[0]` feeds `anchorParentInverseMatrix[k]`; the
+  collider tracks the joint with the baked offset.
+- `PHYSICS` (mode 1): the node connects `outTranslate[i]` + `outRotate[i]`
+  straight into the joint's `translate`/`rotate` (full transform).
+- `PHYSICS_BONE` (mode 2): only `outRotate[i]` is connected (rotation-only,
+  the joint keeps its skeleton translation).
+
+At rest `bodyLocal = bodyRest`, `B_parent = parentBodyRest`, and
+`K * bodyRest * B_parent^-1 * M_parent^-1` telescopes to
+`jointRestWorld * parentJointRestWorld^-1` = the joint's rest local — verified 0
+mismatched bones across all 17 models.
 
 ### Headless stepping
 
 Interactive playback is pure DG (the node's output connections pull it each
 time step).  Headless/batch use calls `step_physics(node)` then
-`write_back_physics(bodies, constraints)` (propagate solved pose through the
-guides and constraints).  NOTE: `step_physics` demands the node's `outTranslate`
+`write_back_physics(node, driven_joints)` (re-evaluate the solver + the driven
+joints).  NOTE: `step_physics` demands the node's `outTranslate`
 plug (not a bare `dgeval(node)`), because `dgeval` on the locator shape does not
 reliably pull the solver outputs (verified during the Phase 1 locator
 conversion — the sim only advanced when a guide transform was read).
@@ -325,27 +383,35 @@ scene is the source of truth — discover physics state later with
    (`{model}_PhysicsSolver`) parented under it (its object space is the group's
    local space, i.e. the Bullet world frame); connect `time1.outTime → node.time`,
    set `gravity = (0, -9.8, 0)`, and `fps` from the scene's playback rate.
-2. For every PMX rigid body create an **invisible guide transform** at the PMX
-   rest pose (Z-flip + handedness), parented into the group, carrying
-   `pmxRigidBodyIndex` / `pmxGroupId` / `pmxPhysicsMode` metadata.  The
-   **`mmdPhysicsNode` draws the visible collider itself** (wireframe
-   box/sphere/capsule, group-colored) via its C++ draw override — no mesh
-   shapes and no surface shaders are created.  Bind the guide↔bone DG
-   constraint (see above).
+2. Compute each body's rest pose in the group's local space (PMX rest, Z-flip +
+   handedness) — **no guide transform is created** (Phase 3).  The node draws
+   the visible collider (wireframe box/sphere/capsule, group-colored) through
+   its C++ draw override.
 3. Populate `node.bodies[i]` for every body (indices = PMX rigid-body index).
-   Each element carries the **raw PMX** `bodyGroupId` + `bodyNonCollisionGroup`;
-   the node resolves effective masks itself (Phase 2 — the Python
-   `_compute_collision_masks` was deleted, its logic lives in the plugin).
-4. Connect each FOLLOW_BONE guide's `worldMatrix[0]` +
-   `parentInverseMatrix[0]` to `anchorWorldMatrix[k]` / `anchorParentInverseMatrix[k]`
-   in PMX kinematic order.
-5. Connect each dynamic guide's translate/rotate from
-   `node.outTranslate[i].outTranslateValue` / `node.outRotate[i].outRotateValue`.
+   Each element carries the **raw PMX** `bodyGroupId` + `bodyNonCollisionGroup`,
+   `bodyKinematic` + `bodyPhysicsMode`; the node resolves effective masks itself
+   (Phase 2 — the Python `_compute_collision_masks` was deleted, its logic lives
+   in the plugin).
+4. Feed the kinematic anchors from the JOINTS directly: `joint.worldMatrix[0]`
+   → `anchorWorldMatrix[k]`, `group.worldInverseMatrix[0]` →
+   `anchorParentInverseMatrix[k]`, and bake `anchorOffset[k]` (the world-frame
+   body<->bone rest offset) in PMX kinematic order.
+5. Direct write-back: connect `group.worldMatrix[0]` → `node.groupWorldMatrix`,
+   bake `bodyWriteBackOffset[i]` (dense, body-indexed — the world offset
+   K = jointRestWorld * bodyRestWorld^-1).  For each dynamic body whose parent
+   BONE has a rigid body, set `bodies[i].bodyParentBodyIndex` to that body's
+   index and bake `bodyParentJointOffset[i]` (M_parent — the parent inverse is
+   derived from the parent BODY's solved transform inside the node, which
+   removes the DG feedback cycle; see the write-back section).  Only bodies
+   whose parent bone has NO body keep the DG `joint.parentInverseMatrix[0]` →
+   `bodyParentInverseMatrix[i]` connection (that parent is never node-driven).
+   Finally connect `node.outTranslate[i]`/`node.outRotate[i]` → the joint's
+   `translate`/`rotate` (PHYSICS_BONE connects rotate only).
 6. Populate `node.joints[j]` from PMX joints (frame Z-flip + handedness;
    angular limits stay in **radians** — the node passes them to Bullet; angular
    springs likewise; linear limits in units).
-7. `caching=0` on all physics nodes (belt-and-suspenders on top of the native
-   cache opt-out).
+7. `caching=0` on the solver + the physics-driven joints (belt-and-suspenders
+   on top of the native cache opt-out).
 
 ### Collision filtering
 
@@ -363,44 +429,59 @@ longer pre-computes masks; it passes the raw PMX values through as attributes:
 
 ### Gravity / units
 
-Open item: MMD uses −9.8 in its own unit scale; the Bullet world runs in Maya
-units, so `-98` makes motion visible on the ~18-unit Tololo model. The exact
-MMD-matching factor is still to be pinned down. `fps` converts Maya frame
-deltas to seconds (`dt = (now - last) / fps`); the world is sub-stepped at
-1/60 s.
+MMD's physics engine uses exactly −9.8 (Bullet's default) in the model's own
+unit scale; `gravity = (0, -9.8, 0)` matches MMD exactly (a 10× −98 guess made
+every force 10× too strong and overloaded the rigid-weld constraints, so
+hair/skirt chains sagged).  `fps` converts Maya frame deltas to seconds
+(`dt = (now - last) / fps`); the world is sub-stepped at 1/60 s.
 
 ### Testing (behavioral, not just structural)
 
 `tests/integration/maya/test_pmx_rigid_body_integration.py` checks structure
-(node exists, body/joint counts, guides at rest, colors, anchors, write-back
-constraints) **and behavior**:
+(node exists, body/joint counts, no guide transforms, joints wired to anchors /
+outputs) **and behavior** (13 tests/model):
 
-- **Simulation Steps**: step `cmds.currentTime` over the playback range and
-  assert a dynamic body's solved position changes (> 1 cm).
-- **Write-Back Moves Bone**: after stepping, assert the dynamic body's related
-  bone moved (translation for PHYSICS, rotation for PHYSICS_BONE).
+- **Write-Back No DG Cycle**: every dynamic body whose parent bone has a rigid
+  body must have `bodies[i].bodyParentBodyIndex` set and
+  `bodyParentJointOffset[i]` baked, and its `bodyParentInverseMatrix[i]` must
+  NOT be connected to the DG (the cycle path); bodies with a no-body parent
+  must not have a dynamic ancestor.
+- **Simulation Steps**: swing the model's ROOT bone (the kinematic anchors
+  track it — the MMD behavior) and assert the node's solved output for at
+  least one dynamic body changed — "the sim reacts to the skeleton" signal.
+- **Write-Back Moves Bone**: after swinging the root, assert the most-moved
+  dynamic joint's LOCAL pose changed from rest — the node's output actually
+  moved the BONE.
+- **Config Edit Rebuilds Node (Phase 4)**: edit `bodies[i].bodyMass` mid-sim,
+  force a re-eval, and assert the body becomes STATIC (mass 0 → static in
+  Bullet — the deterministic proof the edit took effect and the world was
+  rebuilt), stays glued to the current pose (no rewind teleport), and another
+  dynamic body still moves (the rebuild did not freeze the world).
 
-This is what the old mayaBullet suite could not detect — a frozen solver passed
-every structural check.
+The behavioral tests swing the root bone because a **stable** sim does not move
+the chains on its own — the old (buggy) write-back passed them by exploding
+(moving joints tens of units); after the cycle fix the tests drive the skeleton
+exactly as MMD animation does.
 
 ---
 
 ## Key Source Files
 
-| File                                                                    | Purpose                                                                                                     |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                                             |
-| `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                                                 |
-| `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + palette + build functions (node + guides + anchors + outputs + write-back) |
-| `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                     |
-| `mmd/maya/nodes/mmd_physics_masks.h`                                    | Collision-mask resolver (`computeEffectiveMasks`: proximity + cloth-on-cloth corrections)                   |
-| `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                       |
-| `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                         |
-| `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                         |
-| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics build                                                               |
-| `mmd/maya/pmx_model_utils.py`                                           | Scene discovery: physics group / node / rigid bodies / constraints                                          |
-| `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                                                       |
-| `assets/models_database/GirlsFrontline/TololoDefault/rigid_bodies.json` | Real rigid-body test data                                                                                   |
+| File                                                                    | Purpose                                                                                                                         |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                                                                 |
+| `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                                                                     |
+| `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + build functions (node + bodies/joints arrays + direct joint wiring + baked write-back offsets) |
+| `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                                         |
+| `mmd/maya/nodes/mmd_physics_math.h`                                     | Maya-free math: Euler<->quat, row/column transpose, row-matrix multiply                                                         |
+| `mmd/maya/nodes/mmd_physics_masks.h`                                    | Collision-mask resolver (`computeEffectiveMasks`: proximity + cloth-on-cloth corrections)                                       |
+| `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                                           |
+| `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                                             |
+| `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                                             |
+| `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics build                                                                                   |
+| `mmd/maya/pmx_model_utils.py`                                           | Scene discovery: physics group / node / bodies (traced joints) / driven joints; bind-pose reset rewinds the solver              |
+| `tests/integration/maya/test_pmx_rigid_body_integration.py`             | Structural + behavioral physics tests                                                                                           |
+| `assets/models_database/GirlsFrontline/TololoDefault/rigid_bodies.json` | Real rigid-body test data                                                                                                       |
 
 ---
 

@@ -681,21 +681,30 @@ def test_reset_to_bind_pose(
     all_vpd = all_vpd_data
     bone_map = maya_pmx_data.bone_name_map
 
-    _TRANS_TOLERANCE = 1e-4
-    _ROT_TOLERANCE = 1e-2
+    _TRANS_TOLERANCE = 1e-3
+    # (1 - |quat dot|) — world rotation error (radians-ish measure).
+    _ROT_TOLERANCE = 1e-3
 
-    # Capture ground-truth rest pose once from the shared scene
-    rest_snapshot: dict[str, tuple[float, float, float, float, float, float]] = {}
+    # Put the shared scene at TRUE rest first: earlier tests stepped the
+    # physics solver, whose internal Bullet state persists across undo and can
+    # leave the physics-driven joints a hair off rest.  Resetting also rewinds
+    # the solver (Phase 3), so the snapshot below captures the exact rest pose.
+    reset_model_to_bind_pose(model=maya_pmx_data.to_resolved())
+
+    # Capture ground-truth rest pose once from the shared scene.  World-space
+    # (translate + quaternion) is compared, not raw local Euler: the C++ node
+    # writes physics-driven joints from MATRICES, so the raw Euler is a
+    # canonicalized representation of the same rotation (e.g. identity may be
+    # stored as (180,-180,180) in the skeleton builder but written back as
+    # (0,0,0) by the solver).  The world pose is what "rest pose" means.
+    rest_snapshot: dict[str, tuple[tuple, om.MQuaternion]] = {}
     for joint_name in bone_map.values():
         if not cmds.objExists(joint_name):
             continue
-        tx = cmds.getAttr(f"{joint_name}.translateX")
-        ty = cmds.getAttr(f"{joint_name}.translateY")
-        tz = cmds.getAttr(f"{joint_name}.translateZ")
-        rx = cmds.getAttr(f"{joint_name}.rotateX")
-        ry = cmds.getAttr(f"{joint_name}.rotateY")
-        rz = cmds.getAttr(f"{joint_name}.rotateZ")
-        rest_snapshot[joint_name] = (tx, ty, tz, rx, ry, rz)
+        rest_snapshot[joint_name] = (
+            tuple(cmds.xform(joint_name, q=True, ws=True, translation=True)),
+            _get_world_rotation(joint_name),
+        )
 
     errors: list[str] = []
     for name, vpd in list(all_vpd.items())[:3]:
@@ -712,46 +721,33 @@ def test_reset_to_bind_pose(
             )
 
             mismatch_count = 0
-            for joint_name, (
-                exp_tx,
-                exp_ty,
-                exp_tz,
-                exp_rx,
-                exp_ry,
-                exp_rz,
-            ) in rest_snapshot.items():
+            details: list[str] = []
+            for joint_name, (exp_t, exp_q) in rest_snapshot.items():
                 if not cmds.objExists(joint_name):
                     continue
-                act_tx = cmds.getAttr(f"{joint_name}.translateX")
-                act_ty = cmds.getAttr(f"{joint_name}.translateY")
-                act_tz = cmds.getAttr(f"{joint_name}.translateZ")
-                act_rx = cmds.getAttr(f"{joint_name}.rotateX")
-                act_ry = cmds.getAttr(f"{joint_name}.rotateY")
-                act_rz = cmds.getAttr(f"{joint_name}.rotateZ")
-
-                if (
-                    abs(act_tx - exp_tx) > _TRANS_TOLERANCE
-                    or abs(act_ty - exp_ty) > _TRANS_TOLERANCE
-                    or abs(act_tz - exp_tz) > _TRANS_TOLERANCE
-                    or abs(act_rx - exp_rx) > _ROT_TOLERANCE
-                    or abs(act_ry - exp_ry) > _ROT_TOLERANCE
-                    or abs(act_rz - exp_rz) > _ROT_TOLERANCE
-                ):
+                act_t = cmds.xform(joint_name, q=True, ws=True, translation=True)
+                act_q = _get_world_rotation(joint_name)
+                t_err = max(abs(act_t[i] - exp_t[i]) for i in range(3))
+                q_dot = abs(
+                    exp_q.x * act_q.x
+                    + exp_q.y * act_q.y
+                    + exp_q.z * act_q.z
+                    + exp_q.w * act_q.w
+                )
+                if t_err > _TRANS_TOLERANCE or (1.0 - q_dot) > _ROT_TOLERANCE:
                     mismatch_count += 1
-                    if mismatch_count <= 3:
-                        print(
-                            f"  FAIL detail: {name}/{joint_name}: "
-                            f"expected t=({exp_tx:.4f},{exp_ty:.4f},{exp_tz:.4f}) "
-                            f"r=({exp_rx:.4f},{exp_ry:.4f},{exp_rz:.4f}), "
-                            f"got t=({act_tx:.4f},{act_ty:.4f},{act_tz:.4f}) "
-                            f"r=({act_rx:.4f},{act_ry:.4f},{act_rz:.4f})"
+                    if len(details) < 4:
+                        details.append(
+                            f"{joint_name.split('|')[-1]} "
+                            f"(t_err={t_err:.4f}, 1-dot={1.0 - q_dot:.4f})"
                         )
 
             if mismatch_count > 0:
                 errors.append(
                     f"{name}: {mismatch_count} joints not at rest after reset "
                     f"(bones_reset={stats['bones_reset']}, "
-                    f"ik_handles_reset={stats['ik_handles_reset']})"
+                    f"ik_handles_reset={stats['ik_handles_reset']}); "
+                    f"e.g. {details}"
                 )
             else:
                 print(

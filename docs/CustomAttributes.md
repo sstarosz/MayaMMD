@@ -150,18 +150,22 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 
 ## Per-Rigid-Body Physics Attributes
 
-**Stored on:** Each mayaBullet rigid body transform under `{model}_Physics`
-(or parented under its joint for `FOLLOW_BONE` bodies).  
-**Added by:** `mmd/maya/pmx/rigid_body_builder.py:_create_rigid_body_guide()`
+**Phase 3:** per-body guide transforms no longer exist — each rigid body's data
+lives in the `mmdPhysicsNode`'s `bodies[i]` compound array (indexed by PMX rigid
+body index), and its related joint is discovered by tracing the node's
+`outRotate[i]`/`outTranslate[i]` write-back connections (dynamic, following any
+auto-inserted `unitConversion`) or `anchorWorldMatrix[k]` (kinematic) in
+`mmd/maya/pmx_model_utils.py`.
 
-| Long name            | Type   | Description                                 |
-| -------------------- | ------ | ------------------------------------------- |
-| `pmxRigidBodyIndex`  | long   | 0-based index into the PMX rigid body list  |
-| `pmxGroupId`         | long   | Collision group id (byte, 0–15)             |
-| `pmxPhysicsMode`     | long   | `0`=FOLLOW_BONE, `1`=PHYSICS, `2`=PHYSICS_BONE |
-
-The collider metadata can be reconstructed from the scene alone, which is what the discovery helpers in
-`mmd/maya/pmx_model_utils.py` use to pair bodies back to their `PMXRigidBody` records.
+The node's `bodies[i]` elements carry the PMX data directly
+(`bodyRestTranslate`, `bodyRestRotate`, `bodyMass`, `bodyGroupId`,
+`bodyNonCollisionGroup`, `bodyPhysicsMode`, `bodyKinematic`,
+`bodyParentBodyIndex`, …), so the physics state can be reconstructed from the
+scene alone.  The write-back parent inverse comes from the parent BODY's solved
+Bullet transform (`bodyParentBodyIndex` + the baked `bodyParentJointOffset[i]`
+matrix array) — this avoids the DG feedback cycle that the old
+`joint.parentInverseMatrix` dependency created when a parent joint was itself
+node-driven.
 
 ---
 

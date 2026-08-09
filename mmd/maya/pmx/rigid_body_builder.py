@@ -90,6 +90,25 @@ _PMX_TO_COLLIDER_TYPE: dict[ShapeType, int] = {
     ShapeType.CAPSULE: 3,
 }
 
+# Scalar (non-3double) body children set through the OpenMaya plug API for
+# speed (see _set_body_attributes).  The 3double children are set separately.
+_BODY_ATTR_NAMES = (
+    "bodyMass",
+    "bodyLinearDamping",
+    "bodyAngularDamping",
+    "bodyFriction",
+    "bodyRestitution",
+    "bodyColliderType",
+    "bodyRadius",
+    "bodyLength",
+    "bodyGroup",
+    "bodyGroupId",
+    "bodyNonCollisionGroup",
+    "bodyKinematic",
+    "bodyPhysicsMode",
+    "bodyResetAnchorIndex",
+)
+
 # Gravity — MMD's physics engine uses exactly -9.8 (Bullet's default) in the
 # model's own unit scale.  We must match that: using -98 (a 10x guess for the
 # "18-unit" Tololo model) made EVERY force 10x too strong — the huge PMX hair
@@ -229,16 +248,15 @@ def _create_physics_solver(name_registry, parent_group: Optional[str] = None) ->
     return node
 
 
-def _exclude_from_dg_cache(node: Optional[str], bodies, constraints) -> None:
+def _exclude_from_dg_cache(node: Optional[str], driven_joints) -> None:
     """Disable the DG value cache for the physics subgraph.
 
     The node already opts out of Cached Playback natively (``getCacheSetup``).
-    This additionally sets ``caching=0`` on every node so the classic DG cache
-    never reuses stale solver outputs either.
+    This additionally sets ``caching=0`` on the solver and the physics-driven
+    joints so the classic DG cache never reuses stale solver outputs either.
     """
     nodes: list[str] = [node] if node else []
-    nodes.extend(bodies.values())
-    nodes.extend(constraints.values())
+    nodes.extend(driven_joints.values())
     for n in nodes:
         if not n or not cmds.objExists(n):
             continue
@@ -248,29 +266,56 @@ def _exclude_from_dg_cache(node: Optional[str], bodies, constraints) -> None:
             pass
 
 
-def _create_rigid_body_guide(
-    rb_idx: int,
-    body,
-    group,
-    name_registry,
-    joint_names: dict[int, str],
-    bodies: Optional[dict[int, str]] = None,
-    constraints: Optional[dict[int, str]] = None,
-) -> Optional[dict]:
-    """Create one (invisible) guide transform for a PMX rigid body.
+# ---------------------------------------------------------------------------
+# Phase 3: no guide transforms exist.  The mmdPhysicsNode DRAWS the colliders
+# and writes the solved pose DIRECTLY into the related joints —
+#   boneLocal = K * bodyLocal * groupWorld * jointParentInverse
+# with K (a world-frame offset, jointRestWorld * bodyRestWorld^-1) baked here
+# at build.  This is exactly the transform that parentConstraint(maintainOffset)
+# used to maintain (targetWorld = K * sourceWorld — verified empirically), so
+# rest poses stay EXACT and the whole model can be moved freely.
+# ---------------------------------------------------------------------------
 
-    Returns a body spec dict (used to populate the node's ``bodies``
-    compound array) or None on failure.  The guide is placed at the PMX
-    rest pose (Z-flip + handedness-correct rotation) and parented under the
-    physics group; the node solves in the group's local space, so the
-    guide's LOCAL transform is the Bullet rest pose.
 
-    The guide is a plain transform — the ``mmdPhysicsNode`` DRAWS the visible
-    collider (wireframe box/sphere/capsule, group-colored) through its C++
-    draw override, so no mesh shape or shader is created in the scene.  The
-    transform exists purely as the DG bridge: FOLLOW_BONE guides feed the
-    node's kinematic anchors, dynamic guides receive the solved pose and drive
-    the bones via the write-back constraints.
+def _matrix_from_tr(t, r) -> om.MMatrix:
+    """4x4 ROW-vector matrix from translate + XYZ euler degrees (Maya)."""
+    mt = om.MTransformationMatrix()
+    mt.setTranslation(om.MVector(t[0], t[1], t[2]), om.MSpace.kTransform)
+    mt.setRotation(
+        om.MEulerRotation(
+            math.radians(r[0]),
+            math.radians(r[1]),
+            math.radians(r[2]),
+            om.MEulerRotation.kXYZ,
+        )
+    )
+    return mt.asMatrix()
+
+
+def _local_rest_in_group(world_t, world_r, group_world_rest):
+    """Group-local rest translate+rotate for a PMX body.
+
+    The guide transform used to be created at the PMX world pose and then
+    parented under the physics group; its local translate/rotate became the
+    Bullet rest pose.  Phase 3 computes the same local T/R directly from the
+    world pose and the group's world matrix (row-vector: local = world *
+    parentInverse), so no transform node is needed.
+    """
+    body_world = _matrix_from_tr(world_t, world_r)
+    local = body_world * group_world_rest.inverse()
+    mt = om.MTransformationMatrix(local)
+    t = mt.translation(om.MSpace.kTransform)
+    e = mt.rotation()
+    return (t.x, t.y, t.z), (math.degrees(e.x), math.degrees(e.y), math.degrees(e.z))
+
+
+def _make_body_spec(rb_idx: int, body, group_world_rest, joint_names) -> Optional[dict]:
+    """Compute a PMX rigid body's spec for the node's ``bodies`` array.
+
+    Phase 3: no guide transform is created.  The rest pose is the PMX rest
+    pose (Z-flip + handedness) in the PHYSICS GROUP's local space (the Bullet
+    world frame), and the related joint path is carried in the spec for the
+    direct write-back connections.
     """
     jn = body.related_bone_index
     jpath = joint_names.get(jn) if jn >= 0 else None
@@ -282,32 +327,9 @@ def _create_rigid_body_guide(
         world_r = mmd_euler_to_maya_degrees(
             body.shape_rotation.x, body.shape_rotation.y, body.shape_rotation.z
         )
+        local_t, local_r = _local_rest_in_group(world_t, world_r, group_world_rest)
 
-        guide_name = name_registry.get_physics_rigidbody_name(rb_idx)
-        guide = cmds.createNode("transform", name=guide_name)
-        cmds.xform(guide, ws=True, translation=world_t)
-        cmds.xform(guide, ws=True, rotation=world_r)
-        cmds.parent(guide, group, absolute=True)
-
-        # Rest local transform (relative to the physics group) — the
-        # Bullet world's initial pose for this body.
-        local_t = cmds.getAttr(f"{guide}.translate")[0]
-        local_r = cmds.getAttr(f"{guide}.rotate")[0]
-
-        # DG binding to the bone.
-        if jpath is not None:
-            if kinematic:
-                # Bone drives the guide (collider follows the bone).
-                con = cmds.parentConstraint(jpath, guide, maintainOffset=True)[0]
-            elif mode == PhysicsMode.PHYSICS_BONE:
-                # Guide (solver) drives bone rotation only.
-                con = cmds.orientConstraint(guide, jpath, maintainOffset=True)[0]
-            else:  # PHYSICS
-                # Guide (solver) drives the bone's full transform.
-                con = cmds.parentConstraint(guide, jpath, maintainOffset=True)[0]
-            if constraints is not None:
-                constraints[rb_idx] = con
-        else:
+        if jpath is None:
             log.warning(
                 "Body %d (mode %s) has no related joint (bone %d) — left "
                 "at rest under the physics group",
@@ -315,19 +337,6 @@ def _create_rigid_body_guide(
                 mode.name,
                 jn,
             )
-
-        # Self-describing PMX metadata (docs/CustomAttributes.md pattern).
-        for attr, value in (
-            ("pmxRigidBodyIndex", rb_idx),
-            ("pmxGroupId", body.group_id),
-            ("pmxPhysicsMode", body.physics_mode.value),
-        ):
-            if not cmds.attributeQuery(attr, node=guide, exists=True):
-                cmds.addAttr(guide, longName=attr, attributeType="long")
-            cmds.setAttr(f"{guide}.{attr}", value)
-
-        if bodies is not None:
-            bodies[rb_idx] = guide
 
         size = body.shape_size
         # The node computes the effective collision mask itself (Phase 2) from
@@ -356,9 +365,18 @@ def _create_rigid_body_guide(
             "length": size.y,
             "group": 1 << body.group_id,
             "groupId": body.group_id,
-            "nonCollisionGroup": body.non_collision_group,
+            # PMX non_collision_group is a 16-bit bitmask read as a SIGNED
+            # int16 (so 0xFF6D comes back as -147).  Store it as unsigned so
+            # the C++ node's "is raw data present" test (value != -1) and the
+            # ~ncg & 0xFFFF mask math both see the true 16-bit value.
+            "nonCollisionGroup": body.non_collision_group & 0xFFFF,
             "kinematic": kinematic,
-            "guide": guide,
+            "physicsMode": mode.value,
+            # Related joint path (Phase 3 direct write-back) or None.
+            "joint": jpath,
+            # PMX bone index of the related joint (parent-chain lookup for the
+            # write-back parent inverse — Phase 3 cycle fix).
+            "boneIndex": body.related_bone_index,
         }
     except Exception as e:
         log.warning("Failed to create body %d: %s", rb_idx, e)
@@ -367,66 +385,120 @@ def _create_rigid_body_guide(
 def _set_body_attributes(
     node: Optional[str], body_specs: dict[int, dict], reset_index: dict[int, int]
 ) -> None:
-    """Write every PMX rigid body into the node's ``bodies`` array."""
+    """Write every PMX rigid body into the node's ``bodies`` array.
+
+    Scalar children go through the OpenMaya plug API and only the 3double
+    children (restT/restR/extents) use ``cmds.setAttr`` — the MEL marshalling
+    of ~15k setAttr calls dominated the physics import time (14.8k calls ≈ 4.9s
+    on a 300-body model).
+    """
     if not node:
+        return
+    try:
+        sel = om.MSelectionList()
+        sel.add(node)
+        dep = om.MFnDependencyNode(sel.getDependNode(0))
+        bodies_plug = dep.findPlug("bodies", False)
+        attr = {name: dep.attribute(name) for name in _BODY_ATTR_NAMES}
+    except Exception as e:
+        log.warning("Could not resolve physics node %s: %s", node, e)
         return
     for rb_idx, spec in body_specs.items():
         base = f"{node}.bodies[{rb_idx}]"
         try:
-            cmds.setAttr(f"{base}.bodyRestTranslate", *spec["restT"])
-            cmds.setAttr(f"{base}.bodyRestRotate", *spec["restR"])
-            cmds.setAttr(f"{base}.bodyMass", float(spec["mass"]))
-            cmds.setAttr(f"{base}.bodyLinearDamping", float(spec["linearDamping"]))
-            cmds.setAttr(f"{base}.bodyAngularDamping", float(spec["angularDamping"]))
-            cmds.setAttr(f"{base}.bodyFriction", float(spec["friction"]))
-            cmds.setAttr(f"{base}.bodyRestitution", float(spec["restitution"]))
-            cmds.setAttr(f"{base}.bodyColliderType", int(spec["collider"]))
-            cmds.setAttr(f"{base}.bodyRadius", float(spec["radius"]))
-            cmds.setAttr(f"{base}.bodyExtents", *spec["extents"])
-            cmds.setAttr(f"{base}.bodyLength", float(spec["length"]))
-            cmds.setAttr(f"{base}.bodyGroup", int(spec["group"]))
+            el = bodies_plug.elementByLogicalIndex(rb_idx)
+            el.child(attr["bodyMass"]).setDouble(float(spec["mass"]))
+            el.child(attr["bodyLinearDamping"]).setDouble(float(spec["linearDamping"]))
+            el.child(attr["bodyAngularDamping"]).setDouble(float(spec["angularDamping"]))
+            el.child(attr["bodyFriction"]).setDouble(float(spec["friction"]))
+            el.child(attr["bodyRestitution"]).setDouble(float(spec["restitution"]))
+            el.child(attr["bodyColliderType"]).setShort(int(spec["collider"]))
+            el.child(attr["bodyRadius"]).setDouble(float(spec["radius"]))
+            el.child(attr["bodyLength"]).setDouble(float(spec["length"]))
+            el.child(attr["bodyGroup"]).setInt(int(spec["group"]))
             # Raw PMX collision inputs — the node derives the effective mask
             # itself (Phase 2); bodyGroup is kept so the draw override can
             # color guides before the node's first solve.
-            cmds.setAttr(f"{base}.bodyGroupId", int(spec["groupId"]))
-            cmds.setAttr(
-                f"{base}.bodyNonCollisionGroup", int(spec["nonCollisionGroup"])
+            el.child(attr["bodyGroupId"]).setShort(int(spec["groupId"]))
+            el.child(attr["bodyNonCollisionGroup"]).setInt(
+                int(spec["nonCollisionGroup"])
             )
-            cmds.setAttr(f"{base}.bodyKinematic", bool(spec["kinematic"]))
-            cmds.setAttr(
-                f"{base}.bodyResetAnchorIndex", int(reset_index.get(rb_idx, -1))
+            el.child(attr["bodyKinematic"]).setBool(bool(spec["kinematic"]))
+            el.child(attr["bodyPhysicsMode"]).setShort(int(spec["physicsMode"]))
+            el.child(attr["bodyResetAnchorIndex"]).setInt(
+                int(reset_index.get(rb_idx, -1))
             )
+            # 3double children (no safe OM setter — MDataHandle construction
+            # crashed Maya in a probe).
+            cmds.setAttr(f"{base}.bodyRestTranslate", *spec["restT"])
+            cmds.setAttr(f"{base}.bodyRestRotate", *spec["restR"])
+            cmds.setAttr(f"{base}.bodyExtents", *spec["extents"])
         except Exception as e:
             log.warning("Could not set body %d attributes: %s", rb_idx, e)
 
 
 def _connect_kinematic_anchors(
-    node: Optional[str], body_specs: dict[int, dict], kinematic_order: list[int]
+    node: Optional[str],
+    body_specs: dict[int, dict],
+    kinematic_order: list[int],
+    group: str,
+    group_world_rest,
 ) -> None:
-    """Connect each FOLLOW_BONE guide's world/parent-inverse matrices.
+    """Feed the kinematic anchors from the JOINTS directly (Phase 3).
 
-    ``anchorWorldMatrix[k]`` / ``anchorParentInverseMatrix[k]`` map 1:1 to
-    the kinematic bodies in PMX body order (the C++ node expects exactly
-    that).  local = world * parentInverse keeps the Bullet world in the
-    physics group's local space.
+    ``anchorWorldMatrix[k]`` is the related JOINT's world matrix and
+    ``anchorParentInverseMatrix[k]`` is the PHYSICS GROUP's world inverse, so
+    the node computes the joint in the group's local space (the Bullet world
+    frame).  ``anchorOffset[k]`` is a baked world-frame offset
+    (colliderRestWorld * jointRestWorld^-1) that preserves the PMX body<->bone
+    rest offset while the collider tracks the joint — the exact transform the
+    old ``parentConstraint(joint, guide, maintainOffset)`` maintained (so rest
+    poses stay EXACT and the model can be moved freely).  Bodies without a
+    related joint get a STATIC anchor at their rest pose.
     """
     if not node:
         return
+    identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
     for k, rb_idx in enumerate(kinematic_order):
-        guide = body_specs[rb_idx]["guide"]
+        spec = body_specs[rb_idx]
+        jpath = spec.get("joint")
         try:
-            cmds.connectAttr(
-                f"{guide}.worldMatrix[0]",
-                f"{node}.anchorWorldMatrix[{k}]",
-                force=True,
-            )
-            cmds.connectAttr(
-                f"{guide}.parentInverseMatrix[0]",
-                f"{node}.anchorParentInverseMatrix[{k}]",
-                force=True,
-            )
+            if jpath is not None:
+                cmds.connectAttr(
+                    f"{jpath}.worldMatrix[0]",
+                    f"{node}.anchorWorldMatrix[{k}]",
+                    force=True,
+                )
+                cmds.connectAttr(
+                    f"{group}.worldInverseMatrix[0]",
+                    f"{node}.anchorParentInverseMatrix[{k}]",
+                    force=True,
+                )
+                # K_kin = colliderRestWorld * jointRestWorld^-1
+                # (worldMatrix[0] is ~6x cheaper than a xform ws query and
+                # identical at rest — the joints were just created).
+                joint_rest = om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
+                body_world_rest = (
+                    _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
+                )
+                offset = body_world_rest * joint_rest.inverse()
+                cmds.setAttr(f"{node}.anchorOffset[{k}]", list(offset), type="matrix")
+            else:
+                # No related joint: a static collider pinned at its rest pose.
+                body_world_rest = (
+                    _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
+                )
+                cmds.setAttr(
+                    f"{node}.anchorWorldMatrix[{k}]", list(body_world_rest), type="matrix"
+                )
+                cmds.setAttr(
+                    f"{node}.anchorParentInverseMatrix[{k}]",
+                    list(group_world_rest.inverse()),
+                    type="matrix",
+                )
+                cmds.setAttr(f"{node}.anchorOffset[{k}]", identity, type="matrix")
         except Exception as e:
-            log.warning("Could not connect anchor %d (%s): %s", rb_idx, guide, e)
+            log.warning("Could not connect anchor %d (%s): %s", rb_idx, jpath, e)
 
 
 def _compute_reset_anchor_map(
@@ -475,39 +547,172 @@ def _compute_reset_anchor_map(
 
 
 def _connect_dynamic_outputs(
-    node: Optional[str], body_specs: dict[int, dict]
+    node: Optional[str],
+    body_specs: dict[int, dict],
+    group: str,
+    group_world_rest,
+    pmx_data: PmxModel,
 ) -> None:
-    """Drive each dynamic guide's transform from the node's solved pose."""
+    """Drive the related JOINTS from the node's solved joint-local pose (Phase 3).
+
+    The node computes ``boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1``
+    and writes it to ``outTranslate[i]`` / ``outRotate[i]``, so those connect
+    STRAIGHT into the joint's translate / rotate — no guide transforms, no
+    write-back constraints.  PHYSICS_BONE (mode 2) is rotation-only: only
+    outRotate is connected.
+
+    CYCLE FIX: the parent inverse is derived from the PARENT BODY's solved
+    Bullet transform inside the node (no DG dependency on the parent JOINT).
+    Connecting ``joint.parentInverseMatrix -> bodyParentInverseMatrix`` for a
+    body whose parent JOINT is also node-driven created a DG feedback cycle
+    (parent.worldMatrix <- node.outRotate <- ... <- parent.parentInverseMatrix)
+    that made the simulation explode — 86% of dynamic bodies in Tololo have a
+    node-driven parent.  Instead, for every dynamic body whose parent BONE has
+    a rigid body, Python bakes ``bodyParentBodyIndex[i]`` (that body's index)
+    and ``bodyParentJointOffset[i]`` = M_parent = parentJointRestWorld *
+    parentBodyRestWorld^-1 (the same world-frame constant for kinematic and
+    dynamic parents; parentJointWorld = M_parent * B_parent * groupWorld).  The
+    DG parentInverseMatrix connection is kept ONLY for bodies whose parent bone
+    has no body — that parent is never node-driven, so it cannot feed back.
+
+    ``bodyWriteBackOffset`` / ``bodyParentInverseMatrix`` / ``bodyParentJointOffset``
+    are DENSE body-indexed arrays (every element 0..n-1 is set) — the C++ node
+    reads them with ``MArrayDataHandle::jumpToArrayElement(bodyIndex)``, which
+    for a SPARSE array treats the index as a PHYSICAL position (not the body
+    index) and silently reads the wrong / missing element for high body
+    indices.
+    """
     if not node:
         return
+    identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    # The node needs the physics group's world matrix to lift the solved
+    # group-space pose into world space before the joint-local write-back.
+    try:
+        cmds.connectAttr(f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix", force=True)
+    except Exception as e:
+        log.warning("Could not connect groupWorldMatrix: %s", e)
+    # Dense arrays: every body index gets an element (identity for bodies that
+    # have no write-back, real values for the dynamic ones).
+    n = max(body_specs) + 1 if body_specs else 0
+    for i in range(n):
+        try:
+            cmds.setAttr(f"{node}.bodyWriteBackOffset[{i}]", identity, type="matrix")
+            cmds.setAttr(f"{node}.bodyParentInverseMatrix[{i}]", identity, type="matrix")
+            cmds.setAttr(f"{node}.bodyParentJointOffset[{i}]", identity, type="matrix")
+        except Exception:
+            pass
+    # PMX bone index -> rigid-body index (only bodies that made it into the
+    # node and have a related joint can be referenced as a write-back parent).
+    bone_of_body = {
+        spec["boneIndex"]: rb_idx
+        for rb_idx, spec in body_specs.items()
+        if spec.get("boneIndex") is not None and spec.get("joint")
+    }
     for rb_idx, spec in body_specs.items():
         if spec["kinematic"]:
             continue
-        guide = spec["guide"]
+        jpath = spec.get("joint")
+        if jpath is None:
+            continue
         try:
-            cmds.connectAttr(
-                f"{node}.outTranslate[{rb_idx}].outTranslateValue",
-                f"{guide}.translate",
-                force=True,
+            # Related joint's rest world + baked world offset
+            # K = jointRestWorld * bodyRestWorld^-1 (worldMatrix[0] is ~6x
+            # cheaper than a xform ws query; the joints are at rest now).
+            joint_rest = om.MMatrix(cmds.getAttr(f"{jpath}.worldMatrix[0]"))
+            body_world_rest = (
+                _matrix_from_tr(spec["restT"], spec["restR"]) * group_world_rest
             )
+            k = joint_rest * body_world_rest.inverse()
+            cmds.setAttr(f"{node}.bodyWriteBackOffset[{rb_idx}]", list(k), type="matrix")
+
+            # Parent joint's body (Phase 3 cycle fix): the write-back parent
+            # inverse comes from that body's solved Bullet transform, so no DG
+            # dependency on a node-driven parent joint.
+            bone = spec.get("boneIndex")
+            parent_rb = -1
+            if (
+                bone is not None
+                and 0 <= bone < len(pmx_data.bones)
+                and pmx_data.bones[bone].parentIndex >= 0
+            ):
+                parent_rb = bone_of_body.get(pmx_data.bones[bone].parentIndex, -1)
+            # bodyParentBodyIndex is a CHILD of the bodies compound array, so
+            # its path goes through `bodies[i]` (not a top-level array).
+            cmds.setAttr(
+                f"{node}.bodies[{rb_idx}].bodyParentBodyIndex", int(parent_rb)
+            )
+            if parent_rb >= 0:
+                parent_spec = body_specs[parent_rb]
+                parent_joint = parent_spec.get("joint")
+                if parent_joint:
+                    # M_parent = parentJointRestWorld * parentBodyRestWorld^-1
+                    # (same constant for kinematic and dynamic parents).
+                    parent_joint_rest = om.MMatrix(
+                        cmds.getAttr(f"{parent_joint}.worldMatrix[0]")
+                    )
+                    parent_body_rest_world = (
+                        _matrix_from_tr(parent_spec["restT"], parent_spec["restR"])
+                        * group_world_rest
+                    )
+                    m_parent = parent_joint_rest * parent_body_rest_world.inverse()
+                    cmds.setAttr(
+                        f"{node}.bodyParentJointOffset[{rb_idx}]",
+                        list(m_parent),
+                        type="matrix",
+                    )
+            if parent_rb < 0:
+                # Parent bone has no rigid body: read its parent inverse from
+                # the DG.  That parent is never node-driven (no dynamic
+                # ancestor in the PMX chain), so this cannot feed back.
+                try:
+                    cmds.connectAttr(
+                        f"{jpath}.parentInverseMatrix[0]",
+                        f"{node}.bodyParentInverseMatrix[{rb_idx}]",
+                        force=True,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "Could not connect parent inverse for body %d: %s",
+                        rb_idx,
+                        e,
+                    )
+            # Solved pose -> joint (mode 2 = rotation only).
+            if spec["physicsMode"] != 2:
+                cmds.connectAttr(
+                    f"{node}.outTranslate[{rb_idx}].outTranslateValue",
+                    f"{jpath}.translate",
+                    force=True,
+                )
             cmds.connectAttr(
                 f"{node}.outRotate[{rb_idx}].outRotateValue",
-                f"{guide}.rotate",
+                f"{jpath}.rotate",
                 force=True,
             )
         except Exception as e:
-            log.warning(
-                "Could not connect dynamic output %d (%s): %s", rb_idx, guide, e
-            )
+            log.warning("Could not connect dynamic output %d (%s): %s", rb_idx, jpath, e)
 
 
 def _set_joint_attributes(node: Optional[str], pmx_data: PmxModel) -> None:
-    """Write every PMX joint into the node's ``joints`` array."""
+    """Write every PMX joint into the node's ``joints`` array.
+
+    Uses ``cmds.setAttr`` for EVERY child.  The OpenMaya plug shortcut
+    (``joints_plug.elementByLogicalIndex(i).child(attr).setInt(...)``) was
+    tried as part of the import speedup, but it produces a `joints` array the
+    C++ node cannot enumerate (``numElements()`` returns 0 from the plugin —
+    verified on Tololo: the scene showed 408 correctly-set elements while the
+    node read 0, so the sim ran with NO constraints and every body collided
+    with everything).  The scalar body children keep the OM path (the `bodies`
+    array reads correctly); joints stay on cmds.setAttr.
+    """
     if not node:
         return
     for jt_idx, joint in enumerate(pmx_data.joints):
         base = f"{node}.joints[{jt_idx}]"
         try:
+            cmds.setAttr(f"{base}.jointBodyA", int(joint.rigid_body_index_a))
+            cmds.setAttr(f"{base}.jointBodyB", int(joint.rigid_body_index_b))
+            cmds.setAttr(f"{base}.jointType", int(joint.type.value))
+
             # Joint frame in the physics group's local space.
             jp = joint.position
             jr = joint.rotation
@@ -521,9 +726,6 @@ def _set_joint_attributes(node: Optional[str], pmx_data: PmxModel) -> None:
             psc = joint.position_spring_constant
             rsc = joint.rotation_spring_constant
 
-            cmds.setAttr(f"{base}.jointBodyA", int(joint.rigid_body_index_a))
-            cmds.setAttr(f"{base}.jointBodyB", int(joint.rigid_body_index_b))
-            cmds.setAttr(f"{base}.jointType", int(joint.type.value))
             cmds.setAttr(f"{base}.jointFrameTranslate", *frame_t)
             cmds.setAttr(f"{base}.jointFrameRotate", *frame_r)
 
@@ -567,22 +769,21 @@ def step_physics(node: Optional[str]) -> None:
             log.debug("physics step dgeval failed: %s", e)
 
 
-def write_back_physics(bodies, constraints) -> None:
-    """Write solved dynamic-body transforms back to their related bones.
+def write_back_physics(node: Optional[str], driven_joints=None) -> None:
+    """Propagate the solved pose to the driven joints (headless use).
 
-    The DG constraints (``parentConstraint`` / ``orientConstraint``) already
-    perform the per-frame write-back interactively.  This exists for
-    headless/batch stepping: after :func:`step_physics`, it pushes the solved
-    pose through the guide transforms so the DG constraints propagate it to
-    the bones.
+    Phase 3: the node writes the joint-local pose straight into the joints, so
+    "write-back" is just re-evaluating the node's outputs and the driven
+    joints.  Interactive playback does this via DG automatically; this exists
+    for headless/batch stepping after :func:`step_physics`.
     """
     try:
-        for guide in bodies.values():
-            cmds.dgdirty(guide)
-            cmds.dgeval(guide)
-        for con in constraints.values():
-            cmds.dgdirty(con)
-            cmds.dgeval(con)
+        if node:
+            cmds.dgdirty(node)
+            cmds.dgeval(f"{node}.outTranslate")
+        for joint in (driven_joints or {}).values():
+            cmds.dgdirty(joint)
+            cmds.dgeval(joint)
     except Exception as e:
         log.debug("physics write_back failed: %s", e)
 
@@ -595,10 +796,13 @@ def create_physics_from_pmx_data(
 ) -> Optional[str]:
     """Build the full physics graph for a PMX model (no in-memory handle).
 
-    Creates the ``{model}_Physics`` group, the ``mmdPhysicsNode`` solver, an
-    invisible guide transform per rigid body (with DG write-back constraints),
-    the ``bodies`` / ``joints`` arrays, the kinematic-anchor and dynamic-output
-    connections, and disables DG caching on the subgraph.
+    Creates the ``{model}_Physics`` group, the ``mmdPhysicsNode`` solver, the
+    ``bodies`` / ``joints`` arrays, and the Phase 3 DIRECT joint wiring — the
+    kinematic anchors read the joints' world matrices (with a baked body<->
+    bone rest offset), and the solved pose is written straight into the related
+    joints.  NO guide transforms and NO write-back constraints are created:
+    the node draws the colliders and owns the write-back.  DG caching is
+    disabled on the subgraph.
 
     The SCENE is the source of truth: discover the built graph later with
     ``mmd.maya.pmx_model_utils`` (wrapped by ``ModelContext.physics*``
@@ -618,18 +822,17 @@ def create_physics_from_pmx_data(
     # The solver is a locator shape parented under the physics group — its
     # object space is the group's local space, which is the Bullet world frame.
     node = _create_physics_solver(name_registry, parent_group=group)
+    joint_names = _joint_names_for(joints)
 
-    #TODO we should consider connecting the joint outputs to the node
-    # this way we will avoid name mapping and we will have a more robust connection between the joints and the node
-    # this will also be cleaner and more efficient than using the joint names to find the joints in the node
-    # node will explicitly show which joint is connected 
-    joint_names = _joint_names_for(joints) 
+    # Phase 3: no guide transforms exist.  The K offsets (world-frame body<->
+    # bone rest offsets) are baked from the group's REST world matrix; they are
+    # invariant under whole-model movement (verified against
+    # parentConstraint(maintainOffset): targetWorld = K * sourceWorld), so the
+    # model can be moved freely after import.
+    group_world_rest = om.MMatrix(cmds.xform(group, q=True, ws=True, matrix=True))
 
-    bodies: dict[int, str] = {}
-    constraints: dict[int, str] = {}
     body_specs: dict[int, dict] = {}
     kinematic_order: list[int] = []
-
 
     # The collision-mask resolution lives in the NODE (Phase 2): each body
     # feeds the raw PMX data (bodyGroupId + bodyNonCollisionGroup) and the
@@ -637,15 +840,7 @@ def create_physics_from_pmx_data(
     # mmd/maya/nodes/mmd_physics_masks.h — exact port of the former Python
     # proximity + cloth-on-cloth corrections).
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
-        spec = _create_rigid_body_guide(
-            rb_idx,
-            body,
-            group,
-            name_registry,
-            joint_names,
-            bodies=bodies,
-            constraints=constraints,
-        )
+        spec = _make_body_spec(rb_idx, body, group_world_rest, joint_names)
         if spec is None:
             continue
         body_specs[rb_idx] = spec
@@ -656,18 +851,36 @@ def create_physics_from_pmx_data(
     reset_index = _compute_reset_anchor_map(pmx_data, kinematic_order)
     _set_body_attributes(node, body_specs, reset_index)
 
-    # Connect the kinematic anchor matrices (in PMX order).
-    _connect_kinematic_anchors(node, body_specs, kinematic_order)
+    # Connect the kinematic anchors from the JOINTS directly (Phase 3).
+    _connect_kinematic_anchors(
+        node, body_specs, kinematic_order, group, group_world_rest
+    )
 
-    # Connect the dynamic body outputs (solved pose -> guide transform).
-    _connect_dynamic_outputs(node, body_specs)
-
-    # Populate the node's joint compound array.
+    # Populate the node's joint compound array BEFORE the write-back
+    # connections below: connecting the node's outputs to the joints can
+    # trigger a first evaluation of the solver, and if that happens before the
+    # `joints` array is written the node bakes an EMPTY joints array into its
+    # world (readJointData returns 0 -> the sim runs with NO constraints; seen
+    # on Tololo: the scene stored 408 correctly-set joints but the node read
+    # 0).  Writing the joints first guarantees the first compute sees them.
     _set_joint_attributes(node, pmx_data)
+
+    # Direct joint write-back: groupWorldMatrix + bodyWriteBackOffset +
+    # bodyParentBodyIndex/bodyParentJointOffset + outTranslate/outRotate ->
+    # joints (Phase 3).  The parent inverse is derived from the parent BODY's
+    # solved transform inside the node (no DG dependency on node-driven
+    # parent joints — that was the write-back feedback cycle that exploded
+    # the simulation during animation).
+    _connect_dynamic_outputs(node, body_specs, group, group_world_rest, pmx_data)
 
     # Belt-and-suspenders on top of the node's native cache opt-out: never
     # cache the DG results of the physics subgraph.
-    _exclude_from_dg_cache(node, bodies, constraints)
+    driven_joints = {
+        rb_idx: spec["joint"]
+        for rb_idx, spec in body_specs.items()
+        if not spec["kinematic"] and spec.get("joint")
+    }
+    _exclude_from_dg_cache(node, driven_joints)
 
     log.info(
         "Physics: %d FOLLOW_BONE, %d dynamic bodies, %d joints",

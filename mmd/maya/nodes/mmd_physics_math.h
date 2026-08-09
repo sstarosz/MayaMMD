@@ -154,4 +154,33 @@ inline btTransform anchorPoseToTransform(const double pos[3], const double quat[
     return t;
 }
 
+// Convert a Bullet COLUMN-vector transform to a 4x4 ROW-vector matrix (Maya
+// convention).  Exact inverse of doubleMatrixToBtTransform: m(r,c) = bm(c,r),
+// and the translation lands in the last row (m[3][0..2]) as Maya expects.
+inline void btTransformToRowMatrix(const btTransform& t, double m[4][4])
+{
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            m[r][c] = t.getBasis()[c][r]; // transpose back to row-vector
+    m[0][3] = m[1][3] = m[2][3] = 0.0;
+    const btVector3& o = t.getOrigin();
+    m[3][0] = o.x();
+    m[3][1] = o.y();
+    m[3][2] = o.z();
+    m[3][3] = 1.0;
+}
+
+// 4x4 ROW-vector matrix multiply: out = a * b (Maya convention, p' = p * M).
+inline void rowMatrixMultiply(const double a[4][4], const double b[4][4], double out[4][4])
+{
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+        {
+            double s = 0.0;
+            for (int k = 0; k < 4; ++k)
+                s += a[r][k] * b[k][c];
+            out[r][c] = s;
+        }
+}
+
 } // namespace mmd_physics_math
