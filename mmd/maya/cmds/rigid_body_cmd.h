@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_rigid_body_cmd.h
+ * rigid_body_cmd.h
  *
- * MmdRigidBodyCmd — native C++ command for operating on an mmdPhysicsNode.
+ * RigidBodyCmd — native C++ command for operating on an pmxPhysicsNode.
  *
  * WHY C++ (not a Python MPxCommand): the Python command layer in this
  * environment is fragile — the lazy creation of the command's MSyntax
@@ -17,7 +17,7 @@
  *
  * v1.0 — CREATE MODE ONLY (create is the default — no -create flag):
  *
- *     mmdRigidBody <solver | modelRoot>
+ *     pmxRigidBody <solver | modelRoot>
  *         -index <int>              optional target index (must be the next
  *                                   free index; omit to auto-append)
  *         -name <string>            PMX body name (local) → bodies[i].bodyNameLocal
@@ -52,7 +52,7 @@
 #include <maya/MPxCommand.h>
 #include <maya/MString.h>
 
-#include "mmd_common.h"
+#include "common.hpp"
 
 class MSyntax;
 class MArgList;
@@ -63,13 +63,13 @@ class MDagPath;
 class MFnDependencyNode;
 class MMatrix;
 
-class MmdRigidBodyCmd : public MPxCommand
+class RigidBodyCmd : public MPxCommand
 {
   public:
-    static constexpr const char* kName = "mmdRigidBody";
+    static constexpr const char* kName = "pmxRigidBody";
 
-    MmdRigidBodyCmd() = default;
-    ~MmdRigidBodyCmd() override = default;
+    RigidBodyCmd() = default;
+    ~RigidBodyCmd() override = default;
 
     static void* creator();
     static MSyntax syntaxCreator();
@@ -78,7 +78,7 @@ class MmdRigidBodyCmd : public MPxCommand
     bool isUndoable() const override { return false; }
 
   private:
-    // Resolve *target* to an mmdPhysicsNode MObject (direct node or model root).
+    // Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
     static bool resolveSolver(const MString& target, MObject& outNode);
     // Create mode: append one body (data + bone binding); returns the index.
     MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex);
@@ -87,7 +87,7 @@ class MmdRigidBodyCmd : public MPxCommand
     // Helpers (implemented in the .cpp)
     // ------------------------------------------------------------------
     // 4x4 row-vector matrix from translate + XYZ euler degrees.
-    static MMatrix matrixFromTR(const Double3& t, const Double3& r);
+    static MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double3& r);
     // A DAG node's world (inclusive) matrix.
     static MMatrix worldMatrix(const MDagPath& path);
     // Connect src → dst, replacing any existing source on dst.

@@ -680,7 +680,7 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     """
     Builds the PMX scene in Maya from the given PMX data.
 
-    Physics is always built for the model: one native ``mmdPhysicsNode``
+    Physics is always built for the model: one native ``pmxPhysicsNode``
     (embedded Bullet) with every PMX rigid body and joint, node-drawn
     colliders, and direct write-back into the joints.  See
     docs/PhysicsImplementation.md.
@@ -774,7 +774,7 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
         root_name,
     )
 
-    # Rigid bodies + joints via the native mmdPhysicsNode (embedded Bullet).
+    # Rigid bodies + joints via the native pmxPhysicsNode (embedded Bullet).
     # No handle is kept in memory — the scene is the source of truth; discover
     # physics state later via mmd.maya.pmx_model_utils (wrapped by
     # ModelContext.physics* getters).

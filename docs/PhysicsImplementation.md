@@ -8,7 +8,7 @@ is to faithfully reproduce the MMD per-frame binding loop — bones drive
 kinematic `FOLLOW_BONE` colliders, Bullet steps the world, and dynamic colliders
 drive their related bones back.
 
-**Status (2026-08-06):** the simulation engine is a **native C++ `mmdPhysicsNode`
+**Status (2026-08-06):** the simulation engine is a **native C++ `pmxPhysicsNode`
 (an `MPxNode` in `MayaMMD.mll`) that embeds Bullet 3.25**. The previous
 mayaBullet binding layer is **gone** — it froze under Cached Playback because
 `bulletSolverShape` is a *stateful* node whose outputs Cached Playback treats as
@@ -20,7 +20,7 @@ manager always re-evaluates it every frame — the mechanism a built-in solver
 could not use.
 
 Milestone 2 is functional end-to-end: `build_pmx_scene(pmx)` always creates one
-`mmdPhysicsNode` per model with every PMX rigid body and joint, the simulation
+`pmxPhysicsNode` per model with every PMX rigid body and joint, the simulation
 advances during playback / evaluation, and dynamic bodies write their solved
 pose back to the skeleton. Verified on all 17 bundled models (187/187 rigid-body
 tests, including **behavioral** tests that step time and assert the bodies
@@ -168,7 +168,7 @@ displaced the write-back bones and broke mesh binding.
 ```mermaid
 flowchart LR
     A[Animate bones<br/>VMD FK / IK] --> B[FOLLOW_BONE guides<br/>follow bones via parentConstraint]
-    B --> C[mmdPhysicsNode steps<br/>Bullet world]
+    B --> C[pmxPhysicsNode steps<br/>Bullet world]
     C --> D[Solved pose -> guide meshes<br/>-> parentConstraint -> bones]
     D --> A
 ```
@@ -187,9 +187,9 @@ flowchart LR
 - The write-back direction (which bones physics drives) is the subtlest
   correctness point; see [Write-back to the skeleton](#write-back-to-the-skeleton).
 
-### mmdPhysicsNode (C++ node with embedded Bullet)
+### pmxPhysicsNode (C++ node with embedded Bullet)
 
-`mmd/maya/nodes/mmd_physics_node.h/.cpp` — a plain `MPxNode` that owns a
+`mmd/maya/nodes/physics_node.h/.cpp` — a plain `MPxNode` that owns a
 `btDiscreteDynamicsWorld`:
 
 - **Inputs**: `time`, `gravity` (`fps` is retained for backward compatibility
@@ -252,7 +252,7 @@ was a use-after-free that crashed Maya intermittently during scene teardown.
 | Node                    | Type                              | Purpose                                                                                                                |
 | ----------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `{model}_Physics`       | transform group                   | Bullet world frame; parents the solver locator                                                                         |
-| `{model}_PhysicsSolver` | `mmdPhysicsNode` (MPxLocatorNode) | Owns the Bullet world, steps every frame, DRAWS the colliders, writes the solved pose DIRECTLY into the related joints |
+| `{model}_PhysicsSolver` | `pmxPhysicsNode` (MPxLocatorNode) | Owns the Bullet world, steps every frame, DRAWS the colliders, writes the solved pose DIRECTLY into the related joints |
 
 Phase 3: **no guide transforms and no write-back constraints exist** — the
 physics group contains ONLY the solver locator.  The node draws the colliders
@@ -261,8 +261,8 @@ joints directly.
 
 ### Guide visualization (Phase 1 — node-drawn; no scene guides since Phase 3)
 
-The `mmdPhysicsNode` is an **`MPxLocatorNode`** that draws its own rigid-body
-visualization through a C++ **`MPxDrawOverride`** (`mmd_physics_draw_override`):
+The `pmxPhysicsNode` is an **`MPxLocatorNode`** that draws its own rigid-body
+visualization through a C++ **`MPxDrawOverride`** (`physics_draw_override`):
 wireframe box / sphere / capsule per body, colored by collision group from the
 (ported) group palette, with kinematic (bone-following) colliders dimmed.  The
 draw geometry is pulled in `prepareForDraw()` from the node's **current solver
@@ -287,7 +287,7 @@ where `bodyLocal` is the solved body pose in the physics group's space (from
 Bullet), `B_parent` is the **parent body's** solved Bullet transform (the node
 owns every body), and `K = jointRestWorld * (bodyRestWorld)^-1` and
 `M_parent = parentJointRestWorld * (parentBodyRestWorld)^-1` are **baked
-world-frame offsets** (baked by `mmdRigidBody -create`;
+world-frame offsets** (baked by `pmxRigidBody -create`;
 `bodyWriteBackOffset[i]`).  M_parent is the SAME constant as
 `bodyWriteBackOffset[parentBodyIndex]`, so the node derives it from the
 parent body's K — no separate array.  Because `parentJointWorld = M_parent *
@@ -312,10 +312,14 @@ node-driven, so it cannot feed back).
 - `FOLLOW_BONE` (mode 0): `joint.worldMatrix[0]` feeds `anchorWorldMatrix[k]`
   and `group.worldInverseMatrix[0]` feeds `anchorParentInverseMatrix[k]`; the
   collider tracks the joint with the baked offset.
-- `PHYSICS` (mode 1): the node connects `outTranslate[i]` + `outRotate[i]`
-  straight into the joint's `translate`/`rotate` (full transform).
-- `PHYSICS_BONE` (mode 2): only `outRotate[i]` is connected (rotation-only,
-  the joint keeps its skeleton translation).
+- `PHYSICS` (mode 1): the node emits `outTranslate[i]` + `outRotate[i]`
+  straight into the joint's `translate`/`rotate` (full transform — the MMD
+  reference's `COPY_TRANSFORMS`).
+- `PHYSICS_BONE` (mode 2): the node emits ONLY `outRotate[i]` (rotation-only,
+  the joint keeps its skeleton translation — the MMD reference's
+  `COPY_ROTATION`; blender_mmd_tools calls mode 2 "bone determined by the
+  combination of parent and attached rigid body").  Python connects only
+  `outRotate` for these bodies.
 
 At rest `bodyLocal = bodyRest`, `B_parent = parentBodyRest`, and
 `K * bodyRest * B_parent^-1 * M_parent^-1` telescopes to
@@ -342,7 +346,7 @@ conversion — the sim only advanced when a guide transform was read).
 scene is the source of truth — discover physics state later with
 `mmd/maya/pmx_model_utils.py`, wrapped by `ModelContext.physics*` getters):
 
-1. Create the `{model}_Physics` group and the `mmdPhysicsNode` locator
+1. Create the `{model}_Physics` group and the `pmxPhysicsNode` locator
    (`{model}_PhysicsSolver`) parented under it (its object space is the group's
    local space, i.e. the Bullet world frame); connect `time1.outTime → node.time`,
    set `gravity = (0, -9.8, 0)` (`dt` is derived from the scene's time unit
@@ -439,10 +443,12 @@ exactly as MMD animation does.
 | `mmd/core/data_types.py`                                                | `PMXRigidBody` / `PMXJoint` dataclasses + enums                                                                                 |
 | `mmd/core/pmx_importer.py`                                              | Parsing rigid bodies + joints from the .pmx                                                                                     |
 | `mmd/maya/pmx/rigid_body_builder.py`                                    | Rigid bodies: coord conversion + build functions (node + bodies/joints arrays + direct joint wiring + baked write-back offsets) |
-| `mmd/maya/nodes/mmd_physics_node.h/.cpp`                                | The C++ `mmdPhysicsNode` with the embedded Bullet world                                                                         |
-| `mmd/maya/nodes/mmd_physics_math.h`                                     | Maya-free math: Euler<->quat, row/column transpose, row-matrix multiply                                                         |
+| `mmd/maya/nodes/physics_node.h/.cpp`                                    | The C++ `pmxPhysicsNode` adapter — reads attributes, owns the timeline/state machine, drives `mmd::core::Simulation`            |
+| `mmd/core/common.hpp`                                                   | Shared value types under `mmd::core`: `Double3` / `Double4`                                                                     |
+| `mmd/core/physics_math.hpp`                                             | Maya-free math under `mmd::core::physics_math`: Euler<->quat, row/column transpose, row-matrix multiply                         |
+| `mmd/core/simulation.hpp/.cpp`                                          | Maya-free Bullet engine `mmd::core::Simulation` (world, bodies, joints, anchors, scrub-back reset)                              |
 | `mmd/maya/nodes/ccd_ik_solver_node.h/.cpp`                              | Existing native node pattern the physics node follows                                                                           |
-| `mmd/MayaMMD.cpp`                                                       | Registers `mmdPhysicsNode` natively                                                                                             |
+| `mmd/MayaMMD.cpp`                                                       | Registers `pmxPhysicsNode` natively                                                                                             |
 | `vcpkg.json`                                                            | vcpkg manifest — Bullet 3.25 (float), built via the vcpkg toolchain                                                             |
 | `mmd/maya/pmx_scene_builder.py`                                         | Scene build; calls (default-on) physics build                                                                                   |
 | `mmd/maya/pmx_model_utils.py`                                           | Scene discovery: physics group / node / bodies (traced joints) / driven joints; bind-pose reset rewinds the solver              |

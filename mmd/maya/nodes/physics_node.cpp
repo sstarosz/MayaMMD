@@ -1,11 +1,11 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_physics_node.cpp
+ * physics_node.cpp
  *
- * MMDPhysicsNode — native rigid-body physics node (embedded Bullet 3.25).
+ * PhysicsNode — native rigid-body physics node (embedded Bullet 3.25).
  *
- * See mmd_physics_node.h for the design rationale (replaces the mayaBullet
+ * See physics_node.h for the design rationale (replaces the mayaBullet
  * dynamic layer which froze under Cached Playback because its solver is a
  * stateful node the evaluation cache does not re-step).
  *
@@ -14,7 +14,7 @@
  * it runs under Cached Playback / the evaluation manager.
  */
 
-#include "mmd_physics_node.h"
+#include "physics_node.h"
 
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
@@ -43,7 +43,7 @@
 #include <btBulletCollisionCommon.h>
 #include <btBulletDynamicsCommon.h>
 
-#include "mmd_physics_math.h"
+#include "physics_math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -51,86 +51,76 @@
 #include <string>
 
 // The pure math (Euler <-> quaternion, row/column matrix transpose) lives in
-// the Maya-free mmd_physics_math.h so it can be unit-tested without the Maya
-// SDK — see tests/test_mmd_physics_math.cpp.
-using namespace mmd_physics_math;
+// the Maya-free physics_math.hpp so it can be unit-tested without the Maya
+// SDK — see tests/test_physics_math.cpp.
+using namespace mmd::core::physics_math;
+using mmd::core::Double3;
+using mmd::core::Double4;
+using mmd::core::Simulation;
 
 // ===========================================================================
 // Constants
 // ===========================================================================
-const MTypeId MMDPhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for mmdPhysicsNode
+const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for pmxPhysicsNode
 
-// PMX JointType -> Bullet constraint selection
-namespace
-{
-constexpr int kJointSpring6Dof = 0;
-constexpr int kJointSixDof = 1;
-constexpr int kJointP2P = 2;
-constexpr int kJointConeTwist = 3;
-constexpr int kJointSlider = 4;
-constexpr int kJointHinge = 5;
-
-// Simulation stepping constants (see buildWorld()/compute()).
-constexpr double kFixedDt = 1.0 / 60.0; // MMD physics tick
-constexpr int kSolverIterations = 30;   // > Bullet's default 10 — long rigid chains need it
-constexpr int kMaxSubSteps = 8;         // max internal steps per compute()
-constexpr double kMaxStepTime = 0.5;    // clamp for huge time jumps (scrub/tab)
-} // namespace
+// Simulation constants + joint-type mapping moved into the Maya-free engine
+// (mmd_simulation.cpp) — the node only builds a Definition, steps the sim and
+// reads solved poses.
 
 // ===========================================================================
 // Attribute declarations
 // ===========================================================================
-MObject MMDPhysicsNode::aTime;
-MObject MMDPhysicsNode::aGravity;
-MObject MMDPhysicsNode::aFps;
-MObject MMDPhysicsNode::aAnchorWorldMatrix;
-MObject MMDPhysicsNode::aAnchorParentInverseMatrix;
-MObject MMDPhysicsNode::aAnchorOffset;
-MObject MMDPhysicsNode::aGroupWorldMatrix;
-MObject MMDPhysicsNode::aBodyWriteBackOffset;
-MObject MMDPhysicsNode::aBodyParentInverseMatrix;
+MObject PhysicsNode::aTime;
+MObject PhysicsNode::aGravity;
+MObject PhysicsNode::aFps;
+MObject PhysicsNode::aAnchorWorldMatrix;
+MObject PhysicsNode::aAnchorParentInverseMatrix;
+MObject PhysicsNode::aAnchorOffset;
+MObject PhysicsNode::aGroupWorldMatrix;
+MObject PhysicsNode::aBodyWriteBackOffset;
+MObject PhysicsNode::aBodyParentInverseMatrix;
 
-MObject MMDPhysicsNode::aBodies;
-MObject MMDPhysicsNode::aBodyEnabled;
-MObject MMDPhysicsNode::aBodyNameLocal;
-MObject MMDPhysicsNode::aBodyNameUniversal;
-MObject MMDPhysicsNode::aBodyGroupId;
-MObject MMDPhysicsNode::aBodyMaskGroup[16];
-MObject MMDPhysicsNode::aBodyColliderType;
-MObject MMDPhysicsNode::aBodyRadius;
-MObject MMDPhysicsNode::aBodyExtents;
-MObject MMDPhysicsNode::aBodyLength;
-MObject MMDPhysicsNode::aBodyRestTranslate;
-MObject MMDPhysicsNode::aBodyRestRotate;
-MObject MMDPhysicsNode::aBodyMass;
-MObject MMDPhysicsNode::aBodyLinearDamping;
-MObject MMDPhysicsNode::aBodyAngularDamping;
-MObject MMDPhysicsNode::aBodyRestitution;
-MObject MMDPhysicsNode::aBodyFriction;
-MObject MMDPhysicsNode::aBodyPhysicsMode;
-MObject MMDPhysicsNode::aBodyParentBodyIndex;
-MObject MMDPhysicsNode::aBodyResetAnchorIndex;
+MObject PhysicsNode::aBodies;
+MObject PhysicsNode::aBodyEnabled;
+MObject PhysicsNode::aBodyNameLocal;
+MObject PhysicsNode::aBodyNameUniversal;
+MObject PhysicsNode::aBodyGroupId;
+MObject PhysicsNode::aBodyMaskGroup[16];
+MObject PhysicsNode::aBodyColliderType;
+MObject PhysicsNode::aBodyRadius;
+MObject PhysicsNode::aBodyExtents;
+MObject PhysicsNode::aBodyLength;
+MObject PhysicsNode::aBodyRestTranslate;
+MObject PhysicsNode::aBodyRestRotate;
+MObject PhysicsNode::aBodyMass;
+MObject PhysicsNode::aBodyLinearDamping;
+MObject PhysicsNode::aBodyAngularDamping;
+MObject PhysicsNode::aBodyRestitution;
+MObject PhysicsNode::aBodyFriction;
+MObject PhysicsNode::aBodyPhysicsMode;
+MObject PhysicsNode::aBodyParentBodyIndex;
+MObject PhysicsNode::aBodyResetAnchorIndex;
 
-MObject MMDPhysicsNode::aJoints;
-MObject MMDPhysicsNode::aJointBodyA;
-MObject MMDPhysicsNode::aJointBodyB;
-MObject MMDPhysicsNode::aJointType;
-MObject MMDPhysicsNode::aJointFrameTranslate;
-MObject MMDPhysicsNode::aJointFrameRotate;
-MObject MMDPhysicsNode::aJointLinearMin;
-MObject MMDPhysicsNode::aJointLinearMax;
-MObject MMDPhysicsNode::aJointAngularMin;
-MObject MMDPhysicsNode::aJointAngularMax;
-MObject MMDPhysicsNode::aJointLinearSpring;
-MObject MMDPhysicsNode::aJointAngularSpring;
+MObject PhysicsNode::aJoints;
+MObject PhysicsNode::aJointBodyA;
+MObject PhysicsNode::aJointBodyB;
+MObject PhysicsNode::aJointType;
+MObject PhysicsNode::aJointFrameTranslate;
+MObject PhysicsNode::aJointFrameRotate;
+MObject PhysicsNode::aJointLinearMin;
+MObject PhysicsNode::aJointLinearMax;
+MObject PhysicsNode::aJointAngularMin;
+MObject PhysicsNode::aJointAngularMax;
+MObject PhysicsNode::aJointLinearSpring;
+MObject PhysicsNode::aJointAngularSpring;
 
-MObject MMDPhysicsNode::aOutTranslate;
-MObject MMDPhysicsNode::aOutTranslateValue;
-MObject MMDPhysicsNode::aOutRotate;
-MObject MMDPhysicsNode::aOutRotateValue;
+MObject PhysicsNode::aOutTranslate;
+MObject PhysicsNode::aOutTranslateValue;
+MObject PhysicsNode::aOutRotate;
+MObject PhysicsNode::aOutRotateValue;
 
 // ===========================================================================
-// Maya-specific conversion (the shared pure math is in mmd_physics_math.h)
+// Maya-specific conversion (the shared pure math is in physics_math.hpp)
 // ===========================================================================
 namespace
 {
@@ -143,7 +133,7 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
     // the TRANSPOSE of Maya's.  Copying the row matrix directly (as done
     // before) gave every rotated anchor a transposed — i.e. wrong — basis,
     // which yanked the attached rigid chains into a mess.  The transpose
-    // itself is the (unit-tested) mmd_physics_math::doubleMatrixToBtTransform;
+    // itself is the (unit-tested) mmd::core::physics_math::doubleMatrixToBtTransform;
     // this wrapper only adapts MMatrix's accessor.
     double mm[4][4];
     for (int r = 0; r < 4; ++r)
@@ -157,28 +147,28 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
 // (mBodies is only filled lazily on first evaluation) — so the colliders are
 // visible immediately after import and whenever the solver is not being pulled
 // by the DG.
-void readDrawBodyFromPlug(const MPlug& el, MMDPhysicsNode::DrawBody& db)
+void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
 {
-    db.colliderType = static_cast<MMDPhysicsNode::ColliderType>(
-        el.child(MMDPhysicsNode::aBodyColliderType).asShort());
-    db.radius = el.child(MMDPhysicsNode::aBodyRadius).asDouble();
-    const double* e = el.child(MMDPhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
+    db.colliderType =
+        static_cast<PhysicsNode::ColliderType>(el.child(PhysicsNode::aBodyColliderType).asShort());
+    db.radius = el.child(PhysicsNode::aBodyRadius).asDouble();
+    const double* e = el.child(PhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
     db.extents[0] = e[0];
     db.extents[1] = e[1];
     db.extents[2] = e[2];
-    db.length = el.child(MMDPhysicsNode::aBodyLength).asDouble();
-    db.kinematic = (el.child(MMDPhysicsNode::aBodyPhysicsMode).asShort() ==
-                    MMDPhysicsNode::kBodyPhysicsFollowBone);
+    db.length = el.child(PhysicsNode::aBodyLength).asDouble();
+    db.kinematic = (el.child(PhysicsNode::aBodyPhysicsMode).asShort() ==
+                    static_cast<short>(PhysicsNode::PhysicsMode::FollowBone));
     // group id straight from the raw PMX id (the Bullet group bit is derived
     // from it in buildWorld); clamp legacy scenes where it is -1.
-    db.groupId = el.child(MMDPhysicsNode::aBodyGroupId).asShort();
+    db.groupId = el.child(PhysicsNode::aBodyGroupId).asShort();
     if (db.groupId < 0)
         db.groupId = 0;
-    const double* p = el.child(MMDPhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
+    const double* p = el.child(PhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
     db.pos[0] = p[0];
     db.pos[1] = p[1];
     db.pos[2] = p[2];
-    const double* r = el.child(MMDPhysicsNode::aBodyRestRotate).asMDataHandle().asDouble3();
+    const double* r = el.child(PhysicsNode::aBodyRestRotate).asMDataHandle().asDouble3();
     const btQuaternion q = eulerDegreesToQuat(r[0], r[1], r[2]);
     db.quat[0] = q.x();
     db.quat[1] = q.y();
@@ -224,39 +214,28 @@ uint64_t hashDouble3(uint64_t h, const double v[3])
 // ===========================================================================
 // Node lifecycle
 // ===========================================================================
-MMDPhysicsNode::MMDPhysicsNode() = default;
+PhysicsNode::PhysicsNode() = default;
 
-MMDPhysicsNode::~MMDPhysicsNode()
+PhysicsNode::~PhysicsNode()
 {
     destroyWorld();
 }
 
-void MMDPhysicsNode::postConstructor()
+void PhysicsNode::postConstructor()
 {
     // Nothing extra needed — Bullet world is built lazily on first compute.
 }
 
-void* MMDPhysicsNode::creator()
+void* PhysicsNode::creator()
 {
-    return new MMDPhysicsNode();
+    return new PhysicsNode();
 }
 
-void MMDPhysicsNode::destroyWorld()
+void PhysicsNode::destroyWorld()
 {
-    // CRITICAL teardown order: destroy the WORLD first while every body and
-    // constraint is still alive.  btCollisionWorld's destructor iterates
-    // m_collisionObjects and calls getBroadphase()->destroyProxy() on each —
-    // if the bodies were already freed that is a use-after-free (access
-    // violation, seen as intermittent Maya crashes during scene teardown).
-    mWorld.reset(); // base dtor cleans up broadphase proxies on live bodies
-    mConstraints.clear();
-    mRigidBodies.clear();
-    mShapes.clear();
-    mConstraintSolver.reset();
-    mBroadphase.reset();
-    mDispatcher.reset();
-    mCollisionConfig.reset();
-    mWorldBuilt = false;
+    // The engine tears down the Bullet world in Simulation::clear()
+    // (world before bodies — the order that avoids a use-after-free).
+    mSim.clear();
     mLastTime = -1.0;
     mLastTimeUnit = MTime::kFilm;
     mBodies.clear();
@@ -266,7 +245,7 @@ void MMDPhysicsNode::destroyWorld()
 // ===========================================================================
 // Attribute registration
 // ===========================================================================
-MStatus MMDPhysicsNode::initialize()
+MStatus PhysicsNode::initialize()
 {
     MFnNumericAttribute nAttr;
     MFnCompoundAttribute cAttr;
@@ -400,7 +379,7 @@ MStatus MMDPhysicsNode::initialize()
     }
 
     // PMX collider type — enum: box / sphere / capsule (field values match
-    // MMDPhysicsNode::ColliderType).  Field names mirror the enumerators.
+    // PhysicsNode::ColliderType).  Field names mirror the enumerators.
     // Read back via .asShort() like any other numeric attribute.
     {
         MFnEnumAttribute eAttr;
@@ -439,16 +418,17 @@ MStatus MMDPhysicsNode::initialize()
     CHECK_MSTATUS(stat);
 
     // PMX physics mode — enum: followBone / physics / physicsBone (field
-    // values match BodyPhysicsMode).  Field names mirror the enumerators.  The
+    // values match PhysicsMode).  Field names mirror the enumerators.  The
     // node writes the joint-local pose for mode 1/2 (mode 2 = rotation only —
     // Python connects only outRotate for those bodies).
     {
         MFnEnumAttribute eAttr;
-        aBodyPhysicsMode = eAttr.create("bodyPhysicsMode", "bpm", kBodyPhysics, &stat);
+        aBodyPhysicsMode =
+            eAttr.create("bodyPhysicsMode", "bpm", static_cast<short>(PhysicsMode::Physics), &stat);
         CHECK_MSTATUS(stat);
-        eAttr.addField("FollowBone", kBodyPhysicsFollowBone);
-        eAttr.addField("Physics", kBodyPhysics);
-        eAttr.addField("PhysicsBone", kBodyPhysicsBone);
+        eAttr.addField("FollowBone", static_cast<short>(PhysicsMode::FollowBone));
+        eAttr.addField("Physics", static_cast<short>(PhysicsMode::Physics));
+        eAttr.addField("PhysicsBone", static_cast<short>(PhysicsMode::PhysicsBone));
         eAttr.setStorable(true);
         eAttr.setKeyable(false);
     }
@@ -681,7 +661,7 @@ MStatus MMDPhysicsNode::initialize()
 // ===========================================================================
 // Data reading
 // ===========================================================================
-bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
+bool PhysicsNode::readBodyData(MDataBlock& dataBlock)
 {
     mBodies.clear();
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
@@ -690,18 +670,7 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
     {
         bodiesHandle.jumpToArrayElement(i);
         MDataHandle bodyHandle = bodiesHandle.inputValue();
-        Body b;
-        std::memset(&b, 0, sizeof(b));
-        b.mass = 1.0;
-        b.friction = 0.5;
-        b.extents[0] = b.extents[1] = b.extents[2] = 1.0;
-        b.length = 1.0;
-        b.radius = 0.5;
-        b.group = 1;
-        b.mask = 0;
-        b.groupId = -1;
-        b.enabled = true;
-
+        Simulation::BodyDefinition b;
         auto read3 = [&](const MObject& attr, double out[3])
         {
             MDataHandle h = bodyHandle.child(attr);
@@ -709,24 +678,28 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
             out[1] = h.asDouble3()[1];
             out[2] = h.asDouble3()[2];
         };
-        read3(aBodyRestTranslate, b.restPos);
-        read3(aBodyRestRotate, b.restRot);
+        read3(aBodyRestTranslate, b.restPos.data());
+        read3(aBodyRestRotate, b.restRot.data());
         b.mass = bodyHandle.child(aBodyMass).asDouble();
         b.linearDamping = bodyHandle.child(aBodyLinearDamping).asDouble();
         b.angularDamping = bodyHandle.child(aBodyAngularDamping).asDouble();
         b.friction = bodyHandle.child(aBodyFriction).asDouble();
         b.restitution = bodyHandle.child(aBodyRestitution).asDouble();
-        b.colliderType = static_cast<ColliderType>(bodyHandle.child(aBodyColliderType).asShort());
+        b.colliderType =
+            static_cast<Simulation::ColliderType>(bodyHandle.child(aBodyColliderType).asShort());
         b.radius = bodyHandle.child(aBodyRadius).asDouble();
-        read3(aBodyExtents, b.extents);
+        read3(aBodyExtents, b.extents.data());
         b.length = bodyHandle.child(aBodyLength).asDouble();
         b.mask = 0;
         for (int g = 0; g < 16; ++g)
             if (bodyHandle.child(aBodyMaskGroup[g]).asBool())
                 b.mask |= 1L << g;
         b.groupId = bodyHandle.child(aBodyGroupId).asShort();
-        b.physicsMode = bodyHandle.child(aBodyPhysicsMode).asShort();
-        b.kinematic = (b.physicsMode == MMDPhysicsNode::kBodyPhysicsFollowBone);
+        // KEEP the full PMX physics mode (0/1/2) — kinematic is a derived
+        // property (BodyDefinition::isKinematic()) and PHYSICS vs
+        // PHYSICS_BONE must stay distinguishable downstream.
+        b.physicsMode =
+            static_cast<Simulation::PhysicsMode>(bodyHandle.child(aBodyPhysicsMode).asShort());
         b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asShort();
         b.resetAnchorIndex = bodyHandle.child(aBodyResetAnchorIndex).asInt();
         b.enabled = bodyHandle.child(aBodyEnabled).asBool();
@@ -735,7 +708,7 @@ bool MMDPhysicsNode::readBodyData(MDataBlock& dataBlock)
     return !mBodies.empty();
 }
 
-bool MMDPhysicsNode::readJointData(MDataBlock& dataBlock)
+bool PhysicsNode::readJointData(MDataBlock& dataBlock)
 {
     mJoints.clear();
     MArrayDataHandle jointsHandle = dataBlock.inputArrayValue(aJoints);
@@ -744,8 +717,7 @@ bool MMDPhysicsNode::readJointData(MDataBlock& dataBlock)
     {
         jointsHandle.jumpToArrayElement(i);
         MDataHandle jointHandle = jointsHandle.inputValue();
-        Joint j;
-        std::memset(&j, 0, sizeof(j));
+        Simulation::JointDefinition j;
         j.bodyA = jointHandle.child(aJointBodyA).asInt();
         j.bodyB = jointHandle.child(aJointBodyB).asInt();
         j.type = jointHandle.child(aJointType).asInt();
@@ -756,14 +728,14 @@ bool MMDPhysicsNode::readJointData(MDataBlock& dataBlock)
             out[1] = h.asDouble3()[1];
             out[2] = h.asDouble3()[2];
         };
-        read3(aJointFrameTranslate, j.frameT);
-        read3(aJointFrameRotate, j.frameR);
-        read3(aJointLinearMin, j.linearMin);
-        read3(aJointLinearMax, j.linearMax);
-        read3(aJointAngularMin, j.angularMin);
-        read3(aJointAngularMax, j.angularMax);
-        read3(aJointLinearSpring, j.linearSpring);
-        read3(aJointAngularSpring, j.angularSpring);
+        read3(aJointFrameTranslate, j.frameT.data());
+        read3(aJointFrameRotate, j.frameR.data());
+        read3(aJointLinearMin, j.linearMin.data());
+        read3(aJointLinearMax, j.linearMax.data());
+        read3(aJointAngularMin, j.angularMin.data());
+        read3(aJointAngularMax, j.angularMax.data());
+        read3(aJointLinearSpring, j.linearSpring.data());
+        read3(aJointAngularSpring, j.angularSpring.data());
         mJoints.push_back(j);
     }
     return true;
@@ -780,7 +752,7 @@ bool MMDPhysicsNode::readJointData(MDataBlock& dataBlock)
 // limits and springs are all baked into the Bullet construction info at build
 // time, so an edit only takes effect after a rebuild; hashing them lets
 // compute() detect the edit and rebuild in place.
-uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
+uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
 {
     uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a offset basis
 
@@ -882,270 +854,34 @@ uint64_t MMDPhysicsNode::computeConfigSignature(MDataBlock& dataBlock) const
 // ===========================================================================
 // World construction
 // ===========================================================================
-bool MMDPhysicsNode::buildWorld(MDataBlock& dataBlock)
+bool PhysicsNode::buildWorld(MDataBlock& dataBlock)
 {
-    if (mWorldBuilt)
+    if (mSim.initialized())
         return true;
     if (mBodies.empty())
         return false;
 
     // NOTE: do NOT call destroyWorld() here — it clears mBodies/mJoints which
-    // were just read from the datablock. The caller guarantees the world is
+    // were just read from the datablock.  The caller guarantees the world is
     // not built when this runs.
 
-    // Read gravity + fps
+    // The engine owns every Bullet object — the node only hands it the PMX
+    // definition (gravity + bodies + joints) read from the attributes.
+    Simulation::Definition definition;
     MDataHandle gravHandle = dataBlock.inputValue(aGravity);
-    btVector3 gravity(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1],
-                      gravHandle.asDouble3()[2]);
-
-    // Collision group + mask.  The aBodyMaskGroup bools ARE the collision mask
-    // (True = collides with group i) — a verbatim copy of the PMX
-    // non_collision_group field, which MMD feeds to Bullet directly (bit i set
-    // = the body collides with group i; no inversion, no corrections).  b.mask
-    // was already built from those bools in readBodyData; here we only derive
-    // the Bullet group bit from the raw PMX group id.
-    for (size_t i = 0; i < mBodies.size(); ++i)
-    {
-        // Bullet group bit from the raw PMX group id (legacy scenes without
-        // it keep the default group 0).
-        mBodies[i].group = 1L << ((mBodies[i].groupId >= 0 ? mBodies[i].groupId : 0) & 0x0F);
-    }
-
-    // World-level objects.  The world does NOT own the dispatcher / broadphase
-    // / collision config / solver — keep them as members so they are freed
-    // exactly once in destroyWorld() (after the world, which uses them during
-    // its destructor).
-    mCollisionConfig.reset(new btDefaultCollisionConfiguration());
-    mDispatcher.reset(new btCollisionDispatcher(mCollisionConfig.get()));
-    mBroadphase.reset(new btDbvtBroadphase());
-    mConstraintSolver.reset(new btSequentialImpulseConstraintSolver());
-    mWorld.reset(new btDiscreteDynamicsWorld(mDispatcher.get(), mBroadphase.get(),
-                                             mConstraintSolver.get(), mCollisionConfig.get()));
-    mWorld->setGravity(gravity);
-    // Long rigid chains (MMD skirt/hair/ponytail strands are 10-30 links) need
-    // more constraint iterations than Bullet's default 10, or the tension never
-    // propagates and the chain detaches from its kinematic anchor (free-falls).
-    mWorld->getSolverInfo().m_numIterations = kSolverIterations;
-
-    // Create bodies
-    mAnchorRest.clear();
-    mAnchorCurrent.clear();
-    for (size_t i = 0; i < mBodies.size(); ++i)
-    {
-        const Body& b = mBodies[i];
-        if (!b.enabled)
-        {
-            // Disabled (removed): keep the body index ALIGNED so the outputs
-            // and draw data stay body-indexed — store a null placeholder and
-            // never add it to the world (no collision, no simulation).  A
-            // disabled kinematic body also gets no anchor entry.
-            mRigidBodies.emplace_back(nullptr);
-            continue;
-        }
-        btTransform start = transformFromRest(b.restPos, b.restRot);
-
-        btCollisionShape* shape = nullptr;
-        if (b.colliderType == kColliderSphere)
-        {
-            shape = new btSphereShape(btScalar(std::max(b.radius, 1e-4)));
-            mShapes.emplace_back(shape);
-        }
-        else if (b.colliderType == kColliderBox)
-        {
-            shape =
-                new btBoxShape(btVector3(std::max(b.extents[0], 1e-4), std::max(b.extents[1], 1e-4),
-                                         std::max(b.extents[2], 1e-4)));
-            mShapes.emplace_back(shape);
-        }
-        else // capsule — btCapsuleShape is ALREADY Y-axis (m_upAxis = 1), which
-             // matches MMD's vertical capsule and the polyCylinder guide mesh.
-             // (An earlier "Bullet capsule axis is Z" rotation was WRONG — it
-             // turned every capsule sideways, e.g. the torso capsule pointed its
-             // hemispherical cap at the skirt and pushed it ~1 unit out, making
-             // the skirt float with a visible gap from the body.)
-        {
-            auto* capsule = new btCapsuleShape(btScalar(std::max(b.radius, 1e-4)),
-                                               btScalar(std::max(b.length, 1e-4)));
-            mShapes.emplace_back(capsule);
-            shape = capsule;
-        }
-
-        btScalar mass = b.kinematic ? 0.0 : std::max(b.mass, 0.0);
-        btVector3 localInertia(0, 0, 0);
-        if (mass > 0.0)
-            shape->calculateLocalInertia(mass, localInertia);
-
-        auto* motionState = new btDefaultMotionState(start);
-        btRigidBody::btRigidBodyConstructionInfo ci(mass, motionState, shape, localInertia);
-        ci.m_linearDamping = btScalar(b.linearDamping);
-        ci.m_angularDamping = btScalar(b.angularDamping);
-        ci.m_friction = btScalar(b.friction);
-        ci.m_restitution = btScalar(b.restitution);
-        auto* body = new btRigidBody(ci);
-
-        if (b.kinematic)
-        {
-            body->setCollisionFlags(body->getCollisionFlags() |
-                                    btCollisionObject::CF_KINEMATIC_OBJECT);
-            body->setActivationState(DISABLE_DEACTIVATION);
-            body->setGravity(btVector3(0, 0, 0));
-            // Record the anchor's REST pose (group-local) for scrub-back.
-            mAnchorRest.emplace_back(AnchorPose());
-            storeAnchorPose(mAnchorRest.back().pos, mAnchorRest.back().quat, start);
-            // mAnchorCurrent must be the SAME size as mAnchorRest — it is
-            // refreshed every frame in updateKinematicAnchors and drives the
-            // scrub-back reset (empty would silently disable the rewind).
-            mAnchorCurrent.emplace_back(AnchorPose());
-            storeAnchorPose(mAnchorCurrent.back().pos, mAnchorCurrent.back().quat, start);
-        }
-        else
-        {
-            body->setActivationState(ISLAND_SLEEPING); // wake on first step
-            body->activate();
-        }
-
-        // Scrub-back reset: capture the constant offset bodyRest = anchorRest *
-        // offset, where the anchor is the kinematic body whose bone is this
-        // body's nearest kinematic ancestor (mapped by Python).  On rewind the
-        // body is teleported to anchorCurrent * offset — i.e. its rest pose
-        // transformed by the CURRENT skeleton pose, instead of rebuilding at
-        // the PMX rest pose while the skeleton is at another frame.
-        if (!b.kinematic && b.resetAnchorIndex >= 0 &&
-            b.resetAnchorIndex < (int) mAnchorRest.size())
-        {
-            const btTransform anchorRest = anchorPoseToTransform(
-                mAnchorRest[b.resetAnchorIndex].pos, mAnchorRest[b.resetAnchorIndex].quat);
-            const btTransform bodyRest = start;
-            const btTransform offset = anchorRest.inverse() * bodyRest;
-            mBodies[i].hasBoneReset = true;
-            const btVector3& o = offset.getOrigin();
-            const btQuaternion& q = offset.getRotation();
-            mBodies[i].resetOffsetPos[0] = o.x();
-            mBodies[i].resetOffsetPos[1] = o.y();
-            mBodies[i].resetOffsetPos[2] = o.z();
-            mBodies[i].resetOffsetQuat[0] = q.x();
-            mBodies[i].resetOffsetQuat[1] = q.y();
-            mBodies[i].resetOffsetQuat[2] = q.z();
-            mBodies[i].resetOffsetQuat[3] = q.w();
-        }
-
-        mWorld->addRigidBody(body, b.group, b.mask);
-        mRigidBodies.emplace_back(body);
-    }
-
-    // Create joints
-    for (const Joint& j : mJoints)
-    {
-        if (j.bodyA < 0 || j.bodyB < 0 || j.bodyA >= (long) mRigidBodies.size() ||
-            j.bodyB >= (long) mRigidBodies.size())
-            continue;
-        // Skip joints that reference a disabled (removed) body.
-        if (!mBodies[j.bodyA].enabled || !mBodies[j.bodyB].enabled)
-            continue;
-        btRigidBody* rbA = mRigidBodies[j.bodyA].get();
-        btRigidBody* rbB = mRigidBodies[j.bodyB].get();
-        btTransform frameWorld = transformFromRest(j.frameT, j.frameR);
-        btTransform frameInA = rbA->getWorldTransform().inverse() * frameWorld;
-        btTransform frameInB = rbB->getWorldTransform().inverse() * frameWorld;
-
-        btTypedConstraint* con = nullptr;
-        switch (j.type)
-        {
-        case kJointSpring6Dof:
-        {
-            // MMD maps EVERY SPRING_6DOF joint to btGeneric6DofSpring2Constraint —
-            // that is exactly what its physics engine creates.  The spring-2
-            // limit motor treats upper==lower as LOCKED (see
-            // btTranslationalLimitMotor2), so:
-            //   * zero springs + zero limits -> proper RIGID WELD (locked),
-            //     without btFixedConstraint's infinite-stiffness spring creep;
-            //   * zero springs + real limits -> flexible 6DOF (limited);
-            //   * nonzero springs            -> springy (PMX stiffness).
-            // This is the single mapping that matches MMD's behaviour for the
-            // whole joints data (rigid hair/cape chains, springy skirt, etc.).
-            auto* g6 = new btGeneric6DofSpring2Constraint(*rbA, *rbB, frameInA, frameInB);
-            g6->setLinearLowerLimit(btVector3(j.linearMin[0], j.linearMin[1], j.linearMin[2]));
-            g6->setLinearUpperLimit(btVector3(j.linearMax[0], j.linearMax[1], j.linearMax[2]));
-            g6->setAngularLowerLimit(btVector3(j.angularMin[0], j.angularMin[1], j.angularMin[2]));
-            g6->setAngularUpperLimit(btVector3(j.angularMax[0], j.angularMax[1], j.angularMax[2]));
-            for (int ax = 0; ax < 3; ++ax)
-            {
-                if (j.linearSpring[ax] != 0)
-                {
-                    g6->enableSpring(ax, true);
-                    g6->setStiffness(ax, btScalar(j.linearSpring[ax]));
-                }
-                if (j.angularSpring[ax] != 0)
-                {
-                    g6->enableSpring(ax + 3, true);
-                    g6->setStiffness(ax + 3, btScalar(j.angularSpring[ax]));
-                }
-            }
-            con = g6;
-            break;
-        }
-        case kJointSixDof:
-        {
-            auto* g6 = new btGeneric6DofConstraint(*rbA, *rbB, frameInA, frameInB, true);
-            g6->setLinearLowerLimit(btVector3(j.linearMin[0], j.linearMin[1], j.linearMin[2]));
-            g6->setLinearUpperLimit(btVector3(j.linearMax[0], j.linearMax[1], j.linearMax[2]));
-            g6->setAngularLowerLimit(btVector3(j.angularMin[0], j.angularMin[1], j.angularMin[2]));
-            g6->setAngularUpperLimit(btVector3(j.angularMax[0], j.angularMax[1], j.angularMax[2]));
-            con = g6;
-            break;
-        }
-        case kJointP2P:
-        {
-            btVector3 pivotInA = frameInA.getOrigin();
-            btVector3 pivotInB = frameInB.getOrigin();
-            con = new btPoint2PointConstraint(*rbA, *rbB, pivotInA, pivotInB);
-            break;
-        }
-        case kJointConeTwist:
-        {
-            auto* ct = new btConeTwistConstraint(*rbA, *rbB, frameInA, frameInB);
-            ct->setLimit(j.angularMin[1], j.angularMax[1], 0.0, 0.3f, 0.0f, 1.0f);
-            con = ct;
-            break;
-        }
-        case kJointSlider:
-        {
-            auto* sl = new btSliderConstraint(*rbA, *rbB, frameInA, frameInB, true);
-            sl->setLowerLinLimit(j.linearMin[1]);
-            sl->setUpperLinLimit(j.linearMax[1]);
-            sl->setLowerAngLimit(j.angularMin[1]);
-            sl->setUpperAngLimit(j.angularMax[1]);
-            con = sl;
-            break;
-        }
-        case kJointHinge:
-        {
-            auto* hi = new btHingeConstraint(*rbA, *rbB, frameInA, frameInB, true);
-            hi->setLimit(j.angularMin[1], j.angularMax[1], 0.3f, 0.0f, 1.0f);
-            con = hi;
-            break;
-        }
-        default:
-            break;
-        }
-
-        if (con)
-        {
-            mWorld->addConstraint(con, /*disableCollisionsBetweenLinkedBodies=*/true);
-            mConstraints.emplace_back(con);
-        }
-    }
-
-    mWorldBuilt = true;
-    return true;
+    definition.gravity =
+        Double3(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1], gravHandle.asDouble3()[2]);
+    definition.bodies = mBodies;
+    definition.joints = mJoints;
+    return mSim.initialize(definition);
 }
 
 // ===========================================================================
 // Per-frame update
 // ===========================================================================
-bool MMDPhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
+bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
 {
-    if (!mWorld)
+    if (!mSim.initialized())
         return false;
     // anchorWorldMatrix[i] + anchorParentInverseMatrix[i] map 1:1 to the
     // kinematic bodies in body order.  local = world * parentInverse (row-vector
@@ -1160,7 +896,8 @@ bool MMDPhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
     int anchorIndex = 0;
     for (size_t i = 0; i < mBodies.size() && anchorIndex < (int) anchorCount; ++i)
     {
-        if (!mBodies[i].kinematic || !mBodies[i].enabled)
+        const Simulation::BodyDefinition& b = mBodies[i];
+        if (!b.isKinematic() || !b.enabled)
             continue;
         anchors.jumpToArrayElement(anchorIndex);
         MMatrix w = anchors.inputValue().asMatrix();
@@ -1181,96 +918,52 @@ bool MMDPhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
             anchorOffset.jumpToArrayElement(anchorIndex);
             w = anchorOffset.inputValue().asMatrix() * w;
         }
-        btTransform t = mayaMatrixToBtTransform(w);
-        // Detect anchor movement (e.g. a bone dragged in the viewport at the
-        // current frame): if an anchor moved but time did not advance, the sim
-        // still needs to step so attached chains follow the bone immediately
-        // (MMD reacts to bone changes instantly — not on the next frame).
-        if (anchorIndex < (int) mAnchorCurrent.size())
-        {
-            const btTransform prev = anchorPoseToTransform(mAnchorCurrent[anchorIndex].pos,
-                                                           mAnchorCurrent[anchorIndex].quat);
-            const btVector3 d = t.getOrigin() - prev.getOrigin();
-            const btVector3 c0 = t.getBasis().getColumn(0);
-            const btVector3 p0 = prev.getBasis().getColumn(0);
-            const btVector3 c1 = t.getBasis().getColumn(1);
-            const btVector3 p1 = prev.getBasis().getColumn(1);
-            if (d.length2() > btScalar(1e-6) || c0.dot(p0) < btScalar(1.0) - btScalar(1e-5) ||
-                c1.dot(p1) < btScalar(1.0) - btScalar(1e-5))
-                anchorsMoved = true;
-        }
-        mRigidBodies[i]->setWorldTransform(t);
-        mRigidBodies[i]->getMotionState()->setWorldTransform(t);
-        if (anchorIndex < (int) mAnchorCurrent.size())
-            storeAnchorPose(mAnchorCurrent[anchorIndex].pos, mAnchorCurrent[anchorIndex].quat, t);
+        // Convert the anchor's group-local pose to the engine's Pose — the sim
+        // sets the Bullet transform, tracks the current pose and detects
+        // movement (a bone dragged at the current frame).
+        Simulation::Pose pose;
+        const btTransform t = mayaMatrixToBtTransform(w);
+        const btVector3& o = t.getOrigin();
+        const btQuaternion& q = t.getRotation();
+        pose.pos = Double3(o.x(), o.y(), o.z());
+        pose.quat = Double4(q.x(), q.y(), q.z(), q.w());
+        if (mSim.setKinematicPose(anchorIndex, pose))
+            anchorsMoved = true;
         ++anchorIndex;
     }
     return anchorsMoved;
 }
 
-void MMDPhysicsNode::resetDynamicBodies(MDataBlock& dataBlock)
+void PhysicsNode::resetDynamicBodies(MDataBlock& dataBlock)
 {
     // Teleport every dynamic body (that has a reset anchor) to its rest pose
-    // transformed by the CURRENT skeleton pose, zeroing velocities.  Called
-    // when time is scrubbed backwards: the world is NOT rebuilt, so the sim
-    // simply continues from the pose the skeleton is actually in — instead of
-    // hair/skirt chains hanging at the PMX rest pose while the skeleton is at
-    // another frame (which looked broken).  Uses the anchor CURRENT poses
-    // captured this frame in updateKinematicAnchors().
+    // transformed by the CURRENT skeleton pose, zeroing velocities — the
+    // engine owns the reset math (Simulation::resetDynamicBodies).
     (void) dataBlock;
-    if (!mWorld)
-        return;
-    for (size_t i = 0; i < mBodies.size(); ++i)
-    {
-        if (mBodies[i].kinematic || !mBodies[i].enabled || !mBodies[i].hasBoneReset)
-            continue;
-        const int aIdx = mBodies[i].resetAnchorIndex;
-        if (aIdx < 0 || aIdx >= (int) mAnchorCurrent.size())
-            continue;
-
-        const btTransform anchorCurrent =
-            anchorPoseToTransform(mAnchorCurrent[aIdx].pos, mAnchorCurrent[aIdx].quat);
-        btTransform offset;
-        offset.setIdentity();
-        offset.setOrigin(btVector3(btScalar(mBodies[i].resetOffsetPos[0]),
-                                   btScalar(mBodies[i].resetOffsetPos[1]),
-                                   btScalar(mBodies[i].resetOffsetPos[2])));
-        offset.setRotation(btQuaternion(
-            btScalar(mBodies[i].resetOffsetQuat[0]), btScalar(mBodies[i].resetOffsetQuat[1]),
-            btScalar(mBodies[i].resetOffsetQuat[2]), btScalar(mBodies[i].resetOffsetQuat[3])));
-        const btTransform target = anchorCurrent * offset;
-
-        btRigidBody* body = mRigidBodies[i].get();
-        body->setWorldTransform(target);
-        body->getMotionState()->setWorldTransform(target);
-        body->setLinearVelocity(btVector3(0, 0, 0));
-        body->setAngularVelocity(btVector3(0, 0, 0));
-        body->setActivationState(DISABLE_DEACTIVATION);
-        body->activate();
-    }
+    mSim.resetDynamicBodies();
 }
 
-void MMDPhysicsNode::getCacheSetup(const MEvaluationNode& evalNode,
-                                   MNodeCacheDisablingInfo& disablingInfo,
-                                   MNodeCacheSetupInfo& setupInfo,
-                                   MObjectArray& monitoredAttributes) const
+void PhysicsNode::getCacheSetup(const MEvaluationNode& evalNode,
+                                MNodeCacheDisablingInfo& disablingInfo,
+                                MNodeCacheSetupInfo& setupInfo,
+                                MObjectArray& monitoredAttributes) const
 {
     // This node advances an internal Bullet world in compute(), so its outputs
     // are NOT a pure function of its inputs.  Cached Playback must re-evaluate
     // it every frame, exactly like a scripted/expression node.
-    MString category("mmdPhysicsNode: stateful Bullet solver (steps every frame)");
+    MString category("pmxPhysicsNode: stateful Bullet solver (steps every frame)");
     MNodeCacheDisablingInfoHelper::setUnsafeNode(disablingInfo, evalNode, &category);
     MPxNode::getCacheSetup(evalNode, disablingInfo, setupInfo, monitoredAttributes);
 }
 
-bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
+bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 {
     // Phase 3 direct write-back: the node outputs the JOINT-LOCAL pose so
     // Python can connect outTranslate/outRotate straight into the joints (no
     // guide transforms, no parent/orientConstraints).  The primary transform
     // is
     //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
-    // where K = jointRestWorld * bodyRestWorld^-1 (baked by mmdRigidBody
+    // where K = jointRestWorld * bodyRestWorld^-1 (baked by pmxRigidBody
     // -create) and the parent inverse is derived from the PARENT BODY's
     // solved Bullet transform (M_parent * B_parent * groupWorld =
     // parentJointWorld, M_parent = parentJointRestWorld * parentBodyRestWorld^-1
@@ -1302,14 +995,13 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
 
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        if (mBodies[i].kinematic || !mBodies[i].enabled)
+        const Simulation::BodyDefinition& bd = mBodies[i];
+        if (bd.isKinematic() || !bd.enabled)
             continue;
-        btRigidBody* body = mRigidBodies[i].get();
-        const btTransform& wt = body->getWorldTransform();
-
-        // Start from the group-space body pose (Maya row-vector matrix).
+        // Start from the solved group-space body pose (Maya row-vector matrix).
+        const Simulation::Pose wp = mSim.bodyPose(i);
         double outRow[4][4];
-        btTransformToRowMatrix(wt, outRow);
+        btTransformToRowMatrix(anchorPoseToTransform(wp.pos, wp.quat), outRow);
 
         // PRIMARY write-back path (Phase 3 cycle fix): the parent inverse is
         // derived from the PARENT BODY's solved Bullet transform, never from
@@ -1326,8 +1018,8 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
         // M_parent * B_parent * groupWorld, the groupWorld term cancels and
         // boneLocal is EXACT at rest for both parent kinds (verified
         // algebraically).
-        const int parentIdx = mBodies[i].parentBodyIndex;
-        if (parentIdx >= 0 && (size_t) parentIdx < mRigidBodies.size() && mRigidBodies[parentIdx] &&
+        const int parentIdx = bd.parentBodyIndex;
+        if (parentIdx >= 0 && (size_t) parentIdx < mBodies.size() && mBodies[parentIdx].enabled &&
             offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
             offsetHandle.jumpToArrayElement((unsigned int) parentIdx) == MS::kSuccess)
         {
@@ -1345,8 +1037,11 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
             // separate parent-offset array is not needed.
             offsetHandle.jumpToArrayElement((unsigned int) parentIdx);
             MMatrix mp = offsetHandle.inputValue().asMatrix();
+            // B_parent = the PARENT BODY's solved Bullet transform (never the
+            // DG joint matrix — that was the feedback-cycle fix).
+            const Simulation::Pose pp = mSim.bodyPose(parentIdx);
             double bpRow[4][4];
-            btTransformToRowMatrix(mRigidBodies[parentIdx]->getWorldTransform(), bpRow);
+            btTransformToRowMatrix(anchorPoseToTransform(pp.pos, pp.quat), bpRow);
             MMatrix bParent(bpRow);
             MMatrix bodyLocal(outRow);
             MMatrix result = k * bodyLocal * bParent.inverse() * mp.inverse();
@@ -1392,17 +1087,25 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
         }
 
         const double* o = outRow[3]; // row-vector translation
-        double rot[3];
+        Double3 rot;
         btTransform boneLocal = doubleMatrixToBtTransform(outRow);
         quatToEulerXYZDegrees(boneLocal.getRotation(), rot);
 
-        MDataHandle tEl = tBuilder.addElement((unsigned int) i);
-        MDataHandle tChild = tEl.child(aOutTranslateValue);
-        tChild.set3Double(o[0], o[1], o[2]);
+        // Mode-aware write-back — the MMD reference (blender_mmd_tools' rigid
+        // track = "COPY_TRANSFORMS"/"COPY_ROTATION" per mode):
+        //   PHYSICS (1)      -> the bone follows the body fully (translate + rotate)
+        //   PHYSICS_BONE (2) -> the bone keeps its animated position and receives
+        //                      only the body's rotation (rotate only)
+        if (bd.physicsMode != Simulation::PhysicsMode::PhysicsBone)
+        {
+            MDataHandle tEl = tBuilder.addElement((unsigned int) i);
+            MDataHandle tChild = tEl.child(aOutTranslateValue);
+            tChild.set3Double(o[0], o[1], o[2]);
+        }
 
         MDataHandle rEl = rBuilder.addElement((unsigned int) i);
         MDataHandle rChild = rEl.child(aOutRotateValue);
-        rChild.set3Double(rot[0], rot[1], rot[2]);
+        rChild.set3Double(rot.x, rot.y, rot.z);
     }
 
     MArrayDataHandle tOut = dataBlock.outputArrayValue(aOutTranslate);
@@ -1419,7 +1122,7 @@ bool MMDPhysicsNode::writeOutputs(MDataBlock& dataBlock)
 // ===========================================================================
 // Draw support
 // ===========================================================================
-void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
+void PhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
 {
     out.clear();
     // Before the first compute() the internal body state is empty — draw the
@@ -1440,40 +1143,38 @@ void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
     out.reserve(mBodies.size());
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        const Body& b = mBodies[i];
+        const Simulation::BodyDefinition& b = mBodies[i];
         if (!b.enabled)
             continue;
         DrawBody db;
-        db.colliderType = b.colliderType;
+        db.colliderType = static_cast<ColliderType>(b.colliderType);
         db.radius = b.radius;
-        db.extents[0] = b.extents[0];
-        db.extents[1] = b.extents[1];
-        db.extents[2] = b.extents[2];
+        db.extents[0] = b.extents.x;
+        db.extents[1] = b.extents.y;
+        db.extents[2] = b.extents.z;
         db.length = b.length;
-        db.kinematic = b.kinematic;
+        db.kinematic = b.isKinematic();
         // group id straight from the raw PMX group id (clamp legacy -1).
         db.groupId = b.groupId >= 0 ? b.groupId : 0;
-        if (mWorldBuilt && i < mRigidBodies.size() && mRigidBodies[i])
+        if (mSim.initialized())
         {
             // Solved pose — what the simulation actually has right now.
-            const btTransform& t = mRigidBodies[i]->getWorldTransform();
-            const btVector3& o = t.getOrigin();
-            const btQuaternion& q = t.getRotation();
-            db.pos[0] = o.x();
-            db.pos[1] = o.y();
-            db.pos[2] = o.z();
-            db.quat[0] = q.x();
-            db.quat[1] = q.y();
-            db.quat[2] = q.z();
-            db.quat[3] = q.w();
+            const Simulation::Pose p = mSim.bodyPose(i);
+            db.pos[0] = p.pos.x;
+            db.pos[1] = p.pos.y;
+            db.pos[2] = p.pos.z;
+            db.quat[0] = p.quat.x;
+            db.quat[1] = p.quat.y;
+            db.quat[2] = p.quat.z;
+            db.quat[3] = p.quat.w;
         }
         else
         {
             // World not built yet — draw the PMX rest pose.
-            db.pos[0] = b.restPos[0];
-            db.pos[1] = b.restPos[1];
-            db.pos[2] = b.restPos[2];
-            const btQuaternion q = eulerDegreesToQuat(b.restRot[0], b.restRot[1], b.restRot[2]);
+            db.pos[0] = b.restPos.x;
+            db.pos[1] = b.restPos.y;
+            db.pos[2] = b.restPos.z;
+            const btQuaternion q = eulerDegreesToQuat(b.restRot.x, b.restRot.y, b.restRot.z);
             db.quat[0] = q.x();
             db.quat[1] = q.y();
             db.quat[2] = q.z();
@@ -1483,17 +1184,17 @@ void MMDPhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
     }
 }
 
-MBoundingBox MMDPhysicsNode::boundingBox() const
+MBoundingBox PhysicsNode::boundingBox() const
 {
     MBoundingBox box;
     bool any = false;
-    for (const Body& b : mBodies)
+    for (const Simulation::BodyDefinition& b : mBodies)
     {
         double r;
-        if (b.colliderType == kColliderSphere)
+        if (b.colliderType == Simulation::ColliderType::Sphere)
             r = b.radius;
-        else if (b.colliderType == kColliderBox)
-            r = std::max({b.extents[0], b.extents[1], b.extents[2]});
+        else if (b.colliderType == Simulation::ColliderType::Box)
+            r = std::max({b.extents.x, b.extents.y, b.extents.z});
         else
             r = b.radius + b.length * 0.5;
         r = std::max(r, 0.5);
@@ -1507,9 +1208,61 @@ MBoundingBox MMDPhysicsNode::boundingBox() const
 }
 
 // ===========================================================================
+// Timeline/state helpers — see SimulationTransition in physics_node.h.
+// ===========================================================================
+PhysicsNode::SimulationTransition PhysicsNode::classifyTransition(uint64_t configSignature,
+                                                                  const MTime& nowTime, double now,
+                                                                  bool anchorsMoved) const
+{
+    if (!mSim.initialized())
+        return SimulationTransition::Initialize;
+    if (configSignature != mConfigSignature)
+        return SimulationTransition::ConfigurationChanged;
+    if (mLastTime < 0.0 || now == mLastTime)
+        return anchorsMoved ? SimulationTransition::PoseChanged : SimulationTransition::NoChange;
+    // Time moved — forwards (Advance) or backwards (Rewind)?
+    const double dt = (nowTime - MTime(mLastTime, mLastTimeUnit)).as(MTime::kSeconds);
+    return dt < 0.0 ? SimulationTransition::Rewind : SimulationTransition::Advance;
+}
+
+bool PhysicsNode::initializeSimulation(MDataBlock& dataBlock, uint64_t configSignature,
+                                       const MTime& nowTime)
+{
+    readBodyData(dataBlock);
+    readJointData(dataBlock);
+    if (!buildWorld(dataBlock))
+        return false;
+    mConfigSignature = configSignature;
+    mLastTime = nowTime.value();
+    mLastTimeUnit = nowTime.unit();
+    return true;
+}
+
+bool PhysicsNode::rebuildSimulationAtCurrentPose(MDataBlock& dataBlock, uint64_t configSignature,
+                                                 const MTime& nowTime)
+{
+    // Shared by ConfigurationChanged and Rewind: rebuild the Bullet world from
+    // the CURRENT skeleton pose — an in-place config edit must not teleport the
+    // chains to the PMX rest pose, and a rewind must not carry stale solver
+    // warm-start state into the reset.
+    updateKinematicAnchors(dataBlock); // capture the current skeleton pose
+    destroyWorld();
+    readBodyData(dataBlock);
+    readJointData(dataBlock);
+    if (!buildWorld(dataBlock))
+        return false;
+    mConfigSignature = configSignature;
+    updateKinematicAnchors(dataBlock); // re-apply current anchors
+    resetDynamicBodies(dataBlock);     // chains stay at the current pose
+    mLastTime = nowTime.value();       // no time-step on the rebuild frame
+    mLastTimeUnit = nowTime.unit();
+    return true;
+}
+
+// ===========================================================================
 // compute()
 // ===========================================================================
-MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
+MStatus PhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 {
     if (plug != aOutTranslate && plug != aOutRotate && !plug.isElement() && !plug.isChild())
     {
@@ -1519,102 +1272,57 @@ MStatus MMDPhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     MDataHandle timeHandle = dataBlock.inputValue(aTime);
     const MTime nowTime = timeHandle.asTime();
     const double now = nowTime.value();
-
     const uint64_t configSignature = computeConfigSignature(dataBlock);
-    const bool firstEval = !mWorldBuilt;
-    if (!mWorldBuilt)
+
+    // Refresh the kinematic anchors every evaluation (so the colliders track
+    // their bones even at a fixed time) and detect whether any moved since the
+    // previous step.  No-op while the world is not built (on the very first
+    // eval the anchor inputs may not be ready yet).
+    const bool anchorsMoved = updateKinematicAnchors(dataBlock);
+
+    // Timeline/state machine: classify this evaluation into exactly one
+    // transition and act on it (see SimulationTransition).
+    switch (classifyTransition(configSignature, nowTime, now, anchorsMoved))
     {
-        readBodyData(dataBlock);
-        readJointData(dataBlock);
-        if (!buildWorld(dataBlock))
+    case SimulationTransition::Initialize:
+        // First evaluation — read the attributes and build the world.
+        if (!initializeSimulation(dataBlock, configSignature, nowTime))
             return MS::kFailure;
-        mConfigSignature = configSignature;
+        break;
+
+    case SimulationTransition::ConfigurationChanged:
+        // A config edit (gravity/fps/bodies/joints/anchor counts) — rebuild in
+        // place, keeping the dynamic chains glued to the CURRENT skeleton pose.
+        if (!rebuildSimulationAtCurrentPose(dataBlock, configSignature, nowTime))
+            return MS::kFailure;
+        break;
+
+    case SimulationTransition::Rewind:
+        // Scrubbing backwards — rebuild from the current skeleton pose (a fresh
+        // world carries no stale solver warm-start state, so the chains do not
+        // get yanked after the reset) and place the bodies at current-pose
+        // targets.  No solver step on this frame.
+        if (!rebuildSimulationAtCurrentPose(dataBlock, configSignature, nowTime))
+            return MS::kFailure;
+        break;
+
+    case SimulationTransition::Advance:
+        // Time moved forward — step by the frame span in SECONDS (via MTime,
+        // which adapts to the scene's playback unit — no fps attribute needed).
+        mSim.step((nowTime - MTime(mLastTime, mLastTimeUnit)).as(MTime::kSeconds));
         mLastTime = now;
         mLastTimeUnit = nowTime.unit();
-    }
-    else if (configSignature != mConfigSignature)
-    {
-        // Phase 4 auto-rebuild: the user (or a re-import) edited the config
-        // (gravity / fps / bodies / joints / anchor counts).  Mass, damping,
-        // limits, collider size etc. are baked into the Bullet construction
-        // info, so the world must be rebuilt for the edit to take effect.
-        // Keep the dynamic chains glued to the CURRENT skeleton pose — exactly
-        // like the rewind path — so an in-place edit does NOT teleport the
-        // chains to the PMX rest pose.  (destroyWorld() is safe here: the
-        // bodies/joints are re-read from the datablock right after.)
-        updateKinematicAnchors(dataBlock); // capture the current skeleton pose
-        destroyWorld();
-        readBodyData(dataBlock);
-        readJointData(dataBlock);
-        if (!buildWorld(dataBlock))
-            return MS::kFailure;
-        mConfigSignature = configSignature;
-        updateKinematicAnchors(dataBlock); // re-apply current anchors
-        resetDynamicBodies(dataBlock);     // chains stay at the current pose
-        mLastTime = now;                   // no time-step on the rebuild frame
-        mLastTimeUnit = nowTime.unit();
-    }
+        break;
 
-    // Refresh the kinematic anchors from their inputs every evaluation (so the
-    // kinematic colliders track their bones even at a fixed time), and detect
-    // whether any anchor moved since the previous step.
-    bool anchorsMoved = false;
-    if (!firstEval) // on the very first eval the anchor inputs may not be ready
-        anchorsMoved = updateKinematicAnchors(dataBlock);
+    case SimulationTransition::PoseChanged:
+        // A bone was dragged at the current frame — run one fixed tick so the
+        // attached chains follow immediately (MMD reacts to bone changes at
+        // once, not on the next frame).
+        mSim.step(Simulation::kFixedDt);
+        break;
 
-    // Step the sim when time advanced OR a kinematic anchor moved (a bone
-    // dragged in the viewport at the current frame — MMD reacts to bone changes
-    // immediately, so the attached chains must follow at once, not on the next
-    // frame).
-    const bool timeChanged = (mLastTime >= 0.0 && now != mLastTime);
-    if (timeChanged || anchorsMoved)
-    {
-        double dt = 0.0;
-        if (timeChanged)
-        {
-            // Frame span (in the scene's current time unit) -> SECONDS via
-            // MTime.  This adapts automatically to whatever the scene's
-            // playback unit is (film/game/custom 23.976 etc.) and tracks a
-            // unit change mid-session — no fps attribute is needed.
-            dt = (nowTime - MTime(mLastTime, mLastTimeUnit)).as(MTime::kSeconds);
-        }
-        bool rewound = false;
-        if (dt < 0.0)
-        {
-            // Scrubbing backwards: REBUILD the Bullet world from the CURRENT
-            // skeleton pose instead of keeping it and teleporting bodies.
-            // Teleporting alone left the solver's warm-start impulse state
-            // (from the previous frame) in place, so the first step after the
-            // teleport catastrophically yanked the chains away from their
-            // reset pose ("going back in time breaks the animation").  A fresh
-            // world has no stale solver state; initializing the dynamic bodies
-            // at anchorCurrent * offset (their rest pose transformed by the
-            // current skeleton pose) keeps hair/skirt glued to the skeleton at
-            // the frame the user actually scrubbed to.
-            updateKinematicAnchors(dataBlock); // current skeleton pose -> anchors
-            destroyWorld();                    // fresh bodies/constraints/solver
-            readBodyData(dataBlock);
-            readJointData(dataBlock);
-            if (!buildWorld(dataBlock))
-                return MS::kFailure;
-            updateKinematicAnchors(dataBlock); // re-apply current anchors
-            resetDynamicBodies(dataBlock);     // dynamic bodies at current-pose targets
-            dt = 0.0;
-            rewound = true;
-        }
-        dt = std::min(dt, kMaxStepTime); // guard against huge jumps
-        // Anchor-only movement at a fixed time (a bone dragged in the
-        // viewport, no rewind): still run one solver step so the chains are
-        // pulled to follow the moved bone (a zero dt makes Bullet skip the
-        // solve entirely).  NOT after a rewind though — the reset already
-        // teleported the chains (possibly a large distance), and running a
-        // solver step right after a big teleport yanks the chains away from
-        // their reset pose (catastrophic one-step correction).
-        if (!rewound && anchorsMoved && dt <= 0.0)
-            dt = kFixedDt;
-        mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
-        mLastTime = now;
-        mLastTimeUnit = nowTime.unit();
+    case SimulationTransition::NoChange:
+        break;
     }
 
     writeOutputs(dataBlock);

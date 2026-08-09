@@ -1,12 +1,12 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_physics_math.h
+ * physics_math.hpp
  *
  * Pure math shared by the MMD physics node — Maya-free and Bullet-only, so it
  * can be unit-tested with a plain C++ target (no Maya SDK needed).  Everything
- * here is `inline` in namespace mmd_physics_math so the same header serves
- * mmd_physics_node.cpp (and, later, the draw override and the collision-mask
+ * here is `inline` in namespace mmd::core::physics_math so the same header serves
+ * physics_node.cpp (and, later, the draw override and the collision-mask
  * resolver).
  *
  * Conventions (each was verified empirically against Maya 2026):
@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include "common.hpp"
+
 #include <LinearMath/btMatrix3x3.h>
 #include <LinearMath/btQuaternion.h>
 #include <LinearMath/btTransform.h>
@@ -26,7 +28,11 @@
 
 #include <cmath>
 
-namespace mmd_physics_math
+namespace mmd
+{
+namespace core
+{
+namespace physics_math
 {
 
 constexpr double kPi = 3.14159265358979323846;
@@ -56,7 +62,7 @@ inline btQuaternion eulerDegreesToQuat(double rx, double ry, double rz)
 // Extract XYZ euler (degrees) from a quaternion in the Maya rotate convention.
 // The Bullet matrix m = Rz * Ry * Rx (matches eulerDegreesToQuat = qz*qy*qx):
 //   sin(ry) = -m[2][0];  rx = atan2(m[2][1], m[2][2]);  rz = atan2(m[1][0], m[0][0])
-inline void quatToEulerXYZDegrees(const btQuaternion& q, double out[3])
+inline void quatToEulerXYZDegrees(const btQuaternion& q, Double3& out)
 {
     btMatrix3x3 m(q);
     const double sy = -m[2][0]; // sin(ry)
@@ -81,26 +87,27 @@ inline void quatToEulerXYZDegrees(const btQuaternion& q, double out[3])
             ry = -kPi / 2.0;
             rz = std::atan2(-m[0][1], m[1][1]);
         }
-        out[0] = 0.0;
-        out[1] = rad2deg(ry);
-        out[2] = rad2deg(rz);
+        out.x = 0.0;
+        out.y = rad2deg(ry);
+        out.z = rad2deg(rz);
         return;
     }
     double rx = std::atan2(m[2][1], m[2][2]);
     double ry = std::asin(sy);
     double rz = std::atan2(m[1][0], m[0][0]);
-    out[0] = rad2deg(rx);
-    out[1] = rad2deg(ry);
-    out[2] = rad2deg(rz);
+    out.x = rad2deg(rx);
+    out.y = rad2deg(ry);
+    out.z = rad2deg(rz);
 }
 
-// Build a btTransform from rest position + Maya XYZ euler degrees.
-inline btTransform transformFromRest(const double pos[3], const double rotDeg[3])
+// Build a btTransform from a rest position + Maya XYZ euler degrees (both as
+// Double3 value types — the conversion to Bullet happens here).
+inline btTransform transformFromRest(const Double3& pos, const Double3& rotDeg)
 {
     btTransform t;
     t.setIdentity();
-    t.setOrigin(btVector3(pos[0], pos[1], pos[2]));
-    t.setBasis(btMatrix3x3(eulerDegreesToQuat(rotDeg[0], rotDeg[1], rotDeg[2])));
+    t.setOrigin(btVector3(pos.x, pos.y, pos.z));
+    t.setBasis(btMatrix3x3(eulerDegreesToQuat(rotDeg.x, rotDeg.y, rotDeg.z)));
     return t;
 }
 
@@ -124,27 +131,28 @@ inline btTransform doubleMatrixToBtTransform(const double m[4][4])
     return t;
 }
 
-// Store a Bullet transform as pos + quat (no Bullet type in the node header).
-inline void storeAnchorPose(double pos[3], double quat[4], const btTransform& t)
+// Store a Bullet transform as a Double3/Double4 pos+quat (no Bullet type
+// escapes the core — the conversion to the value types happens here).
+inline void storeAnchorPose(Double3& pos, Double4& quat, const btTransform& t)
 {
     const btVector3& o = t.getOrigin();
     const btQuaternion& q = t.getRotation();
-    pos[0] = o.x();
-    pos[1] = o.y();
-    pos[2] = o.z();
-    quat[0] = q.x();
-    quat[1] = q.y();
-    quat[2] = q.z();
-    quat[3] = q.w();
+    pos.x = o.x();
+    pos.y = o.y();
+    pos.z = o.z();
+    quat.x = q.x();
+    quat.y = q.y();
+    quat.z = q.z();
+    quat.w = q.w();
 }
 
-inline btTransform anchorPoseToTransform(const double pos[3], const double quat[4])
+inline btTransform anchorPoseToTransform(const Double3& pos, const Double4& quat)
 {
     btTransform t;
     t.setIdentity();
-    t.setOrigin(btVector3(btScalar(pos[0]), btScalar(pos[1]), btScalar(pos[2])));
+    t.setOrigin(btVector3(btScalar(pos.x), btScalar(pos.y), btScalar(pos.z)));
     t.setRotation(
-        btQuaternion(btScalar(quat[0]), btScalar(quat[1]), btScalar(quat[2]), btScalar(quat[3])));
+        btQuaternion(btScalar(quat.x), btScalar(quat.y), btScalar(quat.z), btScalar(quat.w)));
     return t;
 }
 
@@ -177,4 +185,6 @@ inline void rowMatrixMultiply(const double a[4][4], const double b[4][4], double
         }
 }
 
-} // namespace mmd_physics_math
+} // namespace physics_math
+} // namespace core
+} // namespace mmd

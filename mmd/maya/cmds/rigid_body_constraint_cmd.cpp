@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_rigid_body_constraint_cmd.cpp
+ * rigid_body_constraint_cmd.cpp
  *
- * Native C++ implementation of the ``mmdRigidBodyConstraint`` command (create
+ * Native C++ implementation of the ``pmxRigidBodyConstraint`` command (create
  * mode — the default).  Writes ONE PMX joint into the node's ``joints`` array
  * at the next free index, replacing the former Python
  * ``_set_joint_attributes``.
@@ -15,9 +15,9 @@
  * radians — the node hands angular values to Bullet unchanged).
  */
 
-#include "mmd_rigid_body_constraint_cmd.h"
+#include "rigid_body_constraint_cmd.h"
 
-#include "mmd_common.h"
+#include "common.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -34,10 +34,12 @@
 #include <maya/MSyntax.h>
 #include <maya/MVector.h>
 
-#include "../nodes/mmd_physics_node.h"
+#include "../nodes/physics_node.h"
 
 #include <cstdlib>
 #include <cstring>
+
+using mmd::core::Double3;
 
 namespace
 {
@@ -73,7 +75,7 @@ constexpr const char* kLinearSpringFlag = "ls";
 constexpr const char* kAngularSpringFlag = "as";
 } // namespace
 
-MSyntax MmdRigidBodyConstraintCmd::syntaxCreator()
+MSyntax RigidBodyConstraintCmd::syntaxCreator()
 {
     MSyntax syntax;
     // First positional argument: the solver node (or a model root).
@@ -103,12 +105,12 @@ MSyntax MmdRigidBodyConstraintCmd::syntaxCreator()
     return syntax;
 }
 
-void* MmdRigidBodyConstraintCmd::creator()
+void* RigidBodyConstraintCmd::creator()
 {
-    return new MmdRigidBodyConstraintCmd();
+    return new RigidBodyConstraintCmd();
 }
 
-bool MmdRigidBodyConstraintCmd::resolveSolver(const MString& target, MObject& outNode)
+bool RigidBodyConstraintCmd::resolveSolver(const MString& target, MObject& outNode)
 {
     try
     {
@@ -122,7 +124,7 @@ bool MmdRigidBodyConstraintCmd::resolveSolver(const MString& target, MObject& ou
             return false;
 
         MFnDependencyNode fn(obj);
-        if (fn.typeName() == MMDPhysicsNode::kNodeName)
+        if (fn.typeName() == PhysicsNode::kNodeName)
         {
             outNode = obj;
             return true;
@@ -142,7 +144,7 @@ bool MmdRigidBodyConstraintCmd::resolveSolver(const MString& target, MObject& ou
                         obj2.hasFn(MFn::kDependencyNode))
                     {
                         MFnDependencyNode fn2(obj2);
-                        if (fn2.typeName() == MMDPhysicsNode::kNodeName)
+                        if (fn2.typeName() == PhysicsNode::kNodeName)
                         {
                             outNode = obj2;
                             return true;
@@ -158,38 +160,38 @@ bool MmdRigidBodyConstraintCmd::resolveSolver(const MString& target, MObject& ou
     return false;
 }
 
-MStatus MmdRigidBodyConstraintCmd::doIt(const MArgList& args)
+MStatus RigidBodyConstraintCmd::doIt(const MArgList& args)
 {
     MStatus stat;
     MArgParser parser(syntaxCreator(), args, &stat);
     if (!stat)
     {
-        displayError("mmdRigidBodyConstraint: could not parse arguments");
+        displayError("pmxRigidBodyConstraint: could not parse arguments");
         return stat;
     }
 
     MString target = parser.commandArgumentString(0, &stat);
     if (!stat || target.length() == 0)
     {
-        displayError("mmdRigidBodyConstraint: missing solver / modelRoot argument");
+        displayError("pmxRigidBodyConstraint: missing solver / modelRoot argument");
         return MS::kFailure;
     }
 
     if (parser.isQuery())
     {
-        displayError("mmdRigidBodyConstraint query mode is not implemented yet");
+        displayError("pmxRigidBodyConstraint query mode is not implemented yet");
         return MS::kFailure;
     }
     if (parser.isEdit())
     {
-        displayError("mmdRigidBodyConstraint edit mode is not implemented yet");
+        displayError("pmxRigidBodyConstraint edit mode is not implemented yet");
         return MS::kFailure;
     }
 
     MObject solverNode;
     if (!resolveSolver(target, solverNode))
     {
-        displayError("'" + target + "' is not an mmdPhysicsNode or a PMX model root");
+        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
         return MS::kFailure;
     }
 
@@ -200,7 +202,7 @@ MStatus MmdRigidBodyConstraintCmd::doIt(const MArgList& args)
     return stat;
 }
 
-MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObject& solverNode,
+MStatus RigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObject& solverNode,
                                             int& outIndex)
 {
     // ── Parse flags (safe defaults mirror the former Python writer) ──
@@ -254,10 +256,10 @@ MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObj
 
     // ── Solver / index (auto-append at the next free index) ──
     MFnDependencyNode fn(solverNode);
-    MPlug jointsPlug = fn.findPlug(MMDPhysicsNode::aJoints, true);
+    MPlug jointsPlug = fn.findPlug(PhysicsNode::aJoints, true);
     if (jointsPlug.isNull())
     {
-        displayError("mmdRigidBodyConstraint: node has no 'joints' array");
+        displayError("pmxRigidBodyConstraint: node has no 'joints' array");
         return MS::kFailure;
     }
     int count = jointsPlug.numElements();
@@ -274,18 +276,18 @@ MStatus MmdRigidBodyConstraintCmd::doCreate(const MArgParser& parser, const MObj
 
     // ── Write the joint data (MMD -> Maya conversions, as the Python did) ──
     MPlug elem = jointsPlug.elementByLogicalIndex(n);
-    elem.child(MMDPhysicsNode::aJointBodyA).setInt(bodyA);
-    elem.child(MMDPhysicsNode::aJointBodyB).setInt(bodyB);
-    elem.child(MMDPhysicsNode::aJointType).setInt(type);
-    setDouble3(elem.child(MMDPhysicsNode::aJointFrameTranslate), Double3(pos.x, pos.y, -pos.z));
-    setDouble3(elem.child(MMDPhysicsNode::aJointFrameRotate),
+    elem.child(PhysicsNode::aJointBodyA).setInt(bodyA);
+    elem.child(PhysicsNode::aJointBodyB).setInt(bodyB);
+    elem.child(PhysicsNode::aJointType).setInt(type);
+    setDouble3(elem.child(PhysicsNode::aJointFrameTranslate), Double3(pos.x, pos.y, -pos.z));
+    setDouble3(elem.child(PhysicsNode::aJointFrameRotate),
                Double3(-radToDeg(rot.x), -radToDeg(rot.y), radToDeg(rot.z)));
-    setDouble3(elem.child(MMDPhysicsNode::aJointLinearMin), lmin);
-    setDouble3(elem.child(MMDPhysicsNode::aJointLinearMax), lmax);
-    setDouble3(elem.child(MMDPhysicsNode::aJointAngularMin), amin);
-    setDouble3(elem.child(MMDPhysicsNode::aJointAngularMax), amax);
-    setDouble3(elem.child(MMDPhysicsNode::aJointLinearSpring), ls);
-    setDouble3(elem.child(MMDPhysicsNode::aJointAngularSpring), as);
+    setDouble3(elem.child(PhysicsNode::aJointLinearMin), lmin);
+    setDouble3(elem.child(PhysicsNode::aJointLinearMax), lmax);
+    setDouble3(elem.child(PhysicsNode::aJointAngularMin), amin);
+    setDouble3(elem.child(PhysicsNode::aJointAngularMax), amax);
+    setDouble3(elem.child(PhysicsNode::aJointLinearSpring), ls);
+    setDouble3(elem.child(PhysicsNode::aJointAngularSpring), as);
 
     outIndex = n;
     return MS::kSuccess;

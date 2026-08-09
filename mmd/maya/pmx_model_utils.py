@@ -375,7 +375,7 @@ def find_physics_group(root_name: str) -> Optional[str]:
 
 
 def find_physics_node(root_name: str) -> Optional[str]:
-    """Return the ``mmdPhysicsNode`` solver for a PMX model root, or ``None``.
+    """Return the ``pmxPhysicsNode`` solver for a PMX model root, or ``None``.
 
     Prefers the ``pmxPhysicsNode`` attribute stamped on the root at import;
     falls back to scanning the physics group's children (the solver is a
@@ -390,7 +390,7 @@ def find_physics_node(root_name: str) -> Optional[str]:
     if group is None:
         return None
     for child in cmds.listRelatives(group, children=True, fullPath=True) or []:
-        if cmds.nodeType(child) == "mmdPhysicsNode":
+        if cmds.nodeType(child) == "pmxPhysicsNode":
             return child
     return None
 
@@ -920,7 +920,7 @@ def reset_model_to_bind_pose(
     # Reset all bones (IK disabled → no IK override on chain joints)
     reset_all_bones_to_rest_pose(bone_map)
 
-    # Phase 3: physics-driven joints are owned by the mmdPhysicsNode (their
+    # Phase 3: physics-driven joints are owned by the pmxPhysicsNode (their
     # translate/rotate are connected to its outputs, so setAttr cannot touch
     # them).  Rewind the solver so it rebuilds from the CURRENT (now rest)
     # skeleton pose and writes the exact rest pose into the driven joints —

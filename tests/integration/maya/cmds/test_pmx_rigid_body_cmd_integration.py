@@ -1,9 +1,9 @@
 """
-test_mmd_rigid_body_cmd_integration.py
+test_pmx_rigid_body_cmd_integration.py
 
-Integration tests for the native C++ ``mmdRigidBody`` / ``mmdRigidBodyConstraint``
+Integration tests for the native C++ ``pmxRigidBody`` / ``pmxRigidBodyConstraint``
 commands — pure Maya command testing WITHOUT any PMX model.  The scene is a
-small mock: a transform group holding one ``mmdPhysicsNode`` solver plus a
+small mock: a transform group holding one ``pmxPhysicsNode`` solver plus a
 couple of bare joints.
 
 Tests cover (the "add a body / joint and configure it on addition" contract):
@@ -16,13 +16,13 @@ Tests cover (the "add a body / joint and configure it on addition" contract):
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
 - Invalid shape / physicsMode values are rejected.
-- ``mmdRigidBodyConstraint`` appends ONE joint (bodyA/B, type, frame, limits,
+- ``pmxRigidBodyConstraint`` appends ONE joint (bodyA/B, type, frame, limits,
   springs) with the MMD -> Maya conversions.
 - Solver resolution through a model-root ``pmxPhysicsNode`` attribute.
 - Enum attributes: getAttr returns the numeric field value; the enum field
   list is exposed via attributeQuery(listEnum=True).
 
-NOTE: MayaMMD.mll (which registers mmdPhysicsNode + both commands) is already
+NOTE: MayaMMD.mll (which registers pmxPhysicsNode + both commands) is already
 loaded by the test runner — no separate plugin loading here.
 """
 
@@ -39,11 +39,11 @@ from tests.integration.test_helpers import (
     setup_test_environment,
 )
 
-# PMX collider type field values (MMDPhysicsNode::ColliderType).
+# PMX collider type field values (PhysicsNode::ColliderType).
 COLLIDER_BOX = 1
 COLLIDER_SPHERE = 2
 COLLIDER_CAPSULE = 3
-# BodyPhysicsMode field values (mmd_physics_node.h).
+# PhysicsMode field values (physics_node.h).
 MODE_FOLLOW_BONE = 0
 MODE_PHYSICS = 1
 MODE_PHYSICS_BONE = 2
@@ -56,7 +56,7 @@ def _make_physics_scene():
     """
     setup_test_environment()
     group = cmds.createNode("transform", name="testPhysicsGroup")
-    solver = cmds.createNode("mmdPhysicsNode", name="testSolver", parent=group)
+    solver = cmds.createNode("pmxPhysicsNode", name="testSolver", parent=group)
     cmds.select(clear=True)
     joint_a = cmds.joint(name="testJointA", p=[0, 0, 0])
     cmds.select(clear=True)
@@ -73,7 +73,7 @@ def test_append_body_data():
     """Appending a body stores the full body DATA at the next free index."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    idx = cmds.mmdRigidBody(
+    idx = cmds.pmxRigidBody(
         solver,
         name="BodyA",
         nameUniversal="BodyA_univ",
@@ -151,7 +151,7 @@ def test_follow_bone_binds_anchor():
     """FOLLOW_BONE + bone: the kinematic anchor is fed by the related joint."""
     group, solver, joint_a, _jb = _make_physics_scene()
 
-    idx = cmds.mmdRigidBody(
+    idx = cmds.pmxRigidBody(
         solver,
         name="KinBody",
         bone=joint_a,
@@ -193,7 +193,7 @@ def test_dynamic_body_data_only():
     """PHYSICS / PHYSICS_BONE: data only — no anchor, no write-back wiring."""
     _group, solver, joint_a, _jb = _make_physics_scene()
 
-    idx = cmds.mmdRigidBody(
+    idx = cmds.pmxRigidBody(
         solver,
         name="DynBody",
         bone=joint_a,
@@ -223,7 +223,7 @@ def test_dynamic_body_data_only():
     assert_true(not driven, f"simulation disabled but outputs drive: {driven}")
 
     # PHYSICS_BONE mode is stored the same way (data only).
-    idx2 = cmds.mmdRigidBody(
+    idx2 = cmds.pmxRigidBody(
         solver, name="RotBody", bone=joint_a, mass=1.0, physicsMode="physicsBone"
     )
     assert_eq(idx2, 1, "second index != 1")
@@ -240,7 +240,7 @@ def test_static_collider_no_bone():
     """FOLLOW_BONE without a bone: a static collider pinned at its rest pose."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    idx = cmds.mmdRigidBody(
+    idx = cmds.pmxRigidBody(
         solver,
         name="StaticBody",
         shape="sphere",
@@ -266,19 +266,19 @@ def test_auto_increment_indices():
     """Bodies auto-append; an explicit index must be the next free index."""
     _group, solver, joint_a, _jb = _make_physics_scene()
 
-    idx0 = cmds.mmdRigidBody(solver, name="B0", bone=joint_a, physicsMode="followBone")
-    idx1 = cmds.mmdRigidBody(solver, name="B1", bone=joint_a, physicsMode="physics")
-    idx2 = cmds.mmdRigidBody(solver, name="B2", bone=joint_a, physicsMode="followBone")
+    idx0 = cmds.pmxRigidBody(solver, name="B0", bone=joint_a, physicsMode="followBone")
+    idx1 = cmds.pmxRigidBody(solver, name="B1", bone=joint_a, physicsMode="physics")
+    idx2 = cmds.pmxRigidBody(solver, name="B2", bone=joint_a, physicsMode="followBone")
     assert_eq((idx0, idx1, idx2), (0, 1, 2), "indices not 0,1,2")
     assert_eq(int(cmds.getAttr(f"{solver}.bodies", size=True)), 3, "bodies count != 3")
 
     # Explicit index equal to the next free index is accepted.
-    idx3 = cmds.mmdRigidBody(solver, index=3, name="B3", physicsMode="physics")
+    idx3 = cmds.pmxRigidBody(solver, index=3, name="B3", physicsMode="physics")
     assert_eq(idx3, 3, "explicit index 3 != 3")
 
     # Explicit index that is NOT the next free index is rejected.
     try:
-        cmds.mmdRigidBody(solver, index=1, name="Bad", physicsMode="physics")
+        cmds.pmxRigidBody(solver, index=1, name="Bad", physicsMode="physics")
         assert_true(False, "stale explicit index was accepted")
     except RuntimeError:
         pass
@@ -290,7 +290,7 @@ def test_clamp01():
     """PMX attenuation values are clamped to 0..1."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    cmds.mmdRigidBody(
+    cmds.pmxRigidBody(
         solver,
         name="Clamp",
         linearDamping=1.5,
@@ -322,7 +322,7 @@ def test_invalid_shape_rejected():
     """An unknown shape string is rejected by the command."""
     _group, solver, _ja, _jb = _make_physics_scene()
     try:
-        cmds.mmdRigidBody(solver, name="Bad", shape="torus", physicsMode="physics")
+        cmds.pmxRigidBody(solver, name="Bad", shape="torus", physicsMode="physics")
         assert_true(False, "invalid shape was accepted")
     except RuntimeError:
         pass
@@ -339,7 +339,7 @@ def test_invalid_physics_mode_rejected():
     """An unknown physicsMode string is rejected by the command."""
     _group, solver, _ja, _jb = _make_physics_scene()
     try:
-        cmds.mmdRigidBody(solver, name="Bad", physicsMode="teleport")
+        cmds.pmxRigidBody(solver, name="Bad", physicsMode="teleport")
         assert_true(False, "invalid physicsMode was accepted")
     except RuntimeError:
         pass
@@ -353,10 +353,10 @@ def test_invalid_physics_mode_rejected():
 
 
 def test_constraint_cmd_appends_joint():
-    """mmdRigidBodyConstraint appends one joint with the MMD->Maya conversions."""
+    """pmxRigidBodyConstraint appends one joint with the MMD->Maya conversions."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    j_idx = cmds.mmdRigidBodyConstraint(
+    j_idx = cmds.pmxRigidBodyConstraint(
         solver,
         bodyA=0,
         bodyB=1,
@@ -422,7 +422,7 @@ def test_constraint_cmd_appends_joint():
         ),
         f"jointAngularSpring {cmds.getAttr(f'{base}.jointAngularSpring')}",
     )
-    print("✓ mmdRigidBodyConstraint appends one joint")
+    print("✓ pmxRigidBodyConstraint appends one joint")
     return True
 
 
@@ -433,7 +433,7 @@ def test_model_root_resolution():
     cmds.addAttr(root, longName="pmxPhysicsNode", dataType="string")
     cmds.setAttr(f"{root}.pmxPhysicsNode", solver, type="string")
 
-    idx = cmds.mmdRigidBody(
+    idx = cmds.pmxRigidBody(
         root,
         name="ViaRoot",
         bone=joint_a,
@@ -489,7 +489,7 @@ def test_body_mask_group_toggles():
     """bodyMask is one boolean toggle per collision group (0..15)."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    cmds.mmdRigidBody(solver, name="Toggled", physicsMode="physics")
+    cmds.pmxRigidBody(solver, name="Toggled", physicsMode="physics")
 
     # Default: every group enabled (matches the legacy 0xFFFF mask).
     for g in range(16):

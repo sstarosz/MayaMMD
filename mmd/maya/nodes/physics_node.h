@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_physics_node.h
+ * physics_node.h
  *
- * MMDPhysicsNode — native rigid-body physics node for MMD secondary movement.
+ * PhysicsNode — native rigid-body physics node for MMD secondary movement.
  *
  * WHY THIS EXISTS (replaces the mayaBullet dynamic layer):
  *   mayaBullet's bulletSolverShape is a STATEFUL node.  Cached Playback's
@@ -45,42 +45,38 @@
 #include <maya/MTypeId.h>
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
-struct btCollisionConfiguration;
-struct btCollisionDispatcher;
-struct btBroadphaseInterface;
-struct btConstraintSolver;
-class btCollisionShape;
-class btDiscreteDynamicsWorld;
-class btRigidBody;
+#include "simulation.hpp"
 
 // ===========================================================================
-// MMDPhysicsNode
+// PhysicsNode
 // ===========================================================================
-class MMDPhysicsNode : public MPxLocatorNode
+class PhysicsNode : public MPxLocatorNode
 {
   public:
     static const MTypeId kTypeId;
-    static constexpr const char* kNodeName = "mmdPhysicsNode";
+    static constexpr const char* kNodeName = "pmxPhysicsNode";
     // VP2 draw-database classification.  A drawable locator node must be
     // registered with the SAME classification string its draw override is
     // registered under ("drawdb/geometry/<nodeType>") or VP2 never associates
     // the override with the node and no guides are drawn.
-    static constexpr const char* kNodeClassify = "drawdb/geometry/mmdPhysicsNode";
+    static constexpr const char* kNodeClassify = "drawdb/geometry/pmxPhysicsNode";
 
     // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
-    // attribute and used by the mmdRigidBody command to classify bodies.
-    enum BodyPhysicsMode : short
+    // attribute and used by the pmxRigidBody command to classify bodies.  The
+    // full PMX mode is KEPT on every Body (never collapsed to a bool) so the
+    // physics layer can distinguish follow-bone / full-physics / rotation-only
+    // physics; kinematic is only a derived property (Body::isKinematic()).
+    enum class PhysicsMode : short
     {
-        kBodyPhysicsFollowBone = 0, // kinematic anchor — driven by the related joint
-        kBodyPhysics = 1,           // full dynamic body
-        kBodyPhysicsBone = 2,       // dynamic, rotation-only write-back
+        FollowBone = 0, // kinematic anchor — driven by the related joint
+        Physics = 1,    // full dynamic body
+        PhysicsBone = 2 // dynamic, rotation-only write-back
     };
 
     // PMX rigid-body collider shape — stored in the bodyColliderType enum
-    // attribute and used by the mmdRigidBody command.
+    // attribute and used by the pmxRigidBody command.
     enum ColliderType : short
     {
         kColliderBox = 1,
@@ -92,7 +88,7 @@ class MMDPhysicsNode : public MPxLocatorNode
     // Draw support (Phase 1) — the node draws its own guide visualization
     // ------------------------------------------------------------------
     // Per-body primitive pulled by the draw override
-    // (mmd_physics_draw_override.cpp) from the node's CURRENT solver state:
+    // (physics_draw_override.cpp) from the node's CURRENT solver state:
     // solved world poses if the Bullet world is built, rest poses otherwise.
     // The node is an MPxLocatorNode so the guides are always visible, and the
     // viewport shows exactly what the simulation has — no scene guide meshes.
@@ -112,8 +108,8 @@ class MMDPhysicsNode : public MPxLocatorNode
     // Object-space bounding box over the body rest poses (selection/culling).
     MBoundingBox boundingBox() const override;
 
-    MMDPhysicsNode();
-    ~MMDPhysicsNode() override;
+    PhysicsNode();
+    ~PhysicsNode() override;
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
@@ -196,7 +192,7 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aBodyAngularDamping;  // double — PMX rotation_damping
     static MObject aBodyRestitution;     // double — PMX repulsion
     static MObject aBodyFriction;        // double — PMX friction_force
-    static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (BodyPhysicsMode)
+    static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (PhysicsMode)
     static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
     static MObject
         aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
@@ -222,89 +218,15 @@ class MMDPhysicsNode : public MPxLocatorNode
     static MObject aOutRotateValue; // float3 child of aOutRotate
 
   private:
-    struct Body
-    {
-        double restPos[3];
-        double restRot[3]; // degrees
-        double mass;
-        double linearDamping;
-        double angularDamping;
-        double friction;
-        double restitution;
-        ColliderType colliderType; // PMX shape type (box/sphere/capsule)
-        double radius;
-        double extents[3];
-        double length;
-        long group; // Bullet collision group bit (derived from groupId in buildWorld)
-        long mask;  // collision mask (built from the aBodyMaskGroup bools in
-                    // readBodyData — the PMX non_collision_group stored verbatim)
-        // PMX collision inputs: the Bullet group bit is derived from groupId
-        // and the mask is the aBodyMaskGroup bools used exactly as read.
-        short groupId;
-        bool kinematic;
-        bool enabled = true;   // Remove support: false skips this body (and joints referencing it)
-        short physicsMode = 1; // PMX physics mode 0/1/2 (write-back mode)
-        // Write-back parent-inverse source (Phase 3 cycle fix): rigid-body
-        // index of this body's related joint's PARENT joint's body, or -1 if
-        // the parent bone has no body (the node then falls back to the DG
-        // bodyParentInverseMatrix input — safe, that parent is never
-        // node-driven).  The parent inverse is derived from the PARENT BODY's
-        // solved Bullet transform so the write-back never depends on a
-        // node-driven joint's DG matrix (which created a feedback cycle).
-        int parentBodyIndex = -1;
-        // Scrub-back reset: index of the kinematic ANCHOR whose current pose
-        // drives this body's reset (or -1), plus the constant offset
-        // (anchorRest^-1 * bodyRest) captured at build time.
-        int resetAnchorIndex = -1;
-        bool hasBoneReset = false;
-        double resetOffsetPos[3] = {0.0, 0.0, 0.0};
-        double resetOffsetQuat[4] = {0.0, 0.0, 0.0, 1.0};
-    };
+    // Maya-free Bullet engine (simulation.hpp) + the PMX body/joint data
+    // read from the attributes.  The engine owns ALL Bullet state and the
+    // scrub-back reset; this node is an adapter — it reads attributes,
+    // converts Maya matrices <-> engine poses, and manages the timeline/state
+    // (config signature, last time).
+    mmd::core::Simulation mSim;
+    std::vector<mmd::core::Simulation::BodyDefinition> mBodies;
+    std::vector<mmd::core::Simulation::JointDefinition> mJoints;
 
-    struct Joint
-    {
-        long bodyA;
-        long bodyB;
-        long type; // PMX JointType value
-        double frameT[3];
-        double frameR[3]; // degrees
-        double linearMin[3];
-        double linearMax[3];
-        double angularMin[3];
-        double angularMax[3];
-        double linearSpring[3];
-        double angularSpring[3];
-    };
-
-    // Internal Bullet world + state
-    std::unique_ptr<btDiscreteDynamicsWorld> mWorld;
-    std::vector<std::unique_ptr<btRigidBody>> mRigidBodies;
-    std::vector<std::unique_ptr<class btTypedConstraint>> mConstraints;
-    // The world does NOT own its dispatcher / broadphase / collision config /
-    // solver, and rigid bodies do NOT own their collision shapes — keep them
-    // alive as members so they are freed exactly once (and so the world can be
-    // destroyed before the bodies, which btCollisionWorld's destructor needs).
-    std::unique_ptr<btCollisionConfiguration> mCollisionConfig;
-    std::unique_ptr<btCollisionDispatcher> mDispatcher;
-    std::unique_ptr<btBroadphaseInterface> mBroadphase;
-    std::unique_ptr<btConstraintSolver> mConstraintSolver;
-    std::vector<std::unique_ptr<btCollisionShape>> mShapes;
-    std::vector<Body> mBodies;
-    std::vector<Joint> mJoints;
-
-    // Kinematic anchor poses (group-local), kept as pos+quat so no Bullet
-    // type leaks into the header.  mAnchorRest is captured at build time;
-    // mAnchorCurrent is refreshed every frame in updateKinematicAnchors and
-    // used to reset dynamic bodies when time is scrubbed backwards.
-    struct AnchorPose
-    {
-        double pos[3] = {0.0, 0.0, 0.0};
-        double quat[4] = {0.0, 0.0, 0.0, 1.0};
-    };
-    std::vector<AnchorPose> mAnchorRest;
-    std::vector<AnchorPose> mAnchorCurrent;
-
-    bool mWorldBuilt = false;
     double mLastTime = -1.0;
     MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
     // Phase 4: FNV-1a hash of the config inputs (gravity/fps/bodies/joints/
@@ -312,6 +234,20 @@ class MMDPhysicsNode : public MPxLocatorNode
     // signature the world is rebuilt in place — a body/joint/gravity edit takes
     // effect immediately, without a rewind.
     uint64_t mConfigSignature = 0;
+
+    // Timeline/state machine — compute() classifies each evaluation into one of
+    // these transitions and acts on it (see compute()): the sim is built once,
+    // rebuilt when a config input changes or time is scrubbed backwards, and
+    // stepped when time advances or a kinematic anchor moves.
+    enum class SimulationTransition
+    {
+        Initialize,           // world not built yet — build from scratch
+        ConfigurationChanged, // a config input changed — rebuild at the current pose
+        Rewind,               // time scrubbed backwards — rebuild at the current pose
+        Advance,              // time advanced — step by the frame span
+        PoseChanged,          // time unchanged but an anchor moved — step one tick
+        NoChange,             // nothing to do
+    };
 
     // Helpers
     bool readBodyData(MDataBlock& dataBlock);
@@ -330,4 +266,12 @@ class MMDPhysicsNode : public MPxLocatorNode
     // time is scrubbed backwards) — the opposite of rebuilding at rest.
     void resetDynamicBodies(MDataBlock& dataBlock);
     bool writeOutputs(MDataBlock& dataBlock);
+
+    // Timeline/state helpers (see compute()).
+    SimulationTransition classifyTransition(uint64_t configSignature, const MTime& nowTime,
+                                            double now, bool anchorsMoved) const;
+    bool initializeSimulation(MDataBlock& dataBlock, uint64_t configSignature,
+                              const MTime& nowTime);
+    bool rebuildSimulationAtCurrentPose(MDataBlock& dataBlock, uint64_t configSignature,
+                                        const MTime& nowTime);
 };

@@ -151,7 +151,7 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 ## Per-Rigid-Body Physics Attributes
 
 **Phase 3:** per-body guide transforms no longer exist — each rigid body's data
-lives in the `mmdPhysicsNode`'s `bodies[i]` compound array (indexed by PMX rigid
+lives in the `pmxPhysicsNode`'s `bodies[i]` compound array (indexed by PMX rigid
 body index), and its related joint is discovered by tracing the node's
 `outRotate[i]`/`outTranslate[i]` write-back connections (dynamic, following any
 auto-inserted `unitConversion`) or `anchorWorldMatrix[k]` (kinematic) in

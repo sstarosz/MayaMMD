@@ -64,14 +64,14 @@ A working, tunable **per-model rigid-body simulation**:
    the C++ solver node. This already exists and is the entry point:
    `mmd.maya.pmx.rigid_body_builder.create_physics_from_pmx_data(...)`,
    called automatically by `build_pmx_scene(...)` (physics is always built).
-2. **The C++ node solves physics.** The native `mmdPhysicsNode` (embedded
+2. **The C++ node solves physics.** The native `pmxPhysicsNode` (embedded
    Bullet 3.25) owns the world, steps every frame, and writes the solved pose
    back into the joints. See §4 for the interface contract.
 3. **A basic UI to observe and tune the simulation** (see §7).
 
 ### v1 success criteria (testable)
 
-- Importing any bundled PMX model creates one `mmdPhysicsNode` per model, with
+- Importing any bundled PMX model creates one `pmxPhysicsNode` per model, with
   every PMX rigid body and joint present (bodies/joints arrays match the PMX
   data).
 - Playback advances the simulation; dynamic bodies move; kinematic
@@ -111,7 +111,7 @@ flowchart LR
     subgraph Python["Python (rigid_body_builder.py)"]
         PMX["pmx_data (PmxModel)"] --> B["create_physics_from_pmx_data"]
         B --> G["{model}_Physics group"]
-        B --> N["mmdPhysicsNode (C++)"]
+        B --> N["pmxPhysicsNode (C++)"]
     end
     subgraph Cpp["C++ (MayaMMD.mll)"]
         N --> W["btDiscreteDynamicsWorld<br/>(embedded Bullet)"]
@@ -138,8 +138,8 @@ flowchart LR
 
 ## 4. C++ node interface — the contract
 
-The node is `mmdPhysicsNode`, registered natively by `MayaMMD.mll`
-(`mmd/maya/nodes/mmd_physics_node.{h,cpp}`, type id `0x0011C105`). It is an
+The node is `pmxPhysicsNode`, registered natively by `MayaMMD.mll`
+(`mmd/maya/nodes/physics_node.{h,cpp}`, type id `0x0011C105`). It is an
 **`MPxLocatorNode`** whose object space is the physics group's local space
 (== the Bullet world frame).
 
@@ -251,7 +251,7 @@ and the angle-unit `joint.rotate` — discovery must follow its `output` plug.
 
 | Function                                                                                                                   | Purpose                                                                                                                                                                                                                                             |
 | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rigid_body_builder.create_physics_from_pmx_data(pmx_data, joints, name_registry, root_transform_obj=None) -> str \| None` | Builds the full physics graph: `{model}_Physics` group, `mmdPhysicsNode`, `bodies`/`joints` arrays, kinematic anchors, dynamic write-back connections, DG-cache opt-out. Returns the solver node name (or `None` for a model with no rigid bodies). |
+| `rigid_body_builder.create_physics_from_pmx_data(pmx_data, joints, name_registry, root_transform_obj=None) -> str \| None` | Builds the full physics graph: `{model}_Physics` group, `pmxPhysicsNode`, `bodies`/`joints` arrays, kinematic anchors, dynamic write-back connections, DG-cache opt-out. Returns the solver node name (or `None` for a model with no rigid bodies). |
 | `rigid_body_builder.step_physics(node)`                                                                                    | Force one solver evaluation at the current time (headless use).                                                                                                                                                                                     |
 | `rigid_body_builder.write_back_physics(node, driven_joints)`                                                               | Re-evaluate the solver outputs + driven joints (headless use).                                                                                                                                                                                      |
 
@@ -263,7 +263,7 @@ The solver is stamped on the root (`pmxPhysicsNode` string attribute).
 | Helper (`pmx_model_utils.py`)      | Returns                                                                                      |
 | ---------------------------------- | -------------------------------------------------------------------------------------------- |
 | `find_physics_group(root)`         | `{model}_Physics` transform, or `None`.                                                      |
-| `find_physics_node(root)`          | The `mmdPhysicsNode`, or `None`.                                                             |
+| `find_physics_node(root)`          | The `pmxPhysicsNode`, or `None`.                                                             |
 | `find_physics_rigid_bodies(root)`  | `{pmx_rb_index: related_joint}` for all bodies (kinematic via anchors, dynamic via outputs). |
 | `find_physics_driven_joints(root)` | `{pmx_rb_index: joint}` for **dynamic** bodies only (write-back targets).                    |
 
@@ -276,25 +276,25 @@ Editing a body's properties is a plain `setAttr` on the node's `bodies[i]`
 children. The node's Phase-4 config-rebuild picks the change up on the next
 evaluation (even while paused), re-anchoring chains to the current pose — no
 special "apply" step needed. This is the hook the v1 UI (§7) and the
-`mmdRigidBody` command (§5.4) build on.
+`pmxRigidBody` command (§5.4) build on.
 
-### 5.4 Rigid-body capability matrix & the `mmdRigidBody` command
+### 5.4 Rigid-body capability matrix & the `pmxRigidBody` command
 
 The rigid-body feature is scoped by a **capability matrix** — the contract
 for what the current scope supports and what is deferred to the export era:
 
 | Capability | Status    | What it means                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Import** | ✅ current | One `mmdPhysicsNode` per model with every PMX rigid body + joint, built automatically at model import (`build_pmx_scene`). **SIMULATION IS ENABLED**: the solver is time-driven (`time1.outTime → node.time`) and the solved pose is written straight into the related joints (Phase 3 direct write-back) — import creates bodies (data + bone binding) + constraints via the native commands and then wires the simulation in one pass (**no `-finalize` step**). **No command-level re-import** — re-importing the model is the way to restore physics. There is **no separate bulk importer and no Python wiring** (single body-modification path via `mmdRigidBody` + `mmdRigidBodyConstraint`). |
+| **Import** | ✅ current | One `pmxPhysicsNode` per model with every PMX rigid body + joint, built automatically at model import (`build_pmx_scene`). **SIMULATION IS ENABLED**: the solver is time-driven (`time1.outTime → node.time`) and the solved pose is written straight into the related joints (Phase 3 direct write-back) — import creates bodies (data + bone binding) + constraints via the native commands and then wires the simulation in one pass (**no `-finalize` step**). **No command-level re-import** — re-importing the model is the way to restore physics. There is **no separate bulk importer and no Python wiring** (single body-modification path via `pmxRigidBody` + `pmxRigidBodyConstraint`). |
 | **Query**  | 🚧 later   | Read body/joint data from the scene for the UI (list, counts, per-body detail). Backed by `bodyNameLocal`/`bodyNameUniversal` + the discovery helpers (§5.2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Apply**  | 🚧 later   | Batch configuration push (inverse of Query).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **Edit**   | 🚧 later   | Modify individual PMX-exposed body fields via `mmdRigidBody -e`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Edit**   | 🚧 later   | Modify individual PMX-exposed body fields via `pmxRigidBody -e`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | **Remove** | 🚧 later   | Disable individual bodies via `bodyEnabled` (no array reindexing).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Export** | 🚧 future  | Write the (possibly edited) bodies + joints back into the PMX file. Deferred — matches the plugin-wide read-only scope (§1).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
-#### The `mmdRigidBody` command
+#### The `pmxRigidBody` command
 
-A NATIVE C++ `MPxCommand` (`mmd/maya/cmds/mmd_rigid_body_cmd.{h,cpp}`, registered
+A NATIVE C++ `MPxCommand` (`mmd/maya/cmds/rigid_body_cmd.{h,cpp}`, registered
 by `MayaMMD.cpp`'s `initializePlugin`) that follows the Maya create/edit/query
 mode convention (default = create; `-e`/`-edit` and `-q`/`-query` enabled in
 the syntax).  Plain flags only — **no JSON payloads**.
@@ -308,7 +308,7 @@ reads were also flaky).  Native `MSyntax` / `MArgParser` have neither issue.
 **v1.0 — create (SIMULATION ENABLED)** (implemented):
 
 ```
-mmdRigidBody <solver | modelRoot>      # create is the default mode
+pmxRigidBody <solver | modelRoot>      # create is the default mode
     -index <int>              # optional; must be the next free index (auto-append)
     -name <string>            # PMX body name (local) → bodies[i].bodyNameLocal
     -nameUniversal <string>   # PMX body name (universal) → bodies[i].bodyNameUniversal
@@ -339,26 +339,26 @@ builder's `create_physics_from_pmx_data` is:
 group = _create_physics_group(...)
 node  = _create_physics_solver(...)                    # time-driven (time1.outTime)
 for rb in pmx_data.rigid_bodies:
-    cmds.mmdRigidBody(node, ...)                # data + kinematic-anchor binding
+    cmds.pmxRigidBody(node, ...)                # data + kinematic-anchor binding
 for jt in pmx_data.joints:
-    cmds.mmdRigidBodyConstraint(node, ...)      # constraints AFTER bodies
+    cmds.pmxRigidBodyConstraint(node, ...)      # constraints AFTER bodies
 _wire_dynamic_write_back(node, group, ...)      # parent bodies + reset anchors + outTranslate/outRotate → joints
-                                                # (K baked by mmdRigidBody -create; sets caching=0 on the node)
+                                                # (K baked by pmxRigidBody -create; sets caching=0 on the node)
 ```
 
 SIMULATION IS ENABLED: the solver is connected to `time1.outTime`, the
 write-back outputs drive the related joints (parent inverse from the parent
 BODY, so no DG feedback cycle), and the node steps every frame.
 
-#### The `mmdRigidBodyConstraint` command
+#### The `pmxRigidBodyConstraint` command
 
-A second NATIVE C++ command (`mmd/maya/cmds/mmd_rigid_body_constraint_cmd.{h,cpp}`,
+A second NATIVE C++ command (`mmd/maya/cmds/rigid_body_constraint_cmd.{h,cpp}`,
 registered in `MayaMMD.cpp`) — the C++ replacement for the former Python
 `_set_joint_attributes`.  Create mode (default) appends ONE PMX joint
 (constraint between two rigid bodies) to the node's `joints` array:
 
 ```
-mmdRigidBodyConstraint <solver | modelRoot>   # create is the default mode
+pmxRigidBodyConstraint <solver | modelRoot>   # create is the default mode
     -bodyA <int> -bodyB <int>     # PMX rigid-body indices the joint links
     -type <int>                   # PMX joint type 0..5
     -position <x y z>             # joint frame (MMD space; Z-flip applied)
@@ -477,12 +477,12 @@ during UI work:
    a dockable sub-panel. (Recommend: frame in the main widget, matching the
    Morphs pattern.)
 
-**Resolved (2026-08-09)** — the `mmdRigidBody` command scope (§5.4): a native
+**Resolved (2026-08-09)** — the `pmxRigidBody` command scope (§5.4): a native
 C++ command following the Maya create/edit/query mode convention, **no JSON**
 (plain flags only); body names live in C++ `bodyNameLocal`/`bodyNameUniversal`
 children; Remove uses a C++ `bodyEnabled` flag (no reindexing); create = one
 body per call (auto-append index); constraints go through the separate
-`mmdRigidBodyConstraint` command; the simulation is wired by the Python
+`pmxRigidBodyConstraint` command; the simulation is wired by the Python
 builder in one pass (**SIMULATION ENABLED**, time-driven + direct joint
 write-back, **no `-finalize` step**); Edit/Query/Remove/Export are later steps;
 there is no command-level re-import (Import = model import only).
@@ -498,5 +498,5 @@ there is no command-level re-import (Import = model import only).
 - `docs/MorphImplementation.md`, `docs/NamingConventions.md` — related
   feature docs.
 - `mmd/maya/pmx/rigid_body_builder.py` — the Python build/discovery code.
-- `mmd/maya/nodes/mmd_physics_node.{h,cpp}` — the C++ node (the interface in
+- `mmd/maya/nodes/physics_node.{h,cpp}` — the C++ node (the interface in
   §4 is mirrored there; keep both in sync).

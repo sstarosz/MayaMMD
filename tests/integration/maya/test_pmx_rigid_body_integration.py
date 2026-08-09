@@ -4,7 +4,7 @@ Integration tests for PMX rigid body physics creation in Maya.
 **Milestone 2 (physics_builder rewrite — native C++ Bullet node):**
 
 The old mayaBullet layer is GONE.  Physics is now driven by one native
-``mmdPhysicsNode`` (an ``MPxLocatorNode`` in ``MayaMMD.mll``) that owns a
+``pmxPhysicsNode`` (an ``MPxLocatorNode`` in ``MayaMMD.mll``) that owns a
 ``btDiscreteDynamicsWorld``:
 
 * The node DRAWS its own guide visualization (wireframe box/sphere/capsule per
@@ -31,7 +31,7 @@ write-back wired) **and behaviour** — the thing the old suite could not detect
 
 Why the node-based approach (vs the mayaBullet solver that froze): the bullet
 solver is a stateful built-in node that Cached Playback's evaluation cache does
-not re-step.  ``mmdPhysicsNode`` declares itself non-cacheable
+not re-step.  ``pmxPhysicsNode`` declares itself non-cacheable
 (``MPxNode::getCacheSetup``), so the evaluation manager re-evaluates it every
 frame — the exact mechanism that keeps the simulation advancing under Cached
 Playback.
@@ -232,7 +232,7 @@ def _is_driven_by(node_out: str, dest: str) -> bool:
 
 
 def test_pmx_rigid_body_physics_group(pmx_data: PmxModel, maya_pmx_data):
-    """Test that a ``{model}_Physics`` group with an mmdPhysicsNode exists."""
+    """Test that a ``{model}_Physics`` group with an pmxPhysicsNode exists."""
     if not pmx_data.rigid_bodies:
         print("SKIP: model has no rigid bodies")
         return True
@@ -242,22 +242,22 @@ def test_pmx_rigid_body_physics_group(pmx_data: PmxModel, maya_pmx_data):
     assert_true(binding is not None and binding.node, "No physics binding/node")
     node = binding.node
     assert_true(
-        cmds.nodeType(node) == "mmdPhysicsNode", f"{node} is not an mmdPhysicsNode"
+        cmds.nodeType(node) == "pmxPhysicsNode", f"{node} is not an pmxPhysicsNode"
     )
     # Phase 1: the node is an MPxLocatorNode (DAG shape) parented under the
     # physics group — it draws its own guides, so it must live in the DAG.
     node_parents = cmds.listRelatives(node, parent=True, type="transform") or []
     assert_true(
         bool(node_parents),
-        f"mmdPhysicsNode {node} is not a DAG shape (no parent transform)",
+        f"pmxPhysicsNode {node} is not a DAG shape (no parent transform)",
     )
     # Simulation is ENABLED: the node is time-driven (time1.outTime → time).
     assert_true(
         cmds.isConnected("time1.outTime", f"{node}.time"),
-        "mmdPhysicsNode.time is not connected to time1.outTime (simulation not "
+        "pmxPhysicsNode.time is not connected to time1.outTime (simulation not "
         "time-driven)",
     )
-    print(f"PASS: Physics group + mmdPhysicsNode created: {node}")
+    print(f"PASS: Physics group + pmxPhysicsNode created: {node}")
     return True
 
 
@@ -471,7 +471,7 @@ def test_follow_bone_anchor_tracks_joint(pmx_data: PmxModel, maya_pmx_data):
 def test_rigid_body_no_guide_transforms(pmx_data: PmxModel, maya_pmx_data):
     """Phase 3: NO guide transforms exist — the node draws the colliders.
 
-    The physics group contains only the ``mmdPhysicsNode`` solver (a locator
+    The physics group contains only the ``pmxPhysicsNode`` solver (a locator
     shape that draws wireframe box/sphere/capsule per body through its C++
     draw override).  The old per-body guide transforms (and their
     ``pmxRigidBodyIndex`` metadata) are gone entirely.

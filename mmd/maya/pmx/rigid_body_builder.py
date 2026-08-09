@@ -4,10 +4,10 @@ rigid_body_builder.py — rigid bodies for PMX models.
 The single rigid-body module (formerly split across the Phase-1 visual-guide
 builder and physics_builder.py).  It owns:
 
-* the **rigid-body build functions** that create one native ``mmdPhysicsNode``
+* the **rigid-body build functions** that create one native ``pmxPhysicsNode``
   (embedded Bullet) per model: the node's ``bodies`` / ``joints`` compound
-  arrays are filled through the native ``mmdRigidBody`` and
-  ``mmdRigidBodyConstraint`` commands, and the node is then wired for
+  arrays are filled through the native ``pmxRigidBody`` and
+  ``pmxRigidBodyConstraint`` commands, and the node is then wired for
   simulation.  FOLLOW_BONE bodies are bound to their related joint through the
   kinematic-anchor input, and the NODE draws the colliders itself through its
   draw override — no guide transforms exist.
@@ -43,19 +43,19 @@ log = logging.getLogger(__name__)
 
 
 # ===========================================================================
-# Physics binding — one native mmdPhysicsNode (embedded Bullet) per model
+# Physics binding — one native pmxPhysicsNode (embedded Bullet) per model
 # ===========================================================================
 
-_NODE_TYPE = "mmdPhysicsNode"
+_NODE_TYPE = "pmxPhysicsNode"
 
-# PMX shape -> mmdRigidBody -shape name (the native command owns the enum).
+# PMX shape -> pmxRigidBody -shape name (the native command owns the enum).
 _COLLIDER_NAME: dict[ShapeType, str] = {
     ShapeType.SPHERE: "sphere",
     ShapeType.BOX: "box",
     ShapeType.CAPSULE: "capsule",
 }
 
-# PMX physics mode -> mmdRigidBody -physicsMode name.
+# PMX physics mode -> pmxRigidBody -physicsMode name.
 _PHYSICS_MODE_NAME: dict[PhysicsMode, str] = {
     PhysicsMode.FOLLOW_BONE: "followBone",
     PhysicsMode.PHYSICS: "physics",
@@ -71,7 +71,7 @@ _PHYSICS_MODE_NAME: dict[PhysicsMode, str] = {
 _DEFAULT_GRAVITY_Y = -9.8
 
 # NOTE: the node derives dt from the scene's CURRENT time unit itself (MTime →
-# seconds in mmd_physics_node.cpp compute()), so there is no Python fps
+# seconds in physics_node.cpp compute()), so there is no Python fps
 # plumbing anymore — it adapts automatically if the playback rate changes.
 
 # Collision mask: the PMX non_collision_group field IS the "collides with"
@@ -128,7 +128,7 @@ def _create_physics_group(
 def _create_physics_solver(
     name_registry: PMXNamingManager, parent_group: Optional[str] = None
 ) -> str:
-    """Create the ``mmdPhysicsNode`` (a locator shape) and make it time-driven.
+    """Create the ``pmxPhysicsNode`` (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world AND draws its
     own guide visualization (wireframe box/sphere/capsule per body, colored by
@@ -157,7 +157,7 @@ def _create_physics_solver(
     return node
 
 
-# The mmdPhysicsNode DRAWS the colliders AND writes the solved pose directly
+# The pmxPhysicsNode DRAWS the colliders AND writes the solved pose directly
 # into the related joints (Phase 3 direct write-back).  The write-back math
 # (K / M_parent offsets, DG fallbacks) is baked by :func:`_wire_dynamic_write_back`
 # below — see docs/PhysicsImplementation.md.
@@ -180,7 +180,7 @@ def _vec3(v: Optional[Vec3]) -> tuple[float, float, float]:
 # FALLBACK (parent bone has no body — that parent is never node-driven):
 #   boneLocal = K * bodyLocal * groupWorld * jointParentInverse
 #
-# K is baked by the native mmdRigidBody -create command (it knows the related
+# K is baked by the native pmxRigidBody -create command (it knows the related
 # joint and the body rest); this module only resolves the parent body index,
 # the DG fallback, the scrub-back reset anchors and the output connections.
 # ---------------------------------------------------------------------------
@@ -239,7 +239,7 @@ def _wire_dynamic_write_back(
 
     Called AFTER every body and joint exists (no -finalize step).  The body
     data and the write-back K offsets (``bodyWriteBackOffset`` =
-    jointRestWorld * bodyRestWorld^-1) were already baked by ``mmdRigidBody
+    jointRestWorld * bodyRestWorld^-1) were already baked by ``pmxRigidBody
     -create``; here we only resolve the per-body wiring that needs the WHOLE
     model:
 
@@ -383,9 +383,9 @@ def create_physics_from_pmx_data(
 ) -> Optional[str]:
     """Build the full physics graph for a PMX model (no in-memory handle).
 
-    Creates the ``{model}_Physics`` group and the ``mmdPhysicsNode`` solver,
+    Creates the ``{model}_Physics`` group and the ``pmxPhysicsNode`` solver,
     fills the ``bodies`` and ``joints`` arrays through the native
-    ``mmdRigidBody`` / ``mmdRigidBodyConstraint`` commands, and then WIRES THE
+    ``pmxRigidBody`` / ``pmxRigidBodyConstraint`` commands, and then WIRES THE
     SIMULATION in one pass (no -finalize step): the solver is time-driven and
     the solved pose is written STRAIGHT into the related joints (Phase 3
     direct write-back: ``boneLocal = K · bodyLocal · B_parent⁻¹ · M_parent⁻¹``).
@@ -412,7 +412,7 @@ def create_physics_from_pmx_data(
     node = _create_physics_solver(name_registry, parent_group=group)
     joint_names = _joint_names_for(joints)
 
-    # 1) RIGID BODIES — every body through the native mmdRigidBody command
+    # 1) RIGID BODIES — every body through the native pmxRigidBody command
     #    (create is the default mode): DATA + bone binding.  FOLLOW_BONE
     #    bodies get their kinematic-anchor input (joint.worldMatrix ->
     #    anchorWorldMatrix + baked offset) here; dynamic bodies are data-only
@@ -425,7 +425,7 @@ def create_physics_from_pmx_data(
         if body.related_bone_index >= 0 and body.related_bone_index in joint_names:
             bone = joint_names[body.related_bone_index]
         try:
-            cmds.mmdRigidBody(
+            cmds.pmxRigidBody(
                 node,
                 name=body.name_local or "",
                 nameUniversal=body.name_universal or "",
@@ -458,13 +458,13 @@ def create_physics_from_pmx_data(
             log.warning("Could not create body %d: %s", rb_idx, exc)
 
     # 2) RIGID BODY CONSTRAINTS — every PMX joint through the native
-    #    mmdRigidBodyConstraint command (the C++ replacement for the former
+    #    pmxRigidBodyConstraint command (the C++ replacement for the former
     #    _set_joint_attributes).  PMX joints are CONSTRAINTS between rigid
     #    bodies (rigid_body_index_a/b), so they come after the bodies they
     #    reference.
     for jt_idx, joint in enumerate(pmx_data.joints):
         try:
-            cmds.mmdRigidBodyConstraint(
+            cmds.pmxRigidBodyConstraint(
                 node,
                 bodyA=int(joint.rigid_body_index_a),
                 bodyB=int(joint.rigid_body_index_b),

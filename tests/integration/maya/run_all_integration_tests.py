@@ -224,17 +224,17 @@ def get_ccd_solver_tests():
 def get_cmd_tests():
     """Import the native command test modules and return their test lists.
 
-    boneMorphNode, boneBlendShape, mmdPhysicsNode, mmdRigidBody and
-    mmdRigidBodyConstraint are already registered by MayaMMD.mll.
+    boneMorphNode, boneBlendShape, pmxPhysicsNode, pmxRigidBody and
+    pmxRigidBodyConstraint are already registered by MayaMMD.mll.
     """
     from tests.integration.maya.cmds import (
         test_bone_blend_shape_cmd_integration,
-        test_mmd_rigid_body_cmd_integration,
+        test_pmx_rigid_body_cmd_integration,
     )
 
     return (
         test_bone_blend_shape_cmd_integration._TESTS
-        + test_mmd_rigid_body_cmd_integration._TESTS
+        + test_pmx_rigid_body_cmd_integration._TESTS
     )
 
 

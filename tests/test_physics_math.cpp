@@ -1,10 +1,10 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * test_mmd_physics_math.cpp
+ * test_physics_math.cpp
  *
  * Unit tests for the Maya-free physics math in
- * mmd/maya/nodes/mmd_physics_math.h.  These lock in the hard-won Maya
+ * mmd/core/physics_math.hpp.  These lock in the hard-won Maya
  * conventions (Euler order, row/column matrix transpose) that previously
  * caused "the anchor orientation mess" and the gimbal-lock bone displacement.
  *
@@ -17,14 +17,16 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "mmd/maya/nodes/mmd_physics_math.h"
+#include "physics_math.hpp"
 
 #include <cmath>
 #include <random>
 
 // Catch2 v3 keeps Approx in the Catch namespace (v2 had it global).
 using Catch::Approx;
-using namespace mmd_physics_math;
+using namespace mmd::core::physics_math;
+using mmd::core::Double3;
+using mmd::core::Double4;
 
 namespace
 {
@@ -106,11 +108,11 @@ TEST_CASE("euler round-trips through the Maya XYZ convention", "[math]")
     };
     for (const auto& a : angles)
     {
-        double out[3];
+        Double3 out;
         quatToEulerXYZDegrees(eulerDegreesToQuat(a[0], a[1], a[2]), out);
-        REQUIRE(approxEuler(out[0], a[0]));
-        REQUIRE(approxEuler(out[1], a[1]));
-        REQUIRE(approxEuler(out[2], a[2]));
+        REQUIRE(approxEuler(out.x, a[0]));
+        REQUIRE(approxEuler(out.y, a[1]));
+        REQUIRE(approxEuler(out.z, a[2]));
     }
 }
 
@@ -124,11 +126,11 @@ TEST_CASE("random euler round-trips (non-gimbal)", "[math]")
         double rx = wide(rng);
         double ry = narrow(rng);
         double rz = wide(rng);
-        double out[3];
+        Double3 out;
         quatToEulerXYZDegrees(eulerDegreesToQuat(rx, ry, rz), out);
-        REQUIRE(approxEuler(out[0], rx));
-        REQUIRE(approxEuler(out[1], ry));
-        REQUIRE(approxEuler(out[2], rz));
+        REQUIRE(approxEuler(out.x, rx));
+        REQUIRE(approxEuler(out.y, ry));
+        REQUIRE(approxEuler(out.z, rz));
     }
 }
 
@@ -140,15 +142,15 @@ TEST_CASE("gimbal lock (ry = +-90) extracts a stable representation", "[math]")
         {
             for (double rz : {-45.0, 20.0})
             {
-                double out[3];
+                Double3 out;
                 quatToEulerXYZDegrees(eulerDegreesToQuat(rx, ry, rz), out);
                 // ry preserved exactly; rx forced to 0 by the convention.
-                REQUIRE(out[1] == Approx(ry).margin(1e-3));
-                REQUIRE(std::fabs(out[0]) < 1e-6);
+                REQUIRE(out.y == Approx(ry).margin(1e-3));
+                REQUIRE(std::fabs(out.x) < 1e-6);
                 // Re-encoding the extracted angles must reproduce the SAME
                 // matrix (rotation-equivalent, not euler-identical).
                 btMatrix3x3 m1(eulerDegreesToQuat(rx, ry, rz));
-                btMatrix3x3 m2(eulerDegreesToQuat(out[0], out[1], out[2]));
+                btMatrix3x3 m2(eulerDegreesToQuat(out.x, out.y, out.z));
                 for (int r = 0; r < 3; ++r)
                     for (int c = 0; c < 3; ++c)
                         REQUIRE(m1[r][c] == Approx(m2[r][c]).margin(1e-3));
@@ -189,25 +191,25 @@ TEST_CASE("doubleMatrixToBtTransform transposes Maya row matrices", "[math]")
 
 TEST_CASE("transformFromRest places the rest pose", "[math]")
 {
-    const double pos[3] = {1.0, -2.0, 3.0};
-    const double rot[3] = {0.0, 0.0, 0.0};
+    const Double3 pos(1.0, -2.0, 3.0);
+    const Double3 rot(0.0, 0.0, 0.0);
     btTransform t = transformFromRest(pos, rot);
     requireVecClose(t.getOrigin(), btVector3(1.0, -2.0, 3.0));
-    double out[3];
+    Double3 out;
     quatToEulerXYZDegrees(t.getRotation(), out);
-    REQUIRE(approxEuler(out[0], 0.0));
-    REQUIRE(approxEuler(out[1], 0.0));
-    REQUIRE(approxEuler(out[2], 0.0));
+    REQUIRE(approxEuler(out.x, 0.0));
+    REQUIRE(approxEuler(out.y, 0.0));
+    REQUIRE(approxEuler(out.z, 0.0));
 }
 
 TEST_CASE("anchor pose stores and rebuilds the same transform", "[math]")
 {
-    const double pos[3] = {1.0, 2.0, 3.0};
-    const double rot[3] = {15.0, -30.0, 45.0};
+    const Double3 pos(1.0, 2.0, 3.0);
+    const Double3 rot(15.0, -30.0, 45.0);
     btTransform src = transformFromRest(pos, rot);
 
-    double sp[3] = {0, 0, 0};
-    double sq[4] = {0, 0, 0, 1};
+    Double3 sp;
+    Double4 sq = Double4(0.0, 0.0, 0.0, 1.0);
     storeAnchorPose(sp, sq, src);
     btTransform rebuilt = anchorPoseToTransform(sp, sq);
     requireTransformClose(rebuilt, src);
@@ -216,8 +218,8 @@ TEST_CASE("anchor pose stores and rebuilds the same transform", "[math]")
 TEST_CASE("btTransformToRowMatrix is the exact inverse of doubleMatrixToBtTransform", "[math]")
 {
     // A rotated + translated transform; round-trip must be exact.
-    const double pos[3] = {1.5, -2.0, 3.25};
-    const double rot[3] = {30.0, -45.0, 60.0};
+    const Double3 pos(1.5, -2.0, 3.25);
+    const Double3 rot(30.0, -45.0, 60.0);
     btTransform src = transformFromRest(pos, rot);
 
     double row[4][4];

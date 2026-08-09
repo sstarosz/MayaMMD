@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   M_parent⁻¹`, parent inverse derived from the parent BODY so there is no DG
   feedback cycle).  `_wire_dynamic_write_back` bakes the K / M_parent offsets,
   sets the scrub-back reset anchors, and connects `outTranslate`/`outRotate` →
-  joints after all bodies/joints exist — the two-phase `mmdRigidBody -finalize`
+  joints after all bodies/joints exist — the two-phase `pmxRigidBody -finalize`
   command is gone.  Rigidbody integration suite updated to the enabled behavior
   (time-driven, write-back driven, cycle-safe, simulation steps, write-back
   moves bone).
@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `non_collision_group_hex` + `collides_with_groups` for readability.
 - **Full guide removal + direct joint write-back (Phase 3).** Guide transforms
   and `parentConstraint`/`orientConstraint` write-back are **gone** — the
-  `mmdPhysicsNode` writes the solved JOINT-LOCAL pose straight into the related
+  `pmxPhysicsNode` writes the solved JOINT-LOCAL pose straight into the related
   joints (`outTranslate[i]`/`outRotate[i]` → `joint.translate`/`rotate`), and
   the physics group now contains only the solver locator.  The write-back
   reproduces `parentConstraint(maintainOffset)` exactly: `boneLocal =
@@ -66,13 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Physics engine replaced: mayaBullet → native `mmdPhysicsNode` (embedded
+- **Physics engine replaced: mayaBullet → native `pmxPhysicsNode` (embedded
   Bullet 3.25).** The mayaBullet binding layer is **gone**. `bulletSolverShape`
   is a *stateful* node — Cached Playback's evaluation cache treats node outputs
   as pure functions of their inputs and never re-steps the solver, so dynamic
   bodies froze at rest and the write-back constraints then locked the skeleton
   ("lost mesh binding"). The replacement is a native C++ `MPxNode`
-  (`mmd/maya/nodes/mmd_physics_node.h/.cpp`, registered by `MayaMMD.mll`) that
+  (`mmd/maya/nodes/physics_node.h/.cpp`, registered by `MayaMMD.mll`) that
   owns a `btDiscreteDynamicsWorld` and steps inside `compute()` on every
   `time1.outTime` change. It declares itself **non-cacheable**
   (`MPxNode::getCacheSetup` → `MNodeCacheDisablingInfoHelper::setUnsafeNode`),
@@ -111,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Native `mmdPhysicsNode` C++ node** (`mmd/maya/nodes/mmd_physics_node.h/.cpp`):
+- **Native `pmxPhysicsNode` C++ node** (`mmd/maya/nodes/physics_node.h/.cpp`):
   - Owns a `btDiscreteDynamicsWorld`; time-driven (`time1.outTime → time`),
     evaluated by the evaluation manager every frame, never cached.
   - Compound `bodies` array: rest pose, mass, damping, friction, restitution,

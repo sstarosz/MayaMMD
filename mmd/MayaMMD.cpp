@@ -22,17 +22,17 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
-#include "maya/cmds/mmd_rigid_body_cmd.h"
-#include "maya/cmds/mmd_rigid_body_constraint_cmd.h"
+#include "maya/cmds/rigid_body_cmd.h"
+#include "maya/cmds/rigid_body_constraint_cmd.h"
 #include "maya/nodes/ccd_ik_solver_node.h"
-#include "maya/nodes/mmd_physics_draw_override.h"
-#include "maya/nodes/mmd_physics_node.h"
+#include "maya/nodes/physics_draw_override.h"
+#include "maya/nodes/physics_node.h"
 #include "version.hpp"
 
 // Draw-override registration (see MHWRender::MDrawRegistry): the override is
 // keyed by a draw-database CLASSIFICATION plus a unique REGISTRANT id, not the
 // node's MTypeId.
-static const MString kPhysicsDrawClassification("drawdb/geometry/mmdPhysicsNode");
+static const MString kPhysicsDrawClassification("drawdb/geometry/pmxPhysicsNode");
 static const MString kPhysicsDrawRegistrant("MayaMMD");
 
 // ===========================================================================
@@ -95,43 +95,43 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     //     As a locator it also draws its own guide visualization (see the draw
     //     override registration below).
     {
-        MString classification(MMDPhysicsNode::kNodeClassify);
-        stat = plugin.registerNode(MMDPhysicsNode::kNodeName, MMDPhysicsNode::kTypeId,
-                                   MMDPhysicsNode::creator, MMDPhysicsNode::initialize,
+        MString classification(PhysicsNode::kNodeClassify);
+        stat = plugin.registerNode(PhysicsNode::kNodeName, PhysicsNode::kTypeId,
+                                   PhysicsNode::creator, PhysicsNode::initialize,
                                    MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
-        MGlobal::displayWarning("  ⚠ mmdPhysicsNode registration failed");
+        MGlobal::displayWarning("  ⚠ pmxPhysicsNode registration failed");
 
     // 1c. Register the viewport draw override that renders the node's guide
     //     visualization (wireframe box/sphere/capsule per body, group-colored)
     //     directly from the node's internal Bullet state.
     {
         stat = MHWRender::MDrawRegistry::registerDrawOverrideCreator(
-            kPhysicsDrawClassification, kPhysicsDrawRegistrant, MMDPhysicsDrawOverride::creator);
+            kPhysicsDrawClassification, kPhysicsDrawRegistrant, PhysicsDrawOverride::creator);
     }
     if (!stat)
-        MGlobal::displayWarning("  ⚠ mmdPhysicsNode draw override registration failed");
+        MGlobal::displayWarning("  ⚠ pmxPhysicsNode draw override registration failed");
 
-    // 1d. Register the native rigid-body command (mmdRigidBody).  It lives in
+    // 1d. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
     //     OpenMaya's lazy MSyntax creation in mayapy 2026.
     {
-        stat = plugin.registerCommand(MmdRigidBodyCmd::kName, MmdRigidBodyCmd::creator,
-                                      MmdRigidBodyCmd::syntaxCreator);
+        stat = plugin.registerCommand(RigidBodyCmd::kName, RigidBodyCmd::creator,
+                                      RigidBodyCmd::syntaxCreator);
     }
     if (!stat)
-        MGlobal::displayWarning("  ⚠ mmdRigidBody command registration failed");
+        MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
 
-    // 1e. Register the native rigid-body-constraint command (mmdRigidBodyConstraint)
+    // 1e. Register the native rigid-body-constraint command (pmxRigidBodyConstraint)
     //     — the C++ replacement for the former Python _set_joint_attributes.
     {
-        stat = plugin.registerCommand(MmdRigidBodyConstraintCmd::kName,
-                                      MmdRigidBodyConstraintCmd::creator,
-                                      MmdRigidBodyConstraintCmd::syntaxCreator);
+        stat = plugin.registerCommand(RigidBodyConstraintCmd::kName,
+                                      RigidBodyConstraintCmd::creator,
+                                      RigidBodyConstraintCmd::syntaxCreator);
     }
     if (!stat)
-        MGlobal::displayWarning("  ⚠ mmdRigidBodyConstraint command registration failed");
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyConstraint command registration failed");
 
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
@@ -157,10 +157,10 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     //    (the draw override creator must be removed before its node type).
     MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(kPhysicsDrawClassification,
                                                             kPhysicsDrawRegistrant);
-    plugin.deregisterNode(MMDPhysicsNode::kTypeId);
+    plugin.deregisterNode(PhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
-    plugin.deregisterCommand(MmdRigidBodyCmd::kName);
-    plugin.deregisterCommand(MmdRigidBodyConstraintCmd::kName);
+    plugin.deregisterCommand(RigidBodyCmd::kName);
+    plugin.deregisterCommand(RigidBodyConstraintCmd::kName);
 
     return MS::kSuccess;
 }

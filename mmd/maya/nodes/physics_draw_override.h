@@ -1,10 +1,10 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_physics_draw_override.h
+ * physics_draw_override.h
  *
- * MMDPhysicsDrawOverride — MPxDrawOverride that renders the rigid-body guide
- * visualization for mmdPhysicsNode.
+ * PhysicsDrawOverride — MPxDrawOverride that renders the rigid-body guide
+ * visualization for pmxPhysicsNode.
  *
  * The node (an MPxLocatorNode) owns the Bullet world and its body state; this
  * override draws a wireframe box / sphere / capsule per body, colored by
@@ -27,12 +27,12 @@
 #include <maya/MPxDrawOverride.h>
 #include <maya/MUserData.h>
 
-class MMDPhysicsDrawOverride : public MHWRender::MPxDrawOverride
+class PhysicsDrawOverride : public MHWRender::MPxDrawOverride
 {
   public:
     static MHWRender::MPxDrawOverride* creator(const MObject& obj);
 
-    ~MMDPhysicsDrawOverride() override;
+    ~PhysicsDrawOverride() override;
 
     MHWRender::DrawAPI supportedDrawAPIs() const override;
     bool hasUIDrawables() const override;
@@ -45,5 +45,5 @@ class MMDPhysicsDrawOverride : public MHWRender::MPxDrawOverride
                         const MFrameContext& frameContext, const MUserData* data) override;
 
   private:
-    explicit MMDPhysicsDrawOverride(const MObject& obj);
+    explicit PhysicsDrawOverride(const MObject& obj);
 };

@@ -39,7 +39,7 @@ For CI builds, the SDK is downloaded automatically by CMake (see `CMakeLists.txt
 
 MayaMMD resolves its C/C++ dependencies via **vcpkg** (`vcpkg.json`).
 Currently that is **Bullet 3.25** (float precision) for the native
-`mmdPhysicsNode`; future C/C++ dependencies will be added to `vcpkg.json`
+`pmxPhysicsNode`; future C/C++ dependencies will be added to `vcpkg.json`
 the same way. A fresh clone just needs a bootstrapped vcpkg with
 `VCPKG_ROOT` set:
 
@@ -64,7 +64,7 @@ the build directory) — no manual `vcpkg install` is needed.
   clear toolchain error. Bootstrap vcpkg, set `VCPKG_ROOT`, and re-run.
 - Keep Bullet at **float** precision: do **not** enable vcpkg's
   `double-precision` feature — `btScalar` must stay float to match
-  `mmd_physics_node.cpp`.
+  `physics_node.cpp`.
 
 ## Quick Start
 

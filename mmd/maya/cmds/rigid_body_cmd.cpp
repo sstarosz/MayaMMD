@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_rigid_body_cmd.cpp
+ * rigid_body_cmd.cpp
  *
- * Native C++ implementation of the ``mmdRigidBody`` command (create mode —
+ * Native C++ implementation of the ``pmxRigidBody`` command (create mode —
  * the default).
  *
  * ``-create`` is the single body-modification path (the PMX import loops it;
@@ -13,7 +13,7 @@
  * no stepping).
  */
 
-#include "mmd_rigid_body_cmd.h"
+#include "rigid_body_cmd.h"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -35,11 +35,13 @@
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
-#include "../nodes/mmd_physics_node.h"
+#include "../nodes/physics_node.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+
+using mmd::core::Double3;
 
 namespace
 {
@@ -100,12 +102,12 @@ void setDouble3(MPlug& plug, const Double3& v)
 // Registration
 // ===========================================================================
 
-void* MmdRigidBodyCmd::creator()
+void* RigidBodyCmd::creator()
 {
-    return new MmdRigidBodyCmd();
+    return new RigidBodyCmd();
 }
 
-MSyntax MmdRigidBodyCmd::syntaxCreator()
+MSyntax RigidBodyCmd::syntaxCreator()
 {
     MSyntax syntax;
     // First positional argument: the solver node (or a model root).
@@ -141,38 +143,38 @@ MSyntax MmdRigidBodyCmd::syntaxCreator()
 // doIt
 // ===========================================================================
 
-MStatus MmdRigidBodyCmd::doIt(const MArgList& args)
+MStatus RigidBodyCmd::doIt(const MArgList& args)
 {
     MStatus stat;
     MArgParser parser(syntaxCreator(), args, &stat);
     if (!stat)
     {
-        displayError("mmdRigidBody: could not parse arguments");
+        displayError("pmxRigidBody: could not parse arguments");
         return stat;
     }
 
     MString target = parser.commandArgumentString(0, &stat);
     if (!stat || target.length() == 0)
     {
-        displayError("mmdRigidBody: missing solver / modelRoot argument");
+        displayError("pmxRigidBody: missing solver / modelRoot argument");
         return MS::kFailure;
     }
 
     if (parser.isQuery())
     {
-        displayError("mmdRigidBody query mode is not implemented yet");
+        displayError("pmxRigidBody query mode is not implemented yet");
         return MS::kFailure;
     }
     if (parser.isEdit())
     {
-        displayError("mmdRigidBody edit mode is not implemented yet");
+        displayError("pmxRigidBody edit mode is not implemented yet");
         return MS::kFailure;
     }
 
     MObject solverNode;
     if (!resolveSolver(target, solverNode))
     {
-        displayError("'" + target + "' is not an mmdPhysicsNode or a PMX model root");
+        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
         return MS::kFailure;
     }
 
@@ -187,7 +189,7 @@ MStatus MmdRigidBodyCmd::doIt(const MArgList& args)
 // Helpers
 // ===========================================================================
 
-bool MmdRigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
+bool RigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
 {
     try
     {
@@ -201,7 +203,7 @@ bool MmdRigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
             return false;
 
         MFnDependencyNode fn(obj);
-        if (fn.typeName() == MMDPhysicsNode::kNodeName)
+        if (fn.typeName() == PhysicsNode::kNodeName)
         {
             outNode = obj;
             return true;
@@ -221,7 +223,7 @@ bool MmdRigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
                         obj2.hasFn(MFn::kDependencyNode))
                     {
                         MFnDependencyNode fn2(obj2);
-                        if (fn2.typeName() == MMDPhysicsNode::kNodeName)
+                        if (fn2.typeName() == PhysicsNode::kNodeName)
                         {
                             outNode = obj2;
                             return true;
@@ -237,7 +239,7 @@ bool MmdRigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
     return false;
 }
 
-MMatrix MmdRigidBodyCmd::matrixFromTR(const Double3& t, const Double3& r)
+MMatrix RigidBodyCmd::matrixFromTR(const Double3& t, const Double3& r)
 {
     MTransformationMatrix mt;
     mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
@@ -246,12 +248,12 @@ MMatrix MmdRigidBodyCmd::matrixFromTR(const Double3& t, const Double3& r)
     return mt.asMatrix();
 }
 
-MMatrix MmdRigidBodyCmd::worldMatrix(const MDagPath& path)
+MMatrix RigidBodyCmd::worldMatrix(const MDagPath& path)
 {
     return path.inclusiveMatrix();
 }
 
-MStatus MmdRigidBodyCmd::connectOrReplace(const MPlug& src, const MPlug& dst)
+MStatus RigidBodyCmd::connectOrReplace(const MPlug& src, const MPlug& dst)
 {
     MDGModifier mod;
     if (dst.isConnected())
@@ -269,7 +271,7 @@ MStatus MmdRigidBodyCmd::connectOrReplace(const MPlug& src, const MPlug& dst)
     return mod.doIt();
 }
 
-int MmdRigidBodyCmd::jointPmxBoneIndex(const MDagPath& jointPath)
+int RigidBodyCmd::jointPmxBoneIndex(const MDagPath& jointPath)
 {
     try
     {
@@ -284,7 +286,7 @@ int MmdRigidBodyCmd::jointPmxBoneIndex(const MDagPath& jointPath)
     return -1;
 }
 
-MDagPath MmdRigidBodyCmd::resolveBone(const MString& bone, const MDagPath& groupPath)
+MDagPath RigidBodyCmd::resolveBone(const MString& bone, const MDagPath& groupPath)
 {
     MDagPath out;
     if (bone.length() == 0)
@@ -334,7 +336,7 @@ MDagPath MmdRigidBodyCmd::resolveBone(const MString& bone, const MDagPath& group
 // Create mode
 // ===========================================================================
 
-MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNode,
+MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNode,
                                   int& outIndex)
 {
     // ── Parse flags (safe defaults, mirroring the former Python command) ──
@@ -403,11 +405,11 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
 
     // ── Enumerated values ──
     MString sh = shape.toLowerCase();
-    MMDPhysicsNode::ColliderType colliderType = MMDPhysicsNode::kColliderSphere;
+    PhysicsNode::ColliderType colliderType = PhysicsNode::kColliderSphere;
     if (sh == "box")
-        colliderType = MMDPhysicsNode::kColliderBox;
+        colliderType = PhysicsNode::kColliderBox;
     else if (sh == "capsule")
-        colliderType = MMDPhysicsNode::kColliderCapsule;
+        colliderType = PhysicsNode::kColliderCapsule;
     else if (sh != "sphere")
     {
         displayError("Unknown shape '" + shape + "' — expected sphere, box or capsule");
@@ -415,25 +417,25 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     }
 
     MString pm = physicsMode.toLowerCase();
-    MMDPhysicsNode::BodyPhysicsMode physicsModeEnum = MMDPhysicsNode::kBodyPhysics;
+    PhysicsNode::PhysicsMode physicsModeEnum = PhysicsNode::PhysicsMode::Physics;
     if (pm == "followbone")
-        physicsModeEnum = MMDPhysicsNode::kBodyPhysicsFollowBone;
+        physicsModeEnum = PhysicsNode::PhysicsMode::FollowBone;
     else if (pm == "physicsbone")
-        physicsModeEnum = MMDPhysicsNode::kBodyPhysicsBone;
+        physicsModeEnum = PhysicsNode::PhysicsMode::PhysicsBone;
     else if (pm != "physics")
     {
         displayError("Unknown physicsMode '" + physicsMode +
                      "' — expected followBone, physics or physicsBone");
         return MS::kFailure;
     }
-    bool kinematic = (physicsModeEnum == MMDPhysicsNode::kBodyPhysicsFollowBone);
+    bool kinematic = (physicsModeEnum == PhysicsNode::PhysicsMode::FollowBone);
 
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
-    MPlug bodiesPlug = fn.findPlug(MMDPhysicsNode::aBodies, true);
+    MPlug bodiesPlug = fn.findPlug(PhysicsNode::aBodies, true);
     if (bodiesPlug.isNull())
     {
-        displayError("mmdRigidBody: node has no 'bodies' array");
+        displayError("pmxRigidBody: node has no 'bodies' array");
         return MS::kFailure;
     }
     int count = bodiesPlug.numElements();
@@ -451,7 +453,7 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
     MDagPath nodePath;
     if (MDagPath::getAPathTo(solverNode, nodePath) != MS::kSuccess)
     {
-        displayError("mmdRigidBody: could not resolve solver dag path");
+        displayError("pmxRigidBody: could not resolve solver dag path");
         return MS::kFailure;
     }
     MDagPath groupPath = nodePath;
@@ -481,28 +483,28 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    setDouble3(elem.child(MMDPhysicsNode::aBodyRestTranslate), localT);
-    setDouble3(elem.child(MMDPhysicsNode::aBodyRestRotate), localR);
-    elem.child(MMDPhysicsNode::aBodyMass).setDouble(mass);
-    elem.child(MMDPhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
-    elem.child(MMDPhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
-    elem.child(MMDPhysicsNode::aBodyFriction).setDouble(friction);
-    elem.child(MMDPhysicsNode::aBodyRestitution).setDouble(restitution);
-    elem.child(MMDPhysicsNode::aBodyColliderType).setShort(colliderType);
-    elem.child(MMDPhysicsNode::aBodyRadius).setDouble(size.x);
-    setDouble3(elem.child(MMDPhysicsNode::aBodyExtents), size);
-    elem.child(MMDPhysicsNode::aBodyLength).setDouble(size.y);
-    elem.child(MMDPhysicsNode::aBodyGroupId).setShort(group);
+    setDouble3(elem.child(PhysicsNode::aBodyRestTranslate), localT);
+    setDouble3(elem.child(PhysicsNode::aBodyRestRotate), localR);
+    elem.child(PhysicsNode::aBodyMass).setDouble(mass);
+    elem.child(PhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
+    elem.child(PhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
+    elem.child(PhysicsNode::aBodyFriction).setDouble(friction);
+    elem.child(PhysicsNode::aBodyRestitution).setDouble(restitution);
+    elem.child(PhysicsNode::aBodyColliderType).setShort(colliderType);
+    elem.child(PhysicsNode::aBodyRadius).setDouble(size.x);
+    setDouble3(elem.child(PhysicsNode::aBodyExtents), size);
+    elem.child(PhysicsNode::aBodyLength).setDouble(size.y);
+    elem.child(PhysicsNode::aBodyGroupId).setShort(group);
     for (int g = 0; g < 16; ++g)
-        elem.child(MMDPhysicsNode::aBodyMaskGroup[g]).setBool((mask >> g) & 1);
-    elem.child(MMDPhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
+        elem.child(PhysicsNode::aBodyMaskGroup[g]).setBool((mask >> g) & 1);
+    elem.child(PhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     // Wiring fields: the parent body / reset anchor are resolved later (the
     // parent body may not exist yet); the write-back K offset is baked below.
-    elem.child(MMDPhysicsNode::aBodyResetAnchorIndex).setInt(-1);
-    elem.child(MMDPhysicsNode::aBodyParentBodyIndex).setInt(-1);
-    elem.child(MMDPhysicsNode::aBodyNameLocal).setString(nameLocal);
-    elem.child(MMDPhysicsNode::aBodyNameUniversal).setString(nameUniversal);
-    elem.child(MMDPhysicsNode::aBodyEnabled).setBool(true);
+    elem.child(PhysicsNode::aBodyResetAnchorIndex).setInt(-1);
+    elem.child(PhysicsNode::aBodyParentBodyIndex).setInt(-1);
+    elem.child(PhysicsNode::aBodyNameLocal).setString(nameLocal);
+    elem.child(PhysicsNode::aBodyNameUniversal).setString(nameUniversal);
+    elem.child(PhysicsNode::aBodyEnabled).setBool(true);
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
@@ -520,21 +522,21 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
         for (int i = 0; i < n; ++i)
         {
             if (bodiesPlug.elementByLogicalIndex(i)
-                    .child(MMDPhysicsNode::aBodyPhysicsMode)
-                    .asShort() == static_cast<short>(MMDPhysicsNode::kBodyPhysicsFollowBone))
+                    .child(PhysicsNode::aBodyPhysicsMode)
+                    .asShort() == static_cast<short>(PhysicsNode::PhysicsMode::FollowBone))
                 ++k;
         }
         if (jointPath.isValid())
         {
             connectOrReplace(
                 jointWorldPlug,
-                fn.findPlug(MMDPhysicsNode::aAnchorWorldMatrix).elementByLogicalIndex(k));
+                fn.findPlug(PhysicsNode::aAnchorWorldMatrix).elementByLogicalIndex(k));
             connectOrReplace(
                 groupWorldInversePlug,
-                fn.findPlug(MMDPhysicsNode::aAnchorParentInverseMatrix).elementByLogicalIndex(k));
+                fn.findPlug(PhysicsNode::aAnchorParentInverseMatrix).elementByLogicalIndex(k));
             MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
             MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
-            setMatrixValue(fn.findPlug(MMDPhysicsNode::aAnchorOffset).elementByLogicalIndex(k),
+            setMatrixValue(fn.findPlug(PhysicsNode::aAnchorOffset).elementByLogicalIndex(k),
                            offset);
         }
         else
@@ -543,12 +545,12 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
             MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
             MMatrix identity;
             identity.setToIdentity();
-            setMatrixValue(fn.findPlug(MMDPhysicsNode::aAnchorWorldMatrix).elementByLogicalIndex(k),
+            setMatrixValue(fn.findPlug(PhysicsNode::aAnchorWorldMatrix).elementByLogicalIndex(k),
                            bodyWorld);
             setMatrixValue(
-                fn.findPlug(MMDPhysicsNode::aAnchorParentInverseMatrix).elementByLogicalIndex(k),
+                fn.findPlug(PhysicsNode::aAnchorParentInverseMatrix).elementByLogicalIndex(k),
                 groupWorld.inverse());
-            setMatrixValue(fn.findPlug(MMDPhysicsNode::aAnchorOffset).elementByLogicalIndex(k),
+            setMatrixValue(fn.findPlug(PhysicsNode::aAnchorOffset).elementByLogicalIndex(k),
                            identity);
         }
     }
@@ -583,10 +585,10 @@ MStatus MmdRigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solve
             MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }
-        setMatrixValue(fn.findPlug(MMDPhysicsNode::aBodyWriteBackOffset).elementByLogicalIndex(n),
+        setMatrixValue(fn.findPlug(PhysicsNode::aBodyWriteBackOffset).elementByLogicalIndex(n),
                        k);
         setMatrixValue(
-            fn.findPlug(MMDPhysicsNode::aBodyParentInverseMatrix).elementByLogicalIndex(n),
+            fn.findPlug(PhysicsNode::aBodyParentInverseMatrix).elementByLogicalIndex(n),
             identity);
     }
 

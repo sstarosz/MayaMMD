@@ -33,7 +33,7 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 - 🔄 SDEF/QDEF skinning — falls back to BDEF2
 - 🔄 Fixed axis / local coordinate — enforced during VMD/VPD apply, not interactively in the viewport
 - 🔄 Rigid bodies — visible guide meshes (kinematic FOLLOW_BONE bodies follow their bones; dynamic PHYSICS/PHYSICS_BONE bodies are simulated)
-- 🔄 Physics simulation — native `mmdPhysicsNode` (embedded Bullet 3.25) simulates dynamic bodies, joints and DG write-back (Milestone 2); soft bodies and full MMD determinism not yet
+- 🔄 Physics simulation — native `pmxPhysicsNode` (embedded Bullet 3.25) simulates dynamic bodies, joints and DG write-back (Milestone 2); soft bodies and full MMD determinism not yet
 - ❌ Sphere, toon, edge materials and ambient color
 - ❌ UV, group, and material morphs
 - ❌ PMX export

@@ -1,17 +1,17 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * mmd_physics_draw_override.cpp
+ * physics_draw_override.cpp
  *
- * See mmd_physics_draw_override.h — viewport drawing for mmdPhysicsNode.
+ * See physics_draw_override.h — viewport drawing for pmxPhysicsNode.
  *
  * The drawing happens in the locator's OBJECT space, which is the physics
  * group's local space (the locator sits at the group's origin), i.e. exactly
  * the space the Bullet world runs in — so the solved poses pulled via
- * MMDPhysicsNode::collectDrawData can be drawn as-is.
+ * PhysicsNode::collectDrawData can be drawn as-is.
  */
 
-#include "mmd_physics_draw_override.h"
+#include "physics_draw_override.h"
 
 #include <maya/MColor.h>
 #include <maya/MFnDependencyNode.h>
@@ -19,8 +19,8 @@
 #include <maya/MPointArray.h>
 #include <maya/MUIDrawManager.h>
 
-#include "mmd_physics_math.h"
-#include "mmd_physics_node.h"
+#include "physics_math.hpp"
+#include "physics_node.h"
 
 #include <cmath>
 #include <vector>
@@ -33,7 +33,7 @@ namespace
 class MMDPhysicsDrawData : public MUserData
 {
   public:
-    std::vector<MMDPhysicsNode::DrawBody> bodies;
+    std::vector<PhysicsNode::DrawBody> bodies;
 };
 
 // Collision-group palette — matches the PMX group colors that used to be
@@ -78,7 +78,7 @@ void rotatePoint(const double q[4], const float v[3], float out[3])
     out[2] = static_cast<float>(v[2] + q[3] * tz + (q[0] * ty - q[1] * tx));
 }
 
-MPoint bodyPoint(const MMDPhysicsNode::DrawBody& b, const float local[3])
+MPoint bodyPoint(const PhysicsNode::DrawBody& b, const float local[3])
 {
     float o[3];
     rotatePoint(b.quat, local, o);
@@ -86,7 +86,7 @@ MPoint bodyPoint(const MMDPhysicsNode::DrawBody& b, const float local[3])
 }
 
 // 12 box edges (half extents) as line endpoints.
-void addBoxEdges(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
+void addBoxEdges(const PhysicsNode::DrawBody& b, MPointArray& pts)
 {
     const float hx = static_cast<float>(b.extents[0]);
     const float hy = static_cast<float>(b.extents[1]);
@@ -108,7 +108,7 @@ void addBoxEdges(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
 }
 
 // Capsule (Y axis): two circles at +-h/2 plus 4 connecting lines.
-void addCapsuleLines(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
+void addCapsuleLines(const PhysicsNode::DrawBody& b, MPointArray& pts)
 {
     const float r = static_cast<float>(b.radius);
     const float half = static_cast<float>(b.length) * 0.5f;
@@ -116,8 +116,8 @@ void addCapsuleLines(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
     constexpr int kSpokes = 4;
     for (int s = 0; s < kSegs; ++s)
     {
-        const float a0 = static_cast<float>(s * 2.0 * mmd_physics_math::kPi / kSegs);
-        const float a1 = static_cast<float>((s + 1) * 2.0 * mmd_physics_math::kPi / kSegs);
+        const float a0 = static_cast<float>(s * 2.0 * mmd::core::physics_math::kPi / kSegs);
+        const float a1 = static_cast<float>((s + 1) * 2.0 * mmd::core::physics_math::kPi / kSegs);
         const float v0[3] = {std::cos(a0) * r, half, std::sin(a0) * r};
         const float v1[3] = {std::cos(a1) * r, half, std::sin(a1) * r};
         const float v2[3] = {std::cos(a0) * r, -half, std::sin(a0) * r};
@@ -129,7 +129,7 @@ void addCapsuleLines(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
     }
     for (int s = 0; s < kSpokes; ++s)
     {
-        const float a = static_cast<float>(s * 2.0 * mmd_physics_math::kPi / kSpokes);
+        const float a = static_cast<float>(s * 2.0 * mmd::core::physics_math::kPi / kSpokes);
         const float top[3] = {std::cos(a) * r, half, std::sin(a) * r};
         const float bot[3] = {std::cos(a) * r, -half, std::sin(a) * r};
         pts.append(bodyPoint(b, top));
@@ -140,50 +140,50 @@ void addCapsuleLines(const MMDPhysicsNode::DrawBody& b, MPointArray& pts)
 } // namespace
 
 // ===========================================================================
-// MMDPhysicsDrawOverride
+// PhysicsDrawOverride
 // ===========================================================================
 
-MMDPhysicsDrawOverride::MMDPhysicsDrawOverride(const MObject& obj)
+PhysicsDrawOverride::PhysicsDrawOverride(const MObject& obj)
     : MHWRender::MPxDrawOverride(obj, nullptr)
 {
 }
 
-MMDPhysicsDrawOverride::~MMDPhysicsDrawOverride() = default;
+PhysicsDrawOverride::~PhysicsDrawOverride() = default;
 
-MHWRender::MPxDrawOverride* MMDPhysicsDrawOverride::creator(const MObject& obj)
+MHWRender::MPxDrawOverride* PhysicsDrawOverride::creator(const MObject& obj)
 {
-    return new MMDPhysicsDrawOverride(obj);
+    return new PhysicsDrawOverride(obj);
 }
 
-MHWRender::DrawAPI MMDPhysicsDrawOverride::supportedDrawAPIs() const
+MHWRender::DrawAPI PhysicsDrawOverride::supportedDrawAPIs() const
 {
     return MHWRender::kOpenGL | MHWRender::kDirectX11 | MHWRender::kOpenGLCoreProfile;
 }
 
-bool MMDPhysicsDrawOverride::hasUIDrawables() const
+bool PhysicsDrawOverride::hasUIDrawables() const
 {
     return true; // addUIDrawables() queues the wireframe guide primitives
 }
 
-bool MMDPhysicsDrawOverride::isBounded(const MDagPath&, const MDagPath&) const
+bool PhysicsDrawOverride::isBounded(const MDagPath&, const MDagPath&) const
 {
     return true;
 }
 
-MBoundingBox MMDPhysicsDrawOverride::boundingBox(const MDagPath& objPath, const MDagPath&) const
+MBoundingBox PhysicsDrawOverride::boundingBox(const MDagPath& objPath, const MDagPath&) const
 {
     MObject node = objPath.node();
     MFnDependencyNode fn(node);
-    if (fn.typeId() == MMDPhysicsNode::kTypeId)
+    if (fn.typeId() == PhysicsNode::kTypeId)
     {
-        auto* physics = static_cast<MMDPhysicsNode*>(fn.userNode());
+        auto* physics = static_cast<PhysicsNode*>(fn.userNode());
         if (physics)
             return physics->boundingBox();
     }
     return MBoundingBox(MPoint(-1.0, -1.0, -1.0), MPoint(1.0, 1.0, 1.0));
 }
 
-MUserData* MMDPhysicsDrawOverride::prepareForDraw(const MDagPath& objPath, const MDagPath&,
+MUserData* PhysicsDrawOverride::prepareForDraw(const MDagPath& objPath, const MDagPath&,
                                                   const MFrameContext&, MUserData* oldData)
 {
     MMDPhysicsDrawData* data = dynamic_cast<MMDPhysicsDrawData*>(oldData);
@@ -193,16 +193,16 @@ MUserData* MMDPhysicsDrawOverride::prepareForDraw(const MDagPath& objPath, const
 
     MObject node = objPath.node();
     MFnDependencyNode fn(node);
-    if (fn.typeId() == MMDPhysicsNode::kTypeId)
+    if (fn.typeId() == PhysicsNode::kTypeId)
     {
-        auto* physics = static_cast<MMDPhysicsNode*>(fn.userNode());
+        auto* physics = static_cast<PhysicsNode*>(fn.userNode());
         if (physics)
             physics->collectDrawData(data->bodies);
     }
     return data;
 }
 
-void MMDPhysicsDrawOverride::addUIDrawables(const MDagPath&, MUIDrawManager& drawManager,
+void PhysicsDrawOverride::addUIDrawables(const MDagPath&, MUIDrawManager& drawManager,
                                             const MFrameContext&, const MUserData* userData)
 {
     const auto* data = dynamic_cast<const MMDPhysicsDrawData*>(userData);
@@ -213,19 +213,19 @@ void MMDPhysicsDrawOverride::addUIDrawables(const MDagPath&, MUIDrawManager& dra
     for (const auto& b : data->bodies)
     {
         drawManager.setColor(bodyColor(b.groupId, b.kinematic));
-        if (b.colliderType == MMDPhysicsNode::kColliderSphere)
+        if (b.colliderType == PhysicsNode::kColliderSphere)
         {
             drawManager.sphere(MPoint(b.pos[0], b.pos[1], b.pos[2]), b.radius, 8, 8);
         }
         else
         {
             MPointArray pts;
-            if (b.colliderType == MMDPhysicsNode::kColliderBox)
+            if (b.colliderType == PhysicsNode::kColliderBox)
                 addBoxEdges(b, pts);
             else
                 addCapsuleLines(b, pts);
             drawManager.mesh(MUIDrawManager::kLines, pts);
-            if (b.colliderType == MMDPhysicsNode::kColliderCapsule)
+            if (b.colliderType == PhysicsNode::kColliderCapsule)
             {
                 // Cap hemispheres read as spheres at the two cylinder ends.
                 const float half = static_cast<float>(b.length) * 0.5f;

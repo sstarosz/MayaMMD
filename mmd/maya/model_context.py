@@ -224,7 +224,7 @@ class ModelContext(QObject):
         return "" if result is _SENTINEL else result
 
     def physicsNode(self) -> str:
-        """Name of the active model's ``mmdPhysicsNode`` solver ("" if none)."""
+        """Name of the active model's ``pmxPhysicsNode`` solver ("" if none)."""
         if "physics_node" not in self._cache and self._root_name:
             try:
                 self._cache["physics_node"] = (
