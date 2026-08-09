@@ -32,8 +32,8 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 - ✅ Bone morphs — custom DG node with quaternion SLERP
 - 🔄 SDEF/QDEF skinning — falls back to BDEF2
 - 🔄 Fixed axis / local coordinate — enforced during VMD/VPD apply, not interactively in the viewport
-- 🔄 Rigid bodies — visual guides only
-- ❌ Physics simulation — rigid bodies, joints, soft bodies
+- 🔄 Rigid bodies — visible guide meshes (kinematic FOLLOW_BONE bodies follow their bones; dynamic PHYSICS/PHYSICS_BONE bodies are simulated)
+- 🔄 Physics simulation — native `pmxPhysicsNode` (embedded Bullet 3.25) simulates dynamic bodies, joints and DG write-back (Milestone 2); soft bodies and full MMD determinism not yet
 - ❌ Sphere, toon, edge materials and ambient color
 - ❌ UV, group, and material morphs
 - ❌ PMX export
@@ -122,6 +122,7 @@ If you installed manually and the plugin doesn't auto-load, open
 
 - **Maya 2026** (or 2024/2025/2027) with the Maya SDK installed
 - **CMake 3.21+**
+- **vcpkg** with `VCPKG_ROOT` set — project dependency manager (see `docs/CPPDevelopment.md`)
 - **Visual Studio 2022** (Windows) with C++ desktop workload
 - **Python 3.11** (matching your Maya version)
 
@@ -143,6 +144,11 @@ If you installed manually and the plugin doesn't auto-load, open
    > CMake auto-downloads the SDK for your Maya version into `out/.sdk/`
    > (requires Python 3.10+). To use an existing SDK instead, pass
    > `-DSDK_DIR=/path/to/maya-sdk`.
+   >
+   > C/C++ dependencies are resolved via **vcpkg** (see `vcpkg.json` —
+   > currently Bullet for the native physics node). Set `VCPKG_ROOT` to your
+   > bootstrapped vcpkg and CMake installs them automatically on the first
+   > configure.
 
 2. **Configure Maya** to find the plugin. Copy the generated module file
    into Maya's modules directory:

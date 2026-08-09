@@ -838,6 +838,24 @@ def serialize_for_json(obj: object) -> object:
         return str(obj)
 
 
+def serialize_rigid_body_for_json(rb: PMXRigidBody) -> dict[str, object]:
+    """Serialize a rigid body with a human-readable collision mask.
+
+    The PMX `non_collision_group` field IS the "collides with" mask (bit i set
+    = the body collides with group i) — MikuMikuDance feeds it to Bullet
+    directly, no inversion.  The raw signed value is kept for machine use and
+    two readable forms are added so the JSON is comprehensible without
+    bit-twiddling:
+    ``non_collision_group_hex`` (e.g. ``"0xFF7F"``) and
+    ``collides_with_groups`` (e.g. ``[7]``).
+    """
+    data = cast(dict[str, object], serialize_for_json(rb))
+    raw = rb.non_collision_group & 0xFFFF
+    data["non_collision_group_hex"] = f"0x{raw:04X}"
+    data["collides_with_groups"] = [i for i in range(16) if (raw >> i) & 1]
+    return data
+
+
 def dump_pmx_to_json(pmx_data: PmxModel, output_path: str):
     """
     Dumps the entire PMX data to a JSON files at the specified output path.
@@ -948,7 +966,7 @@ def dump_pmx_to_json(pmx_data: PmxModel, output_path: str):
         log.debug("Saving rigid bodies data to JSON: %s", rigid_bodies_json_path)
         with open(rigid_bodies_json_path, "w", encoding="utf-8") as json_file:
             json.dump(
-                [serialize_for_json(rb) for rb in pmx_data.rigid_bodies],
+                [serialize_rigid_body_for_json(rb) for rb in pmx_data.rigid_bodies],
                 json_file,
                 ensure_ascii=False,
                 indent=4,

@@ -63,7 +63,7 @@ TAIL_JOINT_SUFFIX = "_TailJnt"
 # | Mesh transform        | DAG  | ``{model}_Mesh``                                |
 # | Mesh shape            | DAG  | ``{model}_Mesh_Shape``                          |
 # | Geo group             | DAG  | ``{model}_Geo``                                 |
-# | RigidBodies group     | DAG  | ``{model}_RigidBodies``                         |
+# | Physics group        | DAG  | ``{model}_Physics``                         |
 # | rotScale              | DG   | ``{model}_{bone_name}_RotScale``                |
 # | ccdSolver             | DG   | ``{model}_{bone_name}_CcdSolver``               |
 # | BoneMorph node        | DG   | ``{model}_BoneMorph``                           |
@@ -784,3 +784,35 @@ class PMXNamingManager:
         model_name = self.get_model_name()
         base_name = f"RigidBody_{rb_index}"
         return self.make_unique(f"{model_name}_{base_name}")
+
+    def get_physics_group_name(self) -> str:
+        """Get unique physics group name (holds the mayaBullet solver/body nodes)."""
+        if self.model_name_local:
+            desired_name = f"{self.model_name_local}_Physics"
+        elif self.model_name_universal:
+            desired_name = f"{self.model_name_universal}_Physics"
+        else:
+            desired_name = "Physics"
+        return self.make_unique(desired_name)
+
+    def get_physics_solver_name(self) -> str:
+        """Get unique mayaBullet solver shape name for this model."""
+        if self.model_name_local:
+            desired_name = f"{self.model_name_local}_PhysicsSolver"
+        elif self.model_name_universal:
+            desired_name = f"{self.model_name_universal}_PhysicsSolver"
+        else:
+            desired_name = "PhysicsSolver"
+        return self.make_unique(desired_name)
+
+    def get_physics_rigidbody_name(self, rb_index: int) -> str:
+        """Get unique name for a mayaBullet rigid body transform of this model."""
+        if rb_index in self._rigidbody_name_map:
+            rb_name = self._rigidbody_name_map[rb_index]
+            model_name = self.get_model_name()
+            return self.make_unique(f"{model_name}_Physics_{rb_name}")
+
+        # Fallback for unexpected indices
+        model_name = self.get_model_name()
+        base_name = f"RigidBody_{rb_index}"
+        return self.make_unique(f"{model_name}_Physics_{base_name}")

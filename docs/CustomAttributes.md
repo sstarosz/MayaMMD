@@ -148,14 +148,24 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 
 ---
 
-## Rigid Body Group (informational)
+## Per-Rigid-Body Physics Attributes
 
-**Stored on:** The rigid body visual guide group (`{model}_RigidBodies`).  
-**Added by:** `pmx_scene_builder.py:create_rigid_body_guides_from_pmx_data()`
+**Phase 3:** per-body guide transforms no longer exist — each rigid body's data
+lives in the `pmxPhysicsNode`'s `bodies[i]` compound array (indexed by PMX rigid
+body index), and its related joint is discovered by tracing the node's
+`outRotate[i]`/`outTranslate[i]` write-back connections (dynamic, following any
+auto-inserted `unitConversion`) or `anchorWorldMatrix[k]` (kinematic) in
+`mmd/maya/pmx_model_utils.py`.
 
-| Long name       | Type   | Description                                           |
-| --------------- | ------ | ----------------------------------------------------- |
-| `rigidBodyNote` | string | Informational note only — physics not yet implemented |
+The node's `bodies[i]` elements carry the PMX data directly
+(`bodyRestTranslate`, `bodyRestRotate`, `bodyMass`, `bodyGroupId`,
+`bodyMaskGroup0..15`, `bodyPhysicsMode`,
+`bodyParentBodyIndex`, …), so the physics state can be reconstructed from the
+scene alone.  The write-back parent inverse comes from the parent BODY's solved
+Bullet transform (`bodyParentBodyIndex`; the node derives M_parent from the
+parent body's baked K offset) — this avoids the DG feedback cycle that the old
+`joint.parentInverseMatrix` dependency created when a parent joint was itself
+node-driven.
 
 ---
 

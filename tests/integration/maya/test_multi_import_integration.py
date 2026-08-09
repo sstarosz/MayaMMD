@@ -274,12 +274,17 @@ def test_two_different_models_no_collision(pmx_a, pmx_b) -> bool:
     # ── Cross-model mesh uniqueness ────────────────────────────────────
     # A single PMX model can have multiple mesh shapes all under the same
     # mesh transform, so we must de-duplicate by transform before comparing.
+    # (Rigid bodies are mayaBullet ``bulletRigidBodyShape`` colliders, not
+    # ``mesh`` nodes, so they never appear in this list.)
     all_mesh_shapes = cmds.ls(type="mesh", long=True) or []
     mesh_transform_names = set()
     for m in all_mesh_shapes:
         parents = cmds.listRelatives(m, parent=True, fullPath=True) or []
-        if parents:
-            mesh_transform_names.add(parents[0])
+        if not parents:
+            continue
+        if any("_RigidBodies" in p for p in parents):
+            continue
+        mesh_transform_names.add(parents[0])
     # With two distinct models there should be exactly 2 mesh transforms
     # (one per model, each possibly hosting multiple shapes).
     assert_eq(

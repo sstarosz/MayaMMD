@@ -114,6 +114,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "import",
             "bone",
             "morph",
+            "rigidbody",
             "vmd",
             "vpd",
             "node",
@@ -199,6 +200,13 @@ def get_morph_tests():
     return test_pmx_morph_integration._TESTS
 
 
+def get_rigid_body_tests():
+    """Import test_pmx_rigid_body_integration and return its test list."""
+    from tests.integration.maya import test_pmx_rigid_body_integration
+
+    return test_pmx_rigid_body_integration._TESTS
+
+
 def get_node_tests():
     """Import test_bone_morph_node_integration and return its test list (no PMX data needed)."""
     from tests.integration.maya.nodes import test_bone_morph_node_integration
@@ -214,13 +222,20 @@ def get_ccd_solver_tests():
 
 
 def get_cmd_tests():
-    """Import test_bone_blend_shape_cmd_integration and return its test list.
+    """Import the native command test modules and return their test lists.
 
-    boneMorphNode and boneBlendShape are already registered by MayaMMD.mll.
+    boneMorphNode, boneBlendShape, pmxPhysicsNode, pmxRigidBody and
+    pmxRigidBodyConstraint are already registered by MayaMMD.mll.
     """
-    from tests.integration.maya.cmds import test_bone_blend_shape_cmd_integration
+    from tests.integration.maya.cmds import (
+        test_bone_blend_shape_cmd_integration,
+        test_pmx_rigid_body_cmd_integration,
+    )
 
-    return test_bone_blend_shape_cmd_integration._TESTS
+    return (
+        test_bone_blend_shape_cmd_integration._TESTS
+        + test_pmx_rigid_body_cmd_integration._TESTS
+    )
 
 
 def get_vpd_tests():
@@ -325,6 +340,9 @@ TEST_SUITES: dict[str, SuiteInfo] = {
     "morph": SuiteInfo(
         "PMX Morph Integration Tests", get_morph_tests, supports_unified=True
     ),
+    "rigidbody": SuiteInfo(
+        "PMX Rigid Body Tests", get_rigid_body_tests, supports_unified=True
+    ),
     "vmd": SuiteInfo(
         "VMD Integration Tests",
         get_vmd_tests,
@@ -349,9 +367,7 @@ TEST_SUITES: dict[str, SuiteInfo] = {
     "ccd": SuiteInfo(
         "CCD IK Solver Node Tests (No PMX)", get_ccd_solver_tests, needs_model=False
     ),
-    "cmd": SuiteInfo(
-        "BoneBlendShapeCmd Tests (No PMX)", get_cmd_tests, needs_model=False
-    ),
+    "cmd": SuiteInfo("Command Tests (No PMX)", get_cmd_tests, needs_model=False),
     # ── Multi-model / custom-dispatch suites ─────────────────────────
     "multi": SuiteInfo(
         "Multi-Import Tests", get_multi_import_tests, dispatch_mode="multi"

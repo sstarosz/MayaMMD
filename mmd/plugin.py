@@ -73,6 +73,7 @@ _MMD_MODULES = [
     "mmd.maya.pmx_naming_manager",
     "mmd.maya.pmx.bone_builder",
     "mmd.maya.pmx.morph_builder",
+    "mmd.maya.pmx.rigid_body_builder",
     "mmd.maya.nodes.bone_morph_node",
     "mmd.maya.cmds.bone_blend_shape_cmd",
     "mmd.ui.morph_tree_widget",

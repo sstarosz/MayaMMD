@@ -21,9 +21,10 @@ from __future__ import annotations
 import maya.api.OpenMaya as om  # noqa: E402
 import maya.cmds as cmds  # noqa: E402
 from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
+from mmd.maya.pmx_model_utils import find_physics_driven_joints, find_physics_node  # noqa: E402
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from mmd.core.data_types import PMXBoneFlagBits, PmxModel, Vec3  # noqa: E402
+from mmd.core.data_types import PMXBoneFlagBits, PmxModel  # noqa: E402
 from mmd.maya.pmx.bone_builder import (  # noqa: E402
     build_bone_name_map,
     get_ik_chain_info,
@@ -34,7 +35,6 @@ from mmd.maya.pmx.bone_builder import (  # noqa: E402
 from tests.integration.test_helpers import (  # noqa: E402
     assert_true,
     assert_eq,
-    assert_approx,
     skip_test,
 )
 
@@ -92,6 +92,31 @@ def _world_position(joint_obj: om.MObject) -> tuple[float, float, float]:
     name = _joint_name(joint_obj)
     tx, ty, tz = cmds.xform(name, q=True, ws=True, t=True)
     return (tx, ty, tz)
+
+
+def _physics_driven_bone_indices(maya_pmx_data, pmx_data) -> set[int]:
+    """Return the set of bone indices driven by the physics write-back.
+
+    Phase 3: dynamic rigid bodies (PHYSICS / PHYSICS_BONE) are written
+    DIRECTLY into their related joints by the node (no parentConstraint /
+    orientConstraint exists any more).  The write-back legitimately drives the
+    bone's ``rotate`` channels — even at rest the solver pose is applied, and
+    the raw rotate values may be a non-canonical Euler representation of
+    identity.
+
+    Skeleton-construction tests that assert ``rotate == 0`` / ``rotate ==
+    pmxRest*`` therefore exempt physics-driven bones — their rotation is owned
+    by the simulation, not by the skeleton builder.
+    """
+    if find_physics_node(maya_pmx_data.root_name) is None:
+        return set()
+    driven: set[int] = set()
+    for rb_idx in find_physics_driven_joints(maya_pmx_data.root_name):
+        if 0 <= rb_idx < len(pmx_data.rigid_bodies):
+            related = pmx_data.rigid_bodies[rb_idx].related_bone_index
+            if related >= 0:
+                driven.add(related)
+    return driven
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +558,6 @@ def test_pmx_ik_handle_parented_under_control_bone(
     (or falls back to ``cmds.ls(type="ikHandle")``) and verifies each
     handle's parent joint matches the expected PMX IK bone.
     """
-    total_bones = len(pmx_data.bones)
     bone_map = maya_pmx_data.bone_name_map
 
     # Use stored IK handles if available, otherwise query scene
@@ -594,7 +618,6 @@ def test_pmx_ik_handle_priority(pmx_data: PmxModel, maya_pmx_data) -> bool:
     - Root IK chains (parent is not an IK bone) → priority 1
     - Child IK chains (parent is also an IK bone) → priority 2
     """
-    total_bones = len(pmx_data.bones)
     bone_map = maya_pmx_data.bone_name_map
 
     ik_handles = (
@@ -1035,11 +1058,20 @@ def test_pmx_bone_name_map_completeness(pmx_data: PmxModel, maya_pmx_data) -> bo
 # Additional tests for edge cases and regression checks
 # ----------------------------------------------------------------------------
 def test_zero_initial_rotation_bones(pmx_data: PmxModel, maya_pmx_data) -> bool:
-    """Test that all created joints have zero rotation"""
+    """Test that all created joints have zero rotation.
+
+    Physics-driven bones (Milestone 2) are exempt: their ``rotate`` channels
+    are owned by the simulation write-back constraint, which can express the
+    identity rest rotation as a non-canonical Euler triple (e.g. (180,-180,180))
+    while the world matrix stays exactly at rest.
+    """
     joints = maya_pmx_data.joints
     errors = []
+    driven = _physics_driven_bone_indices(maya_pmx_data, pmx_data)
 
     for bone_idx, jobj in enumerate(joints):
+        if bone_idx in driven:
+            continue  # rotation owned by the physics simulation
         name = _joint_name(jobj)
         rx, ry, rz = cmds.getAttr(f"{name}.rotate")[0]
         if abs(rx) > _TOLERANCE or abs(ry) > _TOLERANCE or abs(rz) > _TOLERANCE:
@@ -1057,7 +1089,9 @@ def test_zero_initial_rotation_bones(pmx_data: PmxModel, maya_pmx_data) -> bool:
         f"{len(errors)} joints have non-zero initial rotation",
     )
 
-    print(f"PASS: All {len(joints)} joints have zero initial rotation")
+    exempt = len(driven)
+    suffix = f" ({exempt} physics-driven bones exempt)" if exempt else ""
+    print(f"PASS: All {len(joints)} joints have zero initial rotation{suffix}")
     return True
 
 
@@ -1175,8 +1209,9 @@ def test_pmx_rest_pose_attributes_populated(pmx_data: PmxModel, maya_pmx_data) -
 
     missing_attr_joints: list[str] = []
     wrong_value_joints: list[str] = []
+    driven = _physics_driven_bone_indices(maya_pmx_data, pmx_data)
 
-    for jobj in joints:
+    for bone_idx, jobj in enumerate(joints):
         name = _joint_name(jobj)
         for rest_attr, _ in rest_attrs:
             if not cmds.attributeQuery(rest_attr, node=name, exists=True):
@@ -1184,6 +1219,8 @@ def test_pmx_rest_pose_attributes_populated(pmx_data: PmxModel, maya_pmx_data) -
                 break
         if any(name + "." + ra in missing_attr_joints for ra, _ in rest_attrs):
             continue
+        if bone_idx in driven:
+            continue  # rotation owned by the physics simulation write-back
         for rest_attr, live_attr in rest_attrs:
             stored = cmds.getAttr(f"{name}.{rest_attr}")
             live = cmds.getAttr(f"{name}.{live_attr}")

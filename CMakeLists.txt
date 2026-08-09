@@ -63,7 +63,6 @@ add_custom_target(ensure-sdk
 )
 
 # ── Options ──────────────────────────────────────────────────────────────
-option(BUILD_NATIVE_MODULE "Build the C++ native .mll plugin (MayaMMD.mll)" ON)
 option(BUILD_TESTS "Build C++ unit tests (requires Catch2, no Maya SDK)" OFF)
 option(BUILD_PACKAGE "Build release package (assembles Python source + zip, requires Maya SDK + Python)" OFF)
 option(BUILD_DEV_INSTALL "Generate dev-install layout with .mod file for local development" ON)
@@ -136,10 +135,30 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 find_package(Maya REQUIRED)
 message(STATUS "Maya ${Maya_VERSION} SDK: ${Maya_INCLUDE_DIR} (libs: ${Maya_LIBRARY_DIR})")
 
+# ── Bullet (physics engine) — resolved ONCE at the top level ────────────
+# Used by the Maya-free core (mmd_core) and the plugin.  Provided by vcpkg
+# (see vcpkg.json, package `bullet3` 3.25) with FLOAT precision — do NOT
+# enable vcpkg's `double-precision` feature, btScalar must stay float to
+# match the consumers in mmd/core/simulation.cpp.
+if(NOT CMAKE_TOOLCHAIN_FILE)
+    message(FATAL_ERROR
+        "No CMake toolchain configured.\n\n"
+        "  Use a CMake preset to activate the vcpkg toolchain:\n"
+        "    cmake --preset maya2026-release\n\n"
+        "  Set VCPKG_ROOT to a bootstrapped vcpkg first — see docs/CPPDevelopment.md."
+    )
+endif()
+find_package(Bullet CONFIG REQUIRED)
+
+# =========================================================================
+# Maya-free C++ core (Bullet physics engine + shared value types) — static lib
+# =========================================================================
+add_subdirectory(mmd/core)
+
 # =========================================================================
 # Native .mll plugin — single entry point for MayaMMD
 # =========================================================================
-if(BUILD_NATIVE_MODULE AND Maya_FOUND)
+if(Maya_FOUND)
     message(STATUS "Maya ${Maya_VERSION} SDK: ${Maya_INCLUDE_DIR}")
 
     # =====================================================================
@@ -156,12 +175,20 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     # =====================================================================
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
+        mmd/maya/cmds/rigid_body_cmd.cpp
+        mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/physics_node.cpp
+        mmd/maya/nodes/physics_draw_override.cpp
     )
+    # Bullet's exported targets do not carry INTERFACE_INCLUDE_DIRECTORIES
+    # (upstream uses the directory-level INCLUDE_DIRECTORIES), so add the
+    # include root explicitly.
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
+        ${BULLET_INCLUDE_DIRS}
     )
-    target_link_libraries(MayaMMD PRIVATE Maya::Maya)
+    target_link_libraries(MayaMMD PRIVATE Maya::Maya mmd_core)
 
     # Maya plugin extension — .mll (Windows), .so (Linux), .bundle (macOS)
     if(WIN32)
@@ -247,11 +274,6 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     endif()
 
     message(STATUS "Target: MayaMMD → .mll (single entry point)")
-
-elseif(BUILD_NATIVE_MODULE AND NOT Maya_FOUND)
-    message(WARNING
-        "Maya SDK not found — skipping native module build.\n"
-        "  Run: python scripts/ci/strip_maya_sdk.py ensure")
 endif()
 
 # =========================================================================
