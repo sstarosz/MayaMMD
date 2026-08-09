@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a regression test reproducing the real leg IK setup
   (bones 14/15/16 and the model's knee limit) that verifies the knee bends
   forward, tracks the target, and never overshoots across a full raise sweep.
+- **Maya SDK resolution now prefers the version being built** —
+  `cmake/FindMaya.cmake` checks the cached SDK matching `MAYA_VERSION` first
+  (a Maya-2027 build can no longer resolve the 2026 SDK just because it was
+  cached earlier), falling back to the remaining cached SDKs newest-first.
+
+### Removed
+
+- **Unused `ci` CMake preset** (configure + build) and the redundant
+  `BUILD_NATIVE_MODULE=ON` override in the `base` preset — CI uses the
+  `maya*` presets. The build presets now also carry an explicit
+  `Debug`/`Release` configuration.
 
 ## [0.1.0] - 2026-08-01
 

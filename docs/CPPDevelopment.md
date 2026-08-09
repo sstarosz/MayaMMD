@@ -94,11 +94,11 @@ cmake --install out/build/maya2026-release --config Release
 ```
 Produces `out/install/maya2026-release/MayaMMD-Maya2026-{OS}/` with `.mll` + Python source files.
 
-**Unit tests** (no Maya SDK needed):
+**Unit tests** (Catch2; enable with `-DBUILD_TESTS=ON`):
 ```bash
-cmake --preset ci
-cmake --build out/build/ci --config Release
-ctest --test-dir out/build/ci -C Release --output-on-failure
+cmake --preset maya2026-release -DBUILD_TESTS=ON
+cmake --build out/build/maya2026-release --config Release
+ctest --test-dir out/build/maya2026-release -C Release --output-on-failure
 ```
 
 ### Development Scripts
@@ -210,10 +210,10 @@ Use `MGlobal::displayInfo()` / `MGlobal::displayWarning()` / `MGlobal::displayEr
 ### C++ Unit Tests (Catch2)
 
 ```bash
-# Configure + build + run
-cmake --preset ci
-cmake --build build/ci --config Release
-ctest --test-dir build/ci -C Release --output-on-failure
+# Configure + build + run (enable tests with -DBUILD_TESTS=ON)
+cmake --preset maya2026-release -DBUILD_TESTS=ON
+cmake --build out/build/maya2026-release --config Release
+ctest --test-dir out/build/maya2026-release -C Release --output-on-failure
 ```
 
 Add new test files in `tests/` and add them to the `mmd_tools_tests` target in `CMakeLists.txt`.
