@@ -66,6 +66,7 @@ _MMD_MODULES = [
     "mmd.core.vmd_importer",
     "mmd.core.vpd_importer",
     "mmd.maya.maya_data_types",
+    "mmd.maya.pmx.rigid_body_builder",
     "mmd.maya.pmx_scene_builder",
     "mmd.maya.pmx_model_utils",
     "mmd.maya.vmd_scene_builder",
