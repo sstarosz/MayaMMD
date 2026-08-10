@@ -16,6 +16,8 @@
 
 #include "physics_node.h"
 
+#include "../maya_utils.hpp"
+
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
 #include <maya/MDataBlock.h>
@@ -88,7 +90,7 @@ MObject PhysicsNode::aBodyEnabled;
 MObject PhysicsNode::aBodyNameLocal;
 MObject PhysicsNode::aBodyNameUniversal;
 MObject PhysicsNode::aBodyGroupId;
-MObject PhysicsNode::aBodyMaskGroup[16];
+std::array<MObject, 16> PhysicsNode::aBodyMaskGroup;
 MObject PhysicsNode::aBodyColliderType;
 MObject PhysicsNode::aBodyRadius;
 MObject PhysicsNode::aBodyExtents;
@@ -149,24 +151,32 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
     return doubleMatrixToBtTransform(mm);
 }
 
-// MMatrix has no constructor from the core Matrix4 (only from a C array) —
-// copy the core matrix across the API boundary.
-void matrix4ToCArray(const Matrix4& m, double out[4][4])
+// NOLINTBEGIN(cppcoreguidelines-pro-bounds-array-to-pointer-decay, cppcoreguidelines-pro-bounds-constant-array-index)
+// MMatrix has no constructor from the core Matrix4 (only from a C array) — the
+// C array is required by the Maya API boundary, so these two checks do not
+// apply to this bridge.
+MMatrix matrix4ToMMatrix(const Matrix4& m)
 {
+    double tmp[4][4] = {};
     for (int r = 0; r < 4; ++r)
     {
         for (int c = 0; c < 4; ++c)
         {
-            out[r][c] = m(r, c);
+            tmp[r][c] = m(r, c);
         }
     }
+    return MMatrix(tmp);
 }
+// NOLINTEND(cppcoreguidelines-pro-bounds-array-to-pointer-decay, cppcoreguidelines-pro-bounds-constant-array-index)
 
 // Read a k3Double child attribute into a core Double3.  The Maya API returns a
 // `const double*` to three elements; we write into the named members — never
 // past them (the old .data() + out[0..2] pattern was out-of-bounds access).
+// (asDouble3() is flagged by the decay check because the decay happens inside
+// the Maya SDK header — NOLINT on that single line.)
 void readDouble3(MDataHandle& hd, const MObject& attr, Double3& out)
 {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const double* v = hd.child(attr).asDouble3();
     out.x = v[0];
     out.y = v[1];
@@ -209,11 +219,14 @@ PhysicsNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
 // (mBodies is only filled lazily on first evaluation) — so the colliders are
 // visible immediately after import and whenever the solver is not being pulled
 // by the DG.
+// (The three asDouble3() calls are NOLINT'd — the decay happens inside the
+// Maya SDK header, not in this file.)
 void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
 {
     db.colliderType =
         static_cast<PhysicsNode::ColliderType>(el.child(PhysicsNode::aBodyColliderType).asShort());
     db.radius = el.child(PhysicsNode::aBodyRadius).asDouble();
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const double* e = el.child(PhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
     db.extents[0] = e[0];
     db.extents[1] = e[1];
@@ -225,10 +238,12 @@ void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
     // from it in buildWorld); clamp legacy scenes where it is -1.
     db.groupId = el.child(PhysicsNode::aBodyGroupId).asShort();
     db.groupId = std::max(db.groupId, 0); // clamp legacy -1
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const double* p = el.child(PhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
     db.pos[0] = p[0];
     db.pos[1] = p[1];
     db.pos[2] = p[2];
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     const double* r = el.child(PhysicsNode::aBodyRestRotate).asMDataHandle().asDouble3();
     const Double4 q = eulerDegreesToQuat(r[0], r[1], r[2]);
     db.quat[0] = q.x;
@@ -323,21 +338,21 @@ MStatus PhysicsNode::initialize()
 
     // --- time ---
     aTime = uAttr.create("time", "tm", MFnUnitAttribute::kTime, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     uAttr.setStorable(true);
     uAttr.setKeyable(true);
     uAttr.setHidden(true);
 
     // --- gravity ---
     aGravity = nAttr.create("gravity", "grav", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     nAttr.setDefault(0.0, -9.8, 0.0); // MMD's physics engine uses exactly -9.8
     nAttr.setStorable(true);
     nAttr.setKeyable(false);
 
     // --- fps ---
     aFps = nAttr.create("fps", "fps", MFnNumericData::kDouble, 30.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     nAttr.setStorable(true);
     nAttr.setMin(1.0);
     nAttr.setKeyable(false);
@@ -345,7 +360,7 @@ MStatus PhysicsNode::initialize()
     // --- anchor world matrices ---
     aAnchorWorldMatrix =
         mAttr.create("anchorWorldMatrix", "awm", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
     mAttr.setUsesArrayDataBuilder(true);
@@ -353,7 +368,7 @@ MStatus PhysicsNode::initialize()
 
     aAnchorParentInverseMatrix =
         mAttr.create("anchorParentInverseMatrix", "apim", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
     mAttr.setUsesArrayDataBuilder(true);
@@ -364,7 +379,7 @@ MStatus PhysicsNode::initialize()
     // with the PMX body<->bone offset preserved.  Indexed by kinematic order,
     // 1:1 with anchorWorldMatrix.
     aAnchorOffset = mAttr.create("anchorOffset", "aof", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
     mAttr.setUsesArrayDataBuilder(true);
@@ -375,13 +390,13 @@ MStatus PhysicsNode::initialize()
     // are TOP-LEVEL matrix arrays (compound matrix children are awkward), so
     // the node reads them by body index in writeOutputs.
     aGroupWorldMatrix = mAttr.create("groupWorldMatrix", "gwm", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setKeyable(false);
 
     aBodyWriteBackOffset =
         mAttr.create("bodyWriteBackOffset", "bwo", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
     mAttr.setUsesArrayDataBuilder(true);
@@ -389,7 +404,7 @@ MStatus PhysicsNode::initialize()
 
     aBodyParentInverseMatrix =
         mAttr.create("bodyParentInverseMatrix", "bpim", MFnMatrixAttribute::kDouble, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
     mAttr.setUsesArrayDataBuilder(true);
@@ -401,19 +416,19 @@ MStatus PhysicsNode::initialize()
     // comes first.  The node reads everything by attribute name, so the order
     // is purely for the Attribute Editor / listAttr readability.
     aBodyEnabled = nAttr.create("bodyEnabled", "ben", MFnNumericData::kBoolean, 1.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     // PMX body names (local + universal — Query/UI display; the node itself
     // never reads them, they just need to be storable attributes).
     MFnTypedAttribute tAttr;
     aBodyNameLocal =
         tAttr.create("bodyNameLocal", "bnml", MFnData::kString, MObject::kNullObj, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     tAttr.setStorable(true);
     tAttr.setKeyable(false);
     aBodyNameUniversal =
         tAttr.create("bodyNameUniversal", "bnmu", MFnData::kString, MObject::kNullObj, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     tAttr.setStorable(true);
     tAttr.setKeyable(false);
 
@@ -423,7 +438,7 @@ MStatus PhysicsNode::initialize()
     {
         MFnEnumAttribute eAttr;
         aBodyGroupId = eAttr.create("bodyGroupId", "bgid", 0, &stat);
-        CHECK_MSTATUS(stat);
+        MMD_CHECK_MSTATUS(stat);
         for (int g = 0; g < 16; ++g)
         {
             MString name(("Group " + std::to_string(g)).c_str());
@@ -442,8 +457,8 @@ MStatus PhysicsNode::initialize()
     {
         MString lname(("bodyMaskGroup" + std::to_string(g)).c_str());
         MString sname(("bmg" + std::to_string(g)).c_str());
-        aBodyMaskGroup[g] = nAttr.create(lname, sname, MFnNumericData::kBoolean, 1.0, &stat);
-        CHECK_MSTATUS(stat);
+        aBodyMaskGroup.at(g) = nAttr.create(lname, sname, MFnNumericData::kBoolean, 1.0, &stat);
+        MMD_CHECK_MSTATUS(stat);
     }
 
     // PMX collider type — enum: box / sphere / capsule (field values match
@@ -452,7 +467,7 @@ MStatus PhysicsNode::initialize()
     {
         MFnEnumAttribute eAttr;
         aBodyColliderType = eAttr.create("bodyColliderType", "bct", kColliderBox, &stat);
-        CHECK_MSTATUS(stat);
+        MMD_CHECK_MSTATUS(stat);
         eAttr.addField("Box", kColliderBox);
         eAttr.addField("Sphere", kColliderSphere);
         eAttr.addField("Capsule", kColliderCapsule);
@@ -460,30 +475,30 @@ MStatus PhysicsNode::initialize()
         eAttr.setKeyable(false);
     }
     aBodyRadius = nAttr.create("bodyRadius", "brad", MFnNumericData::kDouble, 0.5, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyExtents = nAttr.create("bodyExtents", "bext", MFnNumericData::k3Double, 1.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyLength = nAttr.create("bodyLength", "blen", MFnNumericData::kDouble, 1.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     aBodyRestTranslate =
         nAttr.create("bodyRestTranslate", "brt", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyRestRotate = nAttr.create("bodyRestRotate", "brr", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     aBodyMass = nAttr.create("bodyMass", "bm", MFnNumericData::kDouble, 1.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyLinearDamping =
         nAttr.create("bodyLinearDamping", "bld", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyAngularDamping =
         nAttr.create("bodyAngularDamping", "bad", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyRestitution = nAttr.create("bodyRestitution", "bre", MFnNumericData::kDouble, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyFriction = nAttr.create("bodyFriction", "bfr", MFnNumericData::kDouble, 0.5, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     // PMX physics mode — enum: followBone / physics / physicsBone (field
     // values match Simulation::PhysicsMode).  Field names mirror the
@@ -493,7 +508,7 @@ MStatus PhysicsNode::initialize()
         MFnEnumAttribute eAttr;
         aBodyPhysicsMode = eAttr.create(
             "bodyPhysicsMode", "bpm", static_cast<short>(Simulation::PhysicsMode::ePhysics), &stat);
-        CHECK_MSTATUS(stat);
+        MMD_CHECK_MSTATUS(stat);
         eAttr.addField("FollowBone", static_cast<short>(Simulation::PhysicsMode::eFollowBone));
         eAttr.addField("Physics", static_cast<short>(Simulation::PhysicsMode::ePhysics));
         eAttr.addField("PhysicsBone", static_cast<short>(Simulation::PhysicsMode::ePhysicsBone));
@@ -507,10 +522,10 @@ MStatus PhysicsNode::initialize()
     // transform); -1 = parent bone has no body (DG parentInverse fallback).
     aBodyParentBodyIndex =
         nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aBodyResetAnchorIndex =
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     for (MObject* a :
          {&aBodyEnabled, &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyRestTranslate,
@@ -523,13 +538,13 @@ MStatus PhysicsNode::initialize()
     }
     for (int g = 0; g < 16; ++g)
     {
-        MFnNumericAttribute fn(aBodyMaskGroup[g]);
+        MFnNumericAttribute fn(aBodyMaskGroup.at(g));
         fn.setStorable(true);
         fn.setKeyable(false);
     }
 
     aBodies = cAttr.create("bodies", "bds", &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     cAttr.setArray(true);
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setStorable(true);
@@ -539,7 +554,7 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aBodyNameUniversal);
     cAttr.addChild(aBodyGroupId);
     for (int g = 0; g < 16; ++g)
-        cAttr.addChild(aBodyMaskGroup[g]);
+        cAttr.addChild(aBodyMaskGroup.at(g));
     cAttr.addChild(aBodyColliderType);
     cAttr.addChild(aBodyRadius);
     cAttr.addChild(aBodyExtents);
@@ -557,33 +572,33 @@ MStatus PhysicsNode::initialize()
 
     // --- joint compound ---
     aJointBodyA = nAttr.create("jointBodyA", "jba", MFnNumericData::kLong, 0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointBodyB = nAttr.create("jointBodyB", "jbb", MFnNumericData::kLong, 0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointType = nAttr.create("jointType", "jt", MFnNumericData::kLong, 0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointFrameTranslate =
         nAttr.create("jointFrameTranslate", "jft", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointFrameRotate =
         nAttr.create("jointFrameRotate", "jfr", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointLinearMin = nAttr.create("jointLinearMin", "jlmn", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointLinearMax = nAttr.create("jointLinearMax", "jlmx", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointAngularMin =
         nAttr.create("jointAngularMin", "jamn", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointAngularMax =
         nAttr.create("jointAngularMax", "jamx", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointLinearSpring =
         nAttr.create("jointLinearSpring", "jls", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     aJointAngularSpring =
         nAttr.create("jointAngularSpring", "jas", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     for (MObject* a : {&aJointBodyA, &aJointBodyB, &aJointType, &aJointFrameTranslate,
                        &aJointFrameRotate, &aJointLinearMin, &aJointLinearMax, &aJointAngularMin,
@@ -595,7 +610,7 @@ MStatus PhysicsNode::initialize()
     }
 
     aJoints = cAttr.create("joints", "jns", &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     cAttr.setArray(true);
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setStorable(true);
@@ -615,13 +630,13 @@ MStatus PhysicsNode::initialize()
     // --- outputs ---
     aOutTranslateValue =
         nAttr.create("outTranslateValue", "otv", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     MFnNumericAttribute otFn(aOutTranslateValue);
     otFn.setWritable(false);
     otFn.setStorable(false);
 
     aOutTranslate = cAttr.create("outTranslate", "otr", &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     cAttr.setArray(true);
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setWritable(false);
@@ -629,13 +644,13 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aOutTranslateValue);
 
     aOutRotateValue = nAttr.create("outRotateValue", "orv", MFnNumericData::k3Double, 0.0, &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     MFnNumericAttribute orFn(aOutRotateValue);
     orFn.setWritable(false);
     orFn.setStorable(false);
 
     aOutRotate = cAttr.create("outRotate", "ort", &stat);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     cAttr.setArray(true);
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setWritable(false);
@@ -644,37 +659,37 @@ MStatus PhysicsNode::initialize()
 
     // --- node attribute registration ---
     stat = addAttribute(aTime);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aFps);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorWorldMatrix);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorParentInverseMatrix);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorOffset);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGroupWorldMatrix);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyWriteBackOffset);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyParentInverseMatrix);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodies);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJoints);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     // Make `time` drive the outputs.
     stat = attributeAffects(aTime, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aTime, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     // Phase 4: every config input drives the outputs too, so the node is
     // re-evaluated when a body/joint/gravity/anchor input changes — that is
@@ -683,45 +698,45 @@ MStatus PhysicsNode::initialize()
     // also makes a kinematic bone dragged at a fixed time re-evaluate the node
     // so the attached chains follow immediately.)
     stat = attributeAffects(aGravity, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aFps, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aFps, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodies, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodies, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJoints, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJoints, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorldMatrix, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorldMatrix, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorParentInverseMatrix, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorParentInverseMatrix, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorOffset, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorOffset, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGroupWorldMatrix, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGroupWorldMatrix, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyWriteBackOffset, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyWriteBackOffset, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyParentInverseMatrix, aOutTranslate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyParentInverseMatrix, aOutRotate);
-    CHECK_MSTATUS(stat);
+    MMD_CHECK_MSTATUS(stat);
 
     return MS::kSuccess;
 }
@@ -752,7 +767,7 @@ bool PhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.length = bodyHandle.child(aBodyLength).asDouble();
         b.mask = 0;
         for (int g = 0; g < 16; ++g)
-            if (bodyHandle.child(aBodyMaskGroup[g]).asBool())
+            if (bodyHandle.child(aBodyMaskGroup.at(g)).asBool())
                 b.mask |= 1L << g;
         b.groupId = bodyHandle.child(aBodyGroupId).asShort();
         // KEEP the full PMX physics mode (0/1/2) — kinematic is a derived
@@ -811,7 +826,7 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
 
     // gravity + fps
     MDataHandle grav = dataBlock.inputValue(aGravity);
-    h = hashDouble3(h, grav.asDouble3());
+    h = hashDouble3(h, grav.asDouble3()); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) — asDouble3() decays inside the SDK
     h = hashValue(h, dataBlock.inputValue(aFps).asDouble());
 
     // bodies
@@ -839,7 +854,7 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
         h = hashValue(h, bh.child(aBodyLength).asDouble());
         // One hash input per collision-group toggle (any edit rebuilds).
         for (int g = 0; g < 16; ++g)
-            h = hashValue(h, bh.child(aBodyMaskGroup[g]).asBool());
+            h = hashValue(h, bh.child(aBodyMaskGroup.at(g)).asBool());
         h = hashValue(h, bh.child(aBodyGroupId).asShort());
         h = hashValue(h, bh.child(aBodyPhysicsMode).asShort());
         h = hashValue(h, bh.child(aBodyParentBodyIndex).asShort());
@@ -1092,12 +1107,8 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
             const Simulation::Pose pp = mSim.bodyPose(parentIdx);
             Matrix4 bpRow;
             btTransformToRowMatrix(poseToTransform(pp.pos, pp.quat), bpRow);
-            double bpTmp[4][4];
-            matrix4ToCArray(bpRow, bpTmp);
-            MMatrix bParent(bpTmp);
-            double outTmp[4][4];
-            matrix4ToCArray(outRow, outTmp);
-            MMatrix bodyLocal(outTmp);
+            MMatrix bParent(matrix4ToMMatrix(bpRow));
+            MMatrix bodyLocal(matrix4ToMMatrix(outRow));
             MMatrix result = k * bodyLocal * bParent.inverse() * mp.inverse();
             for (int r = 0; r < 4; ++r)
             {
