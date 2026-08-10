@@ -327,6 +327,40 @@ class TestPMXNamingStrategy(unittest.TestCase):
         self.assertEqual(naming_manager.get_material_name(1), "Model_Material_1_Mat")
         self.assertEqual(naming_manager.get_material_name(2), "Model_Valid_Mat")
 
+    def test_physics_node_naming(self):
+        """Test physics group + solver names (local / universal / fallback)."""
+        # Local name wins when present.
+        pmx_model = MockPmxModel([])
+        pmx_model.header.model_name_local = "PhysModelLocal"
+        pmx_model.header.model_name_universal = "PhysModelUniversal"
+        naming_manager = PMXNamingManager(pmx_model)
+
+        self.assertEqual(
+            naming_manager.get_physics_group_name(), "PhysModelLocal_Physics"
+        )
+        self.assertEqual(
+            naming_manager.get_physics_solver_name(), "PhysModelLocal_PhysicsSolver"
+        )
+
+        # Universal name is the fallback when local is empty.
+        pmx_model2 = MockPmxModel([])
+        pmx_model2.header.model_name_local = ""
+        pmx_model2.header.model_name_universal = "PhysModelUniversal"
+        naming_manager2 = PMXNamingManager(pmx_model2)
+
+        self.assertEqual(
+            naming_manager2.get_physics_group_name(), "PhysModelUniversal_Physics"
+        )
+        self.assertEqual(
+            naming_manager2.get_physics_solver_name(),
+            "PhysModelUniversal_PhysicsSolver",
+        )
+
+        # No model names at all -> bare fallback names.
+        naming_manager3 = PMXNamingManager(MockPmxModel([]))
+        self.assertEqual(naming_manager3.get_physics_group_name(), "Physics")
+        self.assertEqual(naming_manager3.get_physics_solver_name(), "PhysicsSolver")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,8 @@ Tests cover:
 - Empty-node evaluation (no bodies = valid no-op, no errors)
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
+- configVersion forcing an in-place rebuild at the current pose
+- groupInverseWorldMatrix mapping anchors from world into group space
 """
 
 # ── Maya standalone initialised by the test runner ───────────────────────
@@ -77,6 +79,38 @@ def _read_output(node: str, index: int) -> tuple[float, float, float]:
     # Maya returns double3 values as a list containing one tuple, e.g.
     # [(x, y, z)] — unwrap before indexing.
     return tuple(cmds.getAttr(f"{node}.outTranslate[{index}].outTranslateValue")[0])
+
+
+def _set_welded_chain(node: str) -> None:
+    """Set up body 0 (kinematic anchor) + body 1 (dynamic) rigidly welded."""
+    # Body 0: kinematic anchor (followBone) at the origin.
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.setAttr(f"{p0}.bodyParentBodyIndex", -1)
+    cmds.setAttr(f"{p0}.bodyResetAnchorIndex", -1)
+
+    # Body 1: dynamic, 1 unit above the anchor.
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyParentBodyIndex", -1)
+    cmds.setAttr(f"{p1}.bodyResetAnchorIndex", -1)
+
+    # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -322,6 +356,109 @@ def test_kinematic_anchor_drives_welded_body():
     return True
 
 
+def test_config_version_forces_rebuild():
+    """Bumping configVersion rebuilds the Bullet world at the current pose."""
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    # Body 0: kinematic anchor (followBone) at the origin.
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.setAttr(f"{p0}.bodyParentBodyIndex", -1)
+    cmds.setAttr(f"{p0}.bodyResetAnchorIndex", -1)
+
+    # Body 1: dynamic, 1 unit above the anchor, reset anchor = body 0, and it
+    # does NOT collide with the anchor's group so it falls freely.
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyParentBodyIndex", -1)
+    cmds.setAttr(f"{p1}.bodyResetAnchorIndex", 0)
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+
+    # Anchor at the origin (identity) so its current pose is captured for reset.
+    cmds.setAttr(f"{node}.anchorWorldMatrix[0]", *_IDENTITY_MATRIX, type="matrix")
+
+    cmds.currentTime(1)
+    initial = _read_output(node, 1)
+    assert_eq(round(initial[1], 3), 1.0, "rest pose y before stepping")
+
+    # Let the body fall under gravity for several frames.
+    for frame in range(2, 13):
+        cmds.currentTime(frame)
+        _read_output(node, 1)
+    fallen = _read_output(node, 1)[1]
+    assert_true(
+        fallen < 0.85,
+        f"body should have fallen by frame 12 (y={fallen:.3f})",
+    )
+
+    # At the SAME time, bump configVersion — the rebuild must re-read the body
+    # data and reset the dynamic body to its current skeleton pose (y=1).
+    cmds.setAttr(f"{node}.configVersion", 1)
+    reset_y = _read_output(node, 1)[1]
+    assert_true(
+        reset_y > 0.9,
+        f"configVersion bump should reset the body to rest (y={reset_y:.3f})",
+    )
+    print(f"✓ configVersion rebuild reset body to y={reset_y:.3f}")
+    return True
+
+
+def test_group_inverse_world_matrix_applies_to_anchors():
+    """groupInverseWorldMatrix maps every anchor's world matrix into group space."""
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+    _set_welded_chain(node)
+
+    # A physics group transform at y=3; its world inverse (T(0,-3,0)) is
+    # CONNECTED to the node's single group-inverse input (mirrors how the
+    # Python builder wires group.worldInverseMatrix).  The anchor's
+    # GROUP-LOCAL pose is then local = world * groupInverse = the origin, so
+    # the welded body settles 1 unit above the LOCAL origin (y=1) — not y=4,
+    # which is where it would sit if the group inverse were ignored.
+    group = cmds.createNode("transform", name="PhysicsGroupTest")
+    cmds.setAttr(f"{group}.translateY", 3)
+    cmds.connectAttr(f"{group}.worldInverseMatrix", f"{node}.groupInverseWorldMatrix")
+    cmds.setAttr(
+        f"{node}.anchorWorldMatrix[0]",
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        3,
+        0,
+        1,
+        type="matrix",
+    )
+
+    # Step several frames so the weld settles.
+    last_y = 1.0
+    for frame in range(1, 31):
+        cmds.currentTime(frame)
+        last_y = _read_output(node, 1)[1]
+
+    assert_true(
+        0.5 < last_y < 1.5,
+        f"welded body should sit at local y=1 (world 3 * inverse -3); got {last_y:.3f}",
+    )
+    print(f"✓ group inverse mapped anchor world->local (body y={last_y:.3f})")
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -332,4 +469,9 @@ _TESTS = [
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),
     ("Dynamic Body Falls Under Gravity", test_dynamic_body_falls_under_gravity),
     ("Kinematic Anchor Drives Welded Body", test_kinematic_anchor_drives_welded_body),
+    ("Config Version Forces Rebuild", test_config_version_forces_rebuild),
+    (
+        "Group Inverse Maps Anchors To Local",
+        test_group_inverse_world_matrix_applies_to_anchors,
+    ),
 ]
