@@ -22,6 +22,7 @@
 #include <maya/MString.h>
 
 #include "maya/cmds/rigid_body_cmd.hpp"
+#include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
 #include "maya/nodes/physics_node.h"
 #include "version.hpp"
@@ -112,6 +113,18 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
 
+    // 1d. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
+    //     Same C++ rationale as pmxRigidBody.  Create mode only — SIMULATION
+    //     IS DISABLED (writes the joint DATA; the node holds the full
+    //     constraint set but nothing steps yet).
+    {
+        stat =
+            plugin.registerCommand(RigidBodyConstraintCmd::kName, RigidBodyConstraintCmd::creator,
+                                   RigidBodyConstraintCmd::syntaxCreator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyConstraint command registration failed");
+
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
     //    plugin loading, so mmd/ is already importable.
@@ -136,6 +149,7 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     plugin.deregisterNode(PhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
     plugin.deregisterCommand(RigidBodyCmd::kName);
+    plugin.deregisterCommand(RigidBodyConstraintCmd::kName);
 
     return MS::kSuccess;
 }

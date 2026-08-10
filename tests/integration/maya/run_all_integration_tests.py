@@ -225,10 +225,14 @@ def get_cmd_tests():
     """
     from tests.integration.maya.cmds import test_bone_blend_shape_cmd_integration
     from tests.integration.maya.cmds import test_pmx_rigid_body_cmd_integration
+    from tests.integration.maya.cmds import (
+        test_pmx_rigid_body_constraint_cmd_integration,
+    )
 
     return [
         *test_bone_blend_shape_cmd_integration._TESTS,
         *test_pmx_rigid_body_cmd_integration._TESTS,
+        *test_pmx_rigid_body_constraint_cmd_integration._TESTS,
     ]
 
 

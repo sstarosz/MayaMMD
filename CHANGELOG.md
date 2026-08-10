@@ -38,6 +38,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
   bodies on the physics node immediately. Backed by 36 Maya integration
   tests (no PMX file required).
+- **Native `pmxRigidBodyConstraint` command (create mode)** — the C++
+  command that populates a `pmxPhysicsNode`'s `joints` array with PMX
+  rigid-body constraint data at import time (one joint per PMX joint, in
+  PMX order). For every joint it writes `jointNameLocal`/`jointNameUniversal`,
+  `jointBodyA`/`jointBodyB` (validated against the current body count and
+  against each other — a body cannot constrain itself), the PMX `jointType`
+  (0..5, validated, and exposed as an **enum dropdown** — Spring6Dof/SixDof/
+  P2P/ConeTwist/Slider/Hinge), and the joint frame stored in the physics group's local
+  space (Z-flip + MMD radians → Maya degrees handedness conversion, `world *
+  groupWorld⁻¹` — matching `pmxRigidBody`). The linear/angular **limits are
+  converted through the same MMD→Maya reflection** (the Z-flip
+  F = diag(1,1,−1)): linear Z negates + min/max swap, angular X/Y negate +
+  min/max swap, angular Z and the spring constants pass through (magnitudes).
+  Angular limits stay in PMX radians — the node hands them to Bullet
+  unchanged. Without this, every joint with asymmetric limits (429/496 in
+  the test model) was stored **mirrored** and would rotate the wrong way in
+  the sim. Backed by 14 Maya integration tests (no PMX file required) +
+  end-to-end import assertions that verify the reflection on a real model.
 
 ### Changed
 

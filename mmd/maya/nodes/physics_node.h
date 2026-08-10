@@ -97,7 +97,7 @@ class PhysicsNode : public MPxLocatorNode
         // radius/extents/length by collider type via
         // mmd::core::shapeSizeFromBodyDefinition.
         double shapeSize[3] = {};
-        int groupId = 0;        // collision group 0..15 (draw palette)
+        int groupId = 0; // collision group 0..15 (draw palette)
         bool kinematic = false;
     };
     // Fill *out* with one DrawBody per rigid body (body-index aligned).
@@ -149,7 +149,7 @@ class PhysicsNode : public MPxLocatorNode
     // with the PMX body<->bone offset preserved.
     static MObject aAnchorWorldMatrix;
     static MObject aGroupInverseWorldMatrix; // physics group's world inverse (single)
-    static MObject aAnchorOffset; // matrix array, kinematic-order indexed (Phase 3)
+    static MObject aAnchorOffset;            // matrix array, kinematic-order indexed (Phase 3)
 
     // Phase 3 direct write-back inputs — the node outputs the JOINT-LOCAL
     // pose directly (boneLocal = K * bodyLocal * groupWorld * parentInverse),
@@ -186,13 +186,13 @@ class PhysicsNode : public MPxLocatorNode
     // .at() (the cppcoreguidelines constant-array-index check rejects `[]`
     // with a loop counter on a C array).
     static std::array<MObject, 16> aBodyMaskGroup;
-    static MObject aBodyColliderType;  // enum — PMX shape (kColliderBox/Sphere/Capsule)
+    static MObject aBodyColliderType; // enum — PMX shape (kColliderBox/Sphere/Capsule)
     // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
     // engine's radius / box half-extents / capsule length by collider type
     // (mmd::core::applyShapeSize) in readBodyData, computeConfigSignature and
     // the attribute-fallback reader.
-    static MObject aBodyShapeSize;     // float3 — PMX shape_size verbatim
-    static MObject aBodyRestTranslate; // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyShapeSize;       // float3 — PMX shape_size verbatim
+    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, group space)
     static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
     static MObject aBodyMass;            // double — PMX mass
     static MObject aBodyLinearDamping;   // double — PMX move_attenuation
@@ -206,9 +206,11 @@ class PhysicsNode : public MPxLocatorNode
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
+    static MObject aJointNameLocal;      // string — PMX name_local; "" = none
+    static MObject aJointNameUniversal;  // string — PMX name_universal; "" = none
     static MObject aJointBodyA;          // long
     static MObject aJointBodyB;          // long
-    static MObject aJointType;           // long 0..5 (PMX JointType)
+    static MObject aJointType;           // enum 0..5 (PMX JointType — dropdown)
     static MObject aJointFrameTranslate; // float3
     static MObject aJointFrameRotate;    // float3 degrees
     static MObject aJointLinearMin;      // float3
