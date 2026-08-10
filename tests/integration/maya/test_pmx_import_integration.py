@@ -202,11 +202,13 @@ def test_pmx_skin_weights_applied(pmx_data: PmxModel, maya_pmx_data):
 
 
 def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
-    """Test that the physics group + empty pmxPhysicsNode are created per model.
+    """Test that the physics group + populated pmxPhysicsNode are created per model.
 
     ``build_pmx_scene`` creates a ``{model}_Physics`` group under the root with
-    one empty ``pmxPhysicsNode`` solver (gravity -9.8) and stamps the solver
-    name on the root's ``pmxPhysicsNode`` string attribute for discovery.
+    one ``pmxPhysicsNode`` solver (gravity -9.8), POPULATES its ``bodies``
+    array through the native ``pmxRigidBody`` command (one body per PMX rigid
+    body, in PMX order), and stamps the solver name on the root's
+    ``pmxPhysicsNode`` string attribute for discovery.
     """
     root_obj = maya_pmx_data.root_obj
     root_fn = om.MFnTransform(root_obj)
@@ -227,7 +229,7 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
         "Physics group parent is not root",
     )
 
-    # Exactly one empty pmxPhysicsNode solver shape under the group.
+    # Exactly one pmxPhysicsNode solver shape under the group.
     solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
     assert_true(bool(solvers), "No pmxPhysicsNode under the physics group")
     solver = solvers[0]
@@ -247,7 +249,41 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
         solver,
         "root pmxPhysicsNode attribute should name the solver",
     )
-    print(f"PASS: physics group + empty {_NODE_TYPE} created")
+
+    # The bodies array mirrors the PMX rigid bodies (one body per rigid body,
+    # in PMX order — appended by the native pmxRigidBody command).
+    expected_bodies = len(pmx_data.rigid_bodies)
+    assert_true(
+        cmds.attributeQuery("bodies", node=solver, exists=True),
+        "solver has no bodies attribute",
+    )
+    if expected_bodies > 0:
+        assert_eq(
+            int(cmds.getAttr(f"{solver}.bodies", size=True)),
+            expected_bodies,
+            "bodies count != PMX rigid body count",
+        )
+        # First body's data mirrors the first PMX rigid body.
+        first = pmx_data.rigid_bodies[0]
+        base = f"{solver}.bodies[0]"
+        assert_eq(
+            cmds.getAttr(f"{base}.bodyNameLocal"),
+            first.name_local,
+            "first body name_local",
+        )
+        assert_eq(
+            int(cmds.getAttr(f"{base}.bodyPhysicsMode")),
+            int(first.physics_mode.value),
+            "first body physics mode",
+        )
+    else:
+        # Models with no rigid bodies still get the node (empty bodies = no-op).
+        assert_eq(
+            int(cmds.getAttr(f"{solver}.bodies", size=True) or 0),
+            0,
+            "no-body model should have an empty bodies array",
+        )
+    print(f"PASS: physics group + {_NODE_TYPE} with {expected_bodies} bodies created")
     return True
 
 
