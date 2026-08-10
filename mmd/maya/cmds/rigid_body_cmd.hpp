@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * rigid_body_cmd.h
+ * rigid_body_cmd.hpp
  *
  * RigidBodyCmd — native C++ command for operating on a pmxPhysicsNode.
  *
@@ -56,16 +56,8 @@
 #include <maya/MPxCommand.h>
 #include <maya/MString.h>
 
-#include "common.hpp"
-
 class MSyntax;
 class MArgList;
-class MArgParser;
-class MObject;
-class MPlug;
-class MDagPath;
-class MFnDependencyNode;
-class MMatrix;
 
 class RigidBodyCmd : public MPxCommand
 {
@@ -80,24 +72,4 @@ class RigidBodyCmd : public MPxCommand
 
     MStatus doIt(const MArgList& args) override;
     bool isUndoable() const override { return false; }
-
-  private:
-    // Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
-    static bool resolveSolver(const MString& target, MObject& outNode);
-    // Create mode: append one body (data + bone binding); returns the index.
-    static MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex);
-
-    // ------------------------------------------------------------------
-    // Helpers (implemented in the .cpp)
-    // ------------------------------------------------------------------
-    // 4x4 row-vector matrix from translate + XYZ euler degrees.
-    static MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double3& r);
-    // A DAG node's world (inclusive) matrix.
-    static MMatrix worldMatrix(const MDagPath& path);
-    // Connect src → dst, replacing any existing source on dst.
-    static MStatus connectOrReplace(const MPlug& src, const MPlug& dst);
-    // A joint's stored PMX bone index (pmxBoneIndex), or -1.
-    static int jointPmxBoneIndex(const MDagPath& jointPath);
-    // Resolve the -bone argument to a joint dag path (or leave it empty).
-    static MDagPath resolveBone(const MString& bone, const MDagPath& groupPath);
 };

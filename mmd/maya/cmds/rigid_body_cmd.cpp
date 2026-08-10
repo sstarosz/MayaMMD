@@ -11,61 +11,49 @@
  * the body DATA and binds FOLLOW_BONE bodies to their related joint through
  * the kinematic-anchor input; dynamic bodies are data-only (no write-back,
  * no stepping).
+ *
+ * The command's interface is minimal (see rigid_body_cmd.hpp); all the
+ * implementation helpers live in the anonymous namespace below so the header
+ * stays a pure interface.
  */
 
-#include "rigid_body_cmd.h"
+#include "rigid_body_cmd.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
-#include <maya/MDGModifier.h>
 #include <maya/MDagPath.h>
 #include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
-#include <maya/MFnMatrixData.h>
-#include <maya/MFnNumericData.h>
+#include <maya/MGlobal.h>
 #include <maya/MItDag.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
-#include <maya/MPlugArray.h>
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
+#include "maya_utils.hpp"
 #include "nodes/physics_node.h"
+#include "physics_math.hpp"
 
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 using mmd::core::Double3;
 using mmd::core::Simulation;
+using mmd::core::physics_math::deg2rad;
+using mmd::core::physics_math::rad2deg;
 
 namespace
 {
-constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
-
-inline double degToRad(double d)
-{
-    return d * kDegToRad;
-}
-inline double radToDeg(double r)
-{
-    return r / kDegToRad;
-}
-inline double clamp01(double v)
-{
-    if (v < 0.0)
-        return 0.0;
-    if (v > 1.0)
-        return 1.0;
-    return v;
-}
-
+// ---------------------------------------------------------------------------
 // Flag short names (single/compound, Maya API style).
+// ---------------------------------------------------------------------------
 constexpr const char* kIndexFlag = "i";
 constexpr const char* kNameFlag = "n";
 constexpr const char* kNameUniversalFlag = "nu";
@@ -83,120 +71,108 @@ constexpr const char* kGroupFlag = "g";
 constexpr const char* kMaskFlag = "msk"; // short names are limited to 3 chars
 constexpr const char* kPhysicsModeFlag = "pm";
 
-// MPlug has no setValue(MMatrix) overload — wrap the matrix in an
-// MFnMatrixData MObject (the standard pattern for matrix plugs).
-// (MPlug is passed by value: child() returns a temporary, and setValue is
-// non-const — MSVC tolerates the temporary binding, clang does not.)
-void setMatrixValue(MPlug plug, const MMatrix& m)
+// PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
+// damping/friction match the import path exactly.
+constexpr double clamp01(double v)
 {
-    MFnMatrixData data;
-    MObject obj = data.create(m);
-    plug.setValue(obj);
+    if (v < 0.0)
+        return 0.0;
+    if (v > 1.0)
+        return 1.0;
+    return v;
 }
 
-// MPlug has no setValue3Double — wrap 3 doubles in an MFnNumericData object.
-void setDouble3(MPlug plug, const Double3& v)
+// A DAG node's world (inclusive) matrix.
+MMatrix worldMatrix(const MDagPath& path)
 {
-    MFnNumericData data;
-    MObject obj = data.create(MFnNumericData::k3Double);
-    data.setData3Double(v.x, v.y, v.z);
-    plug.setValue(obj);
+    return path.inclusiveMatrix();
 }
 
-} // namespace
-
-// ===========================================================================
-// Registration
-// ===========================================================================
-
-void* RigidBodyCmd::creator()
+// 4x4 row-vector matrix from translate + XYZ euler degrees.
+MMatrix matrixFromTR(const Double3& t, const Double3& r)
 {
-    return new RigidBodyCmd();
+    MTransformationMatrix mt;
+    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
+    double rot[3] = {deg2rad(r.x), deg2rad(r.y), deg2rad(r.z)};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    mt.setRotation(rot, MTransformationMatrix::kXYZ);
+    return mt.asMatrix();
 }
 
-MSyntax RigidBodyCmd::syntaxCreator()
+// A joint's stored PMX bone index (pmxBoneIndex), or -1.
+int jointPmxBoneIndex(const MDagPath& jointPath)
 {
-    MSyntax syntax;
-    // First positional argument: the solver node (or a model root).
-    syntax.addArg(MSyntax::kString);
-
-    syntax.addFlag(kIndexFlag, "index", MSyntax::kLong);
-    syntax.addFlag(kNameFlag, "name", MSyntax::kString);
-    syntax.addFlag(kNameUniversalFlag, "nameUniversal", MSyntax::kString);
-    syntax.addFlag(kBoneFlag, "bone", MSyntax::kString);
-    syntax.addFlag(kShapeFlag, "shape", MSyntax::kString);
-    syntax.addFlag(kSizeFlag, "size", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
-    syntax.addFlag(kPositionFlag, "position", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
-    syntax.addFlag(kRotationFlag, "rotation", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
-    syntax.addFlag(kMassFlag, "mass", MSyntax::kDouble);
-    syntax.addFlag(kLinearDampingFlag, "linearDamping", MSyntax::kDouble);
-    syntax.addFlag(kAngularDampingFlag, "angularDamping", MSyntax::kDouble);
-    syntax.addFlag(kFrictionFlag, "friction", MSyntax::kDouble);
-    syntax.addFlag(kRestitutionFlag, "restitution", MSyntax::kDouble);
-    syntax.addFlag(kGroupFlag, "group", MSyntax::kLong);
-    // Collision mask as a 16-bit "collides with" bitmask (bit i = collides
-    // with group i) — the PMX non_collision_group field stored VERBATIM (MMD
-    // feeds it to Bullet directly; no inversion).  Written into the
-    // bodyMaskGroup0..15 boolean children.
-    syntax.addFlag(kMaskFlag, "mask", MSyntax::kLong);
-    syntax.addFlag(kPhysicsModeFlag, "physicsMode", MSyntax::kString);
-
-    syntax.enableEdit(true);
-    syntax.enableQuery(true);
-    return syntax;
+    try
+    {
+        MFnDependencyNode fn(jointPath.node());
+        MStatus stat;
+        MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
+        if (!plug.isNull())
+            return plug.asInt();
+    }
+    // No joint / no index attribute: reported through the -1 return.
+    // NOLINTNEXTLINE(bugprone-empty-catch)
+    catch (...)
+    {
+    }
+    return -1;
 }
 
-// ===========================================================================
-// doIt
-// ===========================================================================
-
-MStatus RigidBodyCmd::doIt(const MArgList& args)
+// Resolve the -bone argument to a joint dag path (or leave it empty).
+MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 {
-    MStatus stat;
-    MArgParser parser(syntaxCreator(), args, &stat);
-    if (!stat)
+    MDagPath out;
+    if (bone.length() == 0)
+        return out;
+
+    // Numeric string ⇒ PMX bone index: scan the model root's joints.
+    const char* boneStr =
+        bone.asChar(); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    const unsigned int boneLen = static_cast<unsigned int>(std::strlen(boneStr));
+    bool numeric = true;
+    for (unsigned int i = 0; i < boneLen; ++i)
     {
-        displayError("pmxRigidBody: could not parse arguments");
-        return stat;
+        if (boneStr[i] < '0' || boneStr[i] > '9')
+        {
+            numeric = false;
+            break;
+        }
+    }
+    if (numeric)
+    {
+        // The string was verified to contain only digits above, so the
+        // conversion cannot fail; strtol reports the parse end as a guard.
+        char* end = nullptr;
+        const int idx = static_cast<int>(std::strtol(boneStr, &end, 10));
+        if (end == boneStr)
+            return out;
+        MDagPath rootPath = groupPath;
+        rootPath.pop(); // |modelRoot
+        MItDag it;
+        it.reset(rootPath, MItDag::kDepthFirst, MFn::kJoint);
+        for (; !it.isDone(); it.next())
+        {
+            MDagPath jp;
+            it.getPath(jp);
+            if (jointPmxBoneIndex(jp) == idx)
+                return jp;
+        }
+        return out;
     }
 
-    MString target = parser.commandArgumentString(0, &stat);
-    if (!stat || target.length() == 0)
+    // Otherwise: a Maya joint name / path.
+    MSelectionList sel;
+    if (sel.add(bone) == MS::kSuccess && sel.length() > 0)
     {
-        displayError("pmxRigidBody: missing solver / modelRoot argument");
-        return MS::kFailure;
+        MDagPath p;
+        if (sel.getDagPath(0, p) == MS::kSuccess)
+            return p;
     }
-
-    if (parser.isQuery())
-    {
-        displayError("pmxRigidBody query mode is not implemented yet");
-        return MS::kFailure;
-    }
-    if (parser.isEdit())
-    {
-        displayError("pmxRigidBody edit mode is not implemented yet");
-        return MS::kFailure;
-    }
-
-    MObject solverNode;
-    if (!resolveSolver(target, solverNode))
-    {
-        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
-        return MS::kFailure;
-    }
-
-    int newIndex = -1;
-    stat = doCreate(parser, solverNode, newIndex);
-    if (stat)
-        setResult(newIndex);
-    return stat;
+    return out;
 }
 
-// ===========================================================================
-// Helpers
-// ===========================================================================
-
-bool RigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
+// Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
+bool resolveSolver(const MString& target, MObject& outNode)
 {
     try
     {
@@ -216,10 +192,11 @@ bool RigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
             return true;
         }
         // Model root: resolve the pmxPhysicsNode string attribute.
-        MPlug p = fn.findPlug("pmxPhysicsNode", true);
+        MStatus stat;
+        MPlug p = fn.findPlug("pmxPhysicsNode", true, &stat);
         if (!p.isNull())
         {
-            MString solverName = p.asString();
+            const MString solverName = p.asString();
             if (solverName.length() > 0)
             {
                 MSelectionList sel2;
@@ -248,114 +225,11 @@ bool RigidBodyCmd::resolveSolver(const MString& target, MObject& outNode)
     return false;
 }
 
-MMatrix RigidBodyCmd::matrixFromTR(const Double3& t, const Double3& r)
-{
-    MTransformationMatrix mt;
-    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
-    double rot[3] = {degToRad(r.x), degToRad(r.y), degToRad(r.z)};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    mt.setRotation(rot, MTransformationMatrix::kXYZ);
-    return mt.asMatrix();
-}
-
-MMatrix RigidBodyCmd::worldMatrix(const MDagPath& path)
-{
-    return path.inclusiveMatrix();
-}
-
-MStatus RigidBodyCmd::connectOrReplace(const MPlug& src, const MPlug& dst)
-{
-    MDGModifier mod;
-    if (dst.isConnected())
-    {
-        MPlugArray sources;
-        dst.connectedTo(sources, true, false);
-        for (unsigned int i = 0; i < sources.length(); ++i)
-        {
-            if (sources[i] != src)
-                mod.disconnect(sources[i], dst);
-        }
-    }
-    if (mod.connect(src, dst) != MS::kSuccess)
-        return MS::kFailure;
-    return mod.doIt();
-}
-
-int RigidBodyCmd::jointPmxBoneIndex(const MDagPath& jointPath)
-{
-    try
-    {
-        MFnDependencyNode fn(jointPath.node());
-        MStatus stat;
-        MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
-        if (!plug.isNull())
-            return plug.asInt();
-    }
-    // No joint / no index attribute: reported through the -1 return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return -1;
-}
-
-MDagPath RigidBodyCmd::resolveBone(const MString& bone, const MDagPath& groupPath)
-{
-    MDagPath out;
-    if (bone.length() == 0)
-        return out;
-
-    // Numeric string ⇒ PMX bone index: scan the model root's joints.
-    const char* boneStr =
-        bone.asChar(); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    unsigned int boneLen = static_cast<unsigned int>(std::strlen(boneStr));
-    bool numeric = true;
-    for (unsigned int i = 0; i < boneLen; ++i)
-    {
-        if (boneStr[i] < '0' || boneStr[i] > '9')
-        {
-            numeric = false;
-            break;
-        }
-    }
-    if (numeric)
-    {
-        // The string was verified to contain only digits above, so the
-        // conversion cannot fail; strtol reports the parse end as a guard.
-        char* end = nullptr;
-        int idx = static_cast<int>(std::strtol(boneStr, &end, 10));
-        if (end == boneStr)
-            return out;
-        MDagPath rootPath = groupPath;
-        rootPath.pop(); // |modelRoot
-        MItDag it;
-        it.reset(rootPath, MItDag::kDepthFirst, MFn::kJoint);
-        for (; !it.isDone(); it.next())
-        {
-            MDagPath jp;
-            it.getPath(jp);
-            if (jointPmxBoneIndex(jp) == idx)
-                return jp;
-        }
-        return out;
-    }
-
-    // Otherwise: a Maya joint name / path.
-    MSelectionList sel;
-    if (sel.add(bone) == MS::kSuccess && sel.length() > 0)
-    {
-        MDagPath p;
-        if (sel.getDagPath(0, p) == MS::kSuccess)
-            return p;
-    }
-    return out;
-}
-
 // ===========================================================================
 // Create mode
 // ===========================================================================
 
-MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex)
+MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex)
 {
     // ── Parse flags (safe defaults, mirroring the former Python command) ──
     int index = -1;
@@ -428,7 +302,7 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     restitution = clamp01(restitution);
 
     // ── Enumerated values ──
-    MString sh = shape.toLowerCase();
+    const MString sh = shape.toLowerCase();
     PhysicsNode::ColliderType colliderType = PhysicsNode::kColliderSphere;
     if (sh == "box")
     {
@@ -440,11 +314,11 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     }
     else if (sh != "sphere")
     {
-        displayError("Unknown shape '" + shape + "' — expected sphere, box or capsule");
+        MGlobal::displayError("Unknown shape '" + shape + "' — expected sphere, box or capsule");
         return MS::kFailure;
     }
 
-    MString pm = physicsMode.toLowerCase();
+    const MString pm = physicsMode.toLowerCase();
     // The bodyPhysicsMode attribute stores mmd::core::Simulation::PhysicsMode
     // values directly (the node casts the attribute value back to the engine
     // enum) — there is deliberately NO node-side enum.
@@ -459,11 +333,11 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     }
     else if (pm != "physics")
     {
-        displayError("Unknown physicsMode '" + physicsMode +
-                     "' — expected followBone, physics or physicsBone");
+        MGlobal::displayError("Unknown physicsMode '" + physicsMode +
+                              "' — expected followBone, physics or physicsBone");
         return MS::kFailure;
     }
-    bool kinematic = (physicsModeEnum == Simulation::PhysicsMode::eFollowBone);
+    const bool kinematic = (physicsModeEnum == Simulation::PhysicsMode::eFollowBone);
 
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
@@ -471,37 +345,37 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     MPlug bodiesPlug = fn.findPlug(PhysicsNode::aBodies, true, &plugStat);
     if (bodiesPlug.isNull())
     {
-        displayError("pmxRigidBody: node has no 'bodies' array");
+        MGlobal::displayError("pmxRigidBody: node has no 'bodies' array");
         return MS::kFailure;
     }
-    int count = static_cast<int>(bodiesPlug.numElements());
+    const int count = static_cast<int>(bodiesPlug.numElements());
     if (index >= 0 && index != count)
     {
         MString msg = MString("Body index ") + MString(std::to_string(index).c_str()) +
                       MString(" is not the next free index (") +
                       MString(std::to_string(count).c_str()) +
                       MString(") — append at the end or use edit mode to overwrite");
-        displayError(msg);
+        MGlobal::displayError(msg);
         return MS::kFailure;
     }
-    int n = count;
+    const int n = count;
 
     MDagPath nodePath;
     if (MDagPath::getAPathTo(solverNode, nodePath) != MS::kSuccess)
     {
-        displayError("pmxRigidBody: could not resolve solver dag path");
+        MGlobal::displayError("pmxRigidBody: could not resolve solver dag path");
         return MS::kFailure;
     }
     MDagPath groupPath = nodePath;
     groupPath.pop(); // |group|shape ⇒ |group
-    MMatrix groupWorld = groupPath.inclusiveMatrix();
+    const MMatrix groupWorld = groupPath.inclusiveMatrix();
     MFnDependencyNode groupFn(groupPath.node());
     MStatus groupPlugStat;
     MPlug groupWorldInversePlug =
         groupFn.findPlug("worldInverseMatrix", true, &groupPlugStat).elementByLogicalIndex(0);
 
     // Related joint (anchor / write-back target).
-    MDagPath jointPath = resolveBone(bone, groupPath);
+    const MDagPath jointPath = resolveBone(bone, groupPath);
     MPlug jointWorldPlug;
     if (jointPath.isValid())
     {
@@ -512,19 +386,19 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     }
 
     // ── Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness) ──
-    Double3 worldT(pos.x, pos.y, -pos.z);
-    Double3 worldR(-radToDeg(rot.x), -radToDeg(rot.y), radToDeg(rot.z));
-    MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
+    const Double3 worldT(pos.x, pos.y, -pos.z);
+    const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
+    const MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
     MTransformationMatrix mt(local);
-    MVector lt = mt.getTranslation(MSpace::kTransform);
-    MEulerRotation le = mt.eulerRotation();
-    Double3 localT(lt.x, lt.y, lt.z);
-    Double3 localR(radToDeg(le.x), radToDeg(le.y), radToDeg(le.z));
+    const MVector lt = mt.getTranslation(MSpace::kTransform);
+    const MEulerRotation le = mt.eulerRotation();
+    const Double3 localT(lt.x, lt.y, lt.z);
+    const Double3 localR(rad2deg(le.x), rad2deg(le.y), rad2deg(le.z));
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    setDouble3(elem.child(PhysicsNode::aBodyRestTranslate), localT);
-    setDouble3(elem.child(PhysicsNode::aBodyRestRotate), localR);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), localT);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), localR);
     elem.child(PhysicsNode::aBodyMass).setDouble(mass);
     elem.child(PhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
     elem.child(PhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
@@ -533,7 +407,7 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     elem.child(PhysicsNode::aBodyColliderType).setShort(colliderType);
     // PMX shape_size VERBATIM (full size — the node derives the engine
     // radius/extents/length by collider type via mmd::core::applyShapeSize).
-    setDouble3(elem.child(PhysicsNode::aBodyShapeSize), size);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyShapeSize), size);
     elem.child(PhysicsNode::aBodyGroupId).setShort(static_cast<short>(group));
     for (int g = 0; g < 16; ++g)
         elem.child(PhysicsNode::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
@@ -570,29 +444,31 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
         // anchor (the node computes local = world * groupInverseWorldMatrix),
         // so connect it once (connectOrReplace is idempotent for the same
         // source — later bodies re-connect the same group inverse).
-        connectOrReplace(groupWorldInversePlug,
-                         fn.findPlug(PhysicsNode::aGroupInverseWorldMatrix, true, &plugStat));
+        mmd::maya::connectOrReplace(
+            groupWorldInversePlug,
+            fn.findPlug(PhysicsNode::aGroupInverseWorldMatrix, true, &plugStat));
         if (jointPath.isValid())
         {
-            connectOrReplace(jointWorldPlug,
-                             fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
-                                 .elementByLogicalIndex(k));
-            MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
-            MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
-            setMatrixValue(
+            mmd::maya::connectOrReplace(
+                jointWorldPlug, fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
+                                    .elementByLogicalIndex(k));
+            const MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            const MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
+            mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
                 offset);
         }
         else
         {
             // No related joint: a static collider pinned at its rest pose.
-            MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            const MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
             MMatrix identity;
             identity.setToIdentity();
-            setMatrixValue(fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
-                               .elementByLogicalIndex(k),
-                           bodyWorld);
-            setMatrixValue(
+            mmd::maya::setPlugMatrixValue(
+                fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
+                    .elementByLogicalIndex(k),
+                bodyWorld);
+            mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
                 identity);
         }
@@ -625,17 +501,108 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
             // is scaled wrongly and every write-back-driven bone lands off its
             // rest pose (the collider guides stay correct — they render the
             // scale back through the DAG — which is the exact breakage seen).
-            MMatrix bodyWorld = matrixFromTR(worldT, worldR);
+            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }
-        setMatrixValue(fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
-                           .elementByLogicalIndex(n),
-                       k);
-        setMatrixValue(fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
-                           .elementByLogicalIndex(n),
-                       identity);
+        mmd::maya::setPlugMatrixValue(
+            fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
+                .elementByLogicalIndex(n),
+            k);
+        mmd::maya::setPlugMatrixValue(
+            fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
+                .elementByLogicalIndex(n),
+            identity);
     }
 
     outIndex = n;
     return MS::kSuccess;
+}
+
+} // namespace
+
+// ===========================================================================
+// Registration
+// ===========================================================================
+
+void* RigidBodyCmd::creator()
+{
+    return new RigidBodyCmd();
+}
+
+MSyntax RigidBodyCmd::syntaxCreator()
+{
+    MSyntax syntax;
+    // First positional argument: the solver node (or a model root).
+    syntax.addArg(MSyntax::kString);
+
+    syntax.addFlag(kIndexFlag, "index", MSyntax::kLong);
+    syntax.addFlag(kNameFlag, "name", MSyntax::kString);
+    syntax.addFlag(kNameUniversalFlag, "nameUniversal", MSyntax::kString);
+    syntax.addFlag(kBoneFlag, "bone", MSyntax::kString);
+    syntax.addFlag(kShapeFlag, "shape", MSyntax::kString);
+    syntax.addFlag(kSizeFlag, "size", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
+    syntax.addFlag(kPositionFlag, "position", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
+    syntax.addFlag(kRotationFlag, "rotation", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
+    syntax.addFlag(kMassFlag, "mass", MSyntax::kDouble);
+    syntax.addFlag(kLinearDampingFlag, "linearDamping", MSyntax::kDouble);
+    syntax.addFlag(kAngularDampingFlag, "angularDamping", MSyntax::kDouble);
+    syntax.addFlag(kFrictionFlag, "friction", MSyntax::kDouble);
+    syntax.addFlag(kRestitutionFlag, "restitution", MSyntax::kDouble);
+    syntax.addFlag(kGroupFlag, "group", MSyntax::kLong);
+    // Collision mask as a 16-bit "collides with" bitmask (bit i = collides
+    // with group i) — the PMX non_collision_group field stored VERBATIM (MMD
+    // feeds it to Bullet directly; no inversion).  Written into the
+    // bodyMaskGroup0..15 boolean children.
+    syntax.addFlag(kMaskFlag, "mask", MSyntax::kLong);
+    syntax.addFlag(kPhysicsModeFlag, "physicsMode", MSyntax::kString);
+
+    syntax.enableEdit(true);
+    syntax.enableQuery(true);
+    return syntax;
+}
+
+// ===========================================================================
+// doIt
+// ===========================================================================
+
+MStatus RigidBodyCmd::doIt(const MArgList& args)
+{
+    MStatus stat;
+    MArgParser parser(syntaxCreator(), args, &stat);
+    if (!stat)
+    {
+        displayError("pmxRigidBody: could not parse arguments");
+        return stat;
+    }
+
+    const MString target = parser.commandArgumentString(0, &stat);
+    if (!stat || target.length() == 0)
+    {
+        displayError("pmxRigidBody: missing solver / modelRoot argument");
+        return MS::kFailure;
+    }
+
+    if (parser.isQuery())
+    {
+        displayError("pmxRigidBody query mode is not implemented yet");
+        return MS::kFailure;
+    }
+    if (parser.isEdit())
+    {
+        displayError("pmxRigidBody edit mode is not implemented yet");
+        return MS::kFailure;
+    }
+
+    MObject solverNode;
+    if (!resolveSolver(target, solverNode))
+    {
+        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
+        return MS::kFailure;
+    }
+
+    int newIndex = -1;
+    stat = doCreate(parser, solverNode, newIndex);
+    if (stat)
+        setResult(newIndex);
+    return stat;
 }

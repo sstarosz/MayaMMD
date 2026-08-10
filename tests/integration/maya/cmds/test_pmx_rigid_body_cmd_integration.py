@@ -443,6 +443,174 @@ def test_body_mask_group_toggles():
     return True
 
 
+def test_wiring_field_defaults():
+    """Wiring fields default to inert values (-1 / identity / enabled)."""
+    _group, solver, joint_a, _jb = _make_physics_scene()
+
+    idx = cmds.pmxRigidBody(solver, name="Wired", bone=joint_a, physicsMode="physics")
+    assert_eq(idx, 0, "index != 0")
+    base = f"{solver}.bodies[0]"
+    # Not wired by create: parent body / reset anchor are resolved later.
+    assert_eq(
+        int(cmds.getAttr(f"{base}.bodyResetAnchorIndex")), -1, "resetAnchor != -1"
+    )
+    assert_eq(int(cmds.getAttr(f"{base}.bodyParentBodyIndex")), -1, "parentBody != -1")
+    # Enabled by default.
+    assert_eq(bool(cmds.getAttr(f"{base}.bodyEnabled")), True, "bodyEnabled != True")
+    # The DG-fallback parent inverse starts as identity.
+    pinv = cmds.getAttr(f"{solver}.bodyParentInverseMatrix[0]")
+    assert_true(pinv is not None and len(pinv) == 16, "bodyParentInverseMatrix not set")
+    print(
+        "✓ wiring fields default inert (resetAnchor -1, parent -1, enabled, identity)"
+    )
+    return True
+
+
+def test_write_back_offset_baked():
+    """A body with a related joint gets its write-back K offset baked."""
+    _group, solver, joint_a, _jb = _make_physics_scene()
+
+    cmds.pmxRigidBody(
+        solver,
+        name="KBody",
+        bone=joint_a,
+        position=(0.0, 2.0, 0.0),
+        physicsMode="physics",
+    )
+    k = cmds.getAttr(f"{solver}.bodyWriteBackOffset[0]")
+    assert_true(
+        k is not None and len(k) == 16, f"bodyWriteBackOffset[0] not baked ({k})"
+    )
+    # K = jointRestWorld * bodyRestWorld^-1 — with a non-zero rest offset the
+    # baked matrix is NOT identity (Maya matrices are row-major: translation
+    # lives in the last row, flat indices 12..14 — here the 2-unit Y offset
+    # between the joint and the body rest shows up inverted in K's T).
+    k_trans = [k[12], k[13], k[14]]
+    assert_true(
+        any(abs(v) > 1e-6 for v in k_trans),
+        f"bodyWriteBackOffset[0] looks like identity ({k_trans})",
+    )
+    # A body WITHOUT a joint gets an identity K.
+    cmds.pmxRigidBody(
+        solver, name="NoJoint", position=(0.0, 3.0, 0.0), physicsMode="physics"
+    )
+    k2 = cmds.getAttr(f"{solver}.bodyWriteBackOffset[1]")
+    assert_true(k2 is not None and len(k2) == 16, "bodyWriteBackOffset[1] not baked")
+    assert_true(
+        approx_equal_tuple((k2[12], k2[13], k2[14]), (0.0, 0.0, 0.0)),
+        f"no-joint body K should be identity ({k2[12]},{k2[13]},{k2[14]})",
+    )
+    print("✓ bodyWriteBackOffset baked (K for joint bodies, identity otherwise)")
+    return True
+
+
+def test_shape_size_verbatim_per_collider():
+    """-size is stored VERBATIM into bodyShapeSize for every collider type."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    cmds.pmxRigidBody(
+        solver, name="Box", shape="box", size=(1.0, 2.0, 3.0), physicsMode="physics"
+    )
+    cmds.pmxRigidBody(
+        solver,
+        name="Sphere",
+        shape="sphere",
+        size=(0.4, 0.0, 0.0),
+        physicsMode="physics",
+    )
+    cmds.pmxRigidBody(
+        solver,
+        name="Capsule",
+        shape="capsule",
+        size=(0.3, 2.0, 0.0),
+        physicsMode="physics",
+    )
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{solver}.bodies[0].bodyShapeSize")[0], (1.0, 2.0, 3.0)
+        ),
+        "box shapeSize not verbatim",
+    )
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{solver}.bodies[1].bodyShapeSize")[0], (0.4, 0.0, 0.0)
+        ),
+        "sphere shapeSize not verbatim",
+    )
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{solver}.bodies[2].bodyShapeSize")[0], (0.3, 2.0, 0.0)
+        ),
+        "capsule shapeSize not verbatim",
+    )
+    print("✓ bodyShapeSize stores PMX shape_size verbatim for box/sphere/capsule")
+    return True
+
+
+def test_rest_pose_conversion():
+    """MMD rest pose is converted to group space (Z-flip + handedness flip)."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    # position z=2 flips to -2; rotation x=90deg (MMD radians) flips to -90.
+    cmds.pmxRigidBody(
+        solver,
+        name="Rotated",
+        position=(1.0, 2.0, 3.0),
+        rotation=(1.5707963267948966, 0.0, 0.0),  # pi/2
+        physicsMode="physics",
+    )
+    base = f"{solver}.bodies[0]"
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{base}.bodyRestTranslate")[0], (1.0, 2.0, -3.0)
+        ),
+        f"bodyRestTranslate Z-flip wrong {cmds.getAttr(f'{base}.bodyRestTranslate')}",
+    )
+    # pi/2 rad -> 90 deg, negated on X (handedness flip).
+    rest_rot = cmds.getAttr(f"{base}.bodyRestRotate")[0]
+    assert_true(
+        approx_equal_tuple(rest_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
+        f"bodyRestRotate handedness flip wrong {rest_rot}",
+    )
+    print("✓ MMD rest pose converted to group space (Z-flip + handedness)")
+    return True
+
+
+def test_kinematic_anchor_ordering():
+    """Kinematic anchors are indexed in FOLLOW_BONE body order (not PMX order)."""
+    group, solver, joint_a, joint_b = _make_physics_scene()
+
+    # B0: dynamic, B1: follow-bone, B2: dynamic, B3: follow-bone.
+    cmds.pmxRigidBody(solver, name="Dyn0", bone=joint_a, physicsMode="physics")
+    cmds.pmxRigidBody(solver, name="Kin1", bone=joint_a, physicsMode="followBone")
+    cmds.pmxRigidBody(solver, name="Dyn2", bone=joint_a, physicsMode="physics")
+    cmds.pmxRigidBody(solver, name="Kin3", bone=joint_b, physicsMode="followBone")
+
+    # Two kinematic bodies -> two anchors; anchor[0] is the FIRST follow-bone
+    # body (joint_a), anchor[1] is the second (joint_b).
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.anchorWorldMatrix", size=True)), 2, "anchor count"
+    )
+    srcs0 = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
+    assert_true(
+        any(joint_a in src for src in srcs0),
+        f"anchor[0] not fed by joint_a ({srcs0})",
+    )
+    srcs1 = cmds.listConnections(f"{solver}.anchorWorldMatrix[1]", source=True) or []
+    assert_true(
+        any(joint_b in src for src in srcs1),
+        f"anchor[1] not fed by joint_b ({srcs1})",
+    )
+    # Both anchors share the single group inverse (connected once).
+    gsrcs = cmds.listConnections(f"{solver}.groupInverseWorldMatrix", source=True) or []
+    assert_true(
+        any(group in src for src in gsrcs),
+        f"groupInverseWorldMatrix not fed by group ({gsrcs})",
+    )
+    print("✓ kinematic anchors indexed in FOLLOW_BONE body order")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
@@ -459,4 +627,9 @@ _TESTS = [
     ("Model root resolution", test_model_root_resolution),
     ("Enum fields exposed", test_enum_fields_exposed),
     ("Body mask group toggles", test_body_mask_group_toggles),
+    ("Wiring field defaults", test_wiring_field_defaults),
+    ("Write-back offset baked", test_write_back_offset_baked),
+    ("Shape size verbatim per collider", test_shape_size_verbatim_per_collider),
+    ("Rest pose conversion", test_rest_pose_conversion),
+    ("Kinematic anchor ordering", test_kinematic_anchor_ordering),
 ]

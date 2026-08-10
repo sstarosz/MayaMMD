@@ -21,7 +21,7 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
-#include "maya/cmds/rigid_body_cmd.h"
+#include "maya/cmds/rigid_body_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
 #include "maya/nodes/physics_node.h"
 #include "version.hpp"

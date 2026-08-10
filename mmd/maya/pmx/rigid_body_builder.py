@@ -3,26 +3,24 @@ rigid_body_builder.py — rigid bodies for PMX models.
 
 Creates the native ``pmxPhysicsNode`` (embedded Bullet) for a PMX model.
 
-MILESTONE (this PR): one EMPTY ``pmxPhysicsNode`` per model — the node and
-its ``{model}_Physics`` group are created, and gravity is set.  The node's
-``bodies`` / ``joints`` compound arrays are still empty: they are populated
-through the native ``pmxRigidBody`` / ``pmxRigidBodyConstraint`` commands (a
-later PR), which also connect the group's world inverse once into the single
-``groupInverseWorldMatrix`` input, wire the kinematic anchors and the Phase-3
-direct write-back into the related joints, and set each body's
-``bodyShapeSize`` (PMX shape_size verbatim).  The node's ``time`` input is
-therefore NOT connected yet — with empty bodies the solver has nothing to
-step, and a ``time`` connection would make compute() fail every frame.
+MILESTONE (this PR): the ``{model}_Physics`` group, one ``pmxPhysicsNode``
+per model, gravity, and the ``bodies`` compound array POPULATED through the
+native ``pmxRigidBody`` command — one entry per PMX rigid body (data + bone
+binding for FOLLOW_BONE bodies via the kinematic-anchor input).  SIMULATION
+IS DISABLED: the node's ``joints`` array is still empty (the native
+``pmxRigidBodyConstraint`` command lands in a later PR), the ``time`` input
+is NOT connected, and no write-back wiring happens — the bodies are present
+and inspectable, and the solver has nothing to step.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
 Bullet world from ``mmd/core``.  It is parented under the physics group at
 the origin, so the Bullet world runs in the group's local space — the same
 layout the full body population later fills in.
 
-Called from ``build_pmx_scene`` so every imported model gets its empty node.
-The scene is the source of truth: the solver node name is stamped on the
-model root (``pmxPhysicsNode`` string attribute) so discovery can find it
-directly.
+Called from ``build_pmx_scene`` so every imported model gets its node with
+bodies.  The scene is the source of truth: the solver node name is stamped
+on the model root (``pmxPhysicsNode`` string attribute) so discovery can
+find it directly.
 
 This module is part of the mmd.maya.pmx package and runs inside Autodesk Maya
 (requires maya.api.OpenMaya, maya.cmds).
@@ -36,7 +34,7 @@ from typing import Optional, Sequence
 import maya.api.OpenMaya as om
 import maya.cmds as cmds
 
-from mmd.core.data_types import PmxModel
+from mmd.core.data_types import PhysicsMode, PmxModel, ShapeType
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
@@ -47,6 +45,24 @@ log = logging.getLogger(__name__)
 # ===========================================================================
 
 _NODE_TYPE = "pmxPhysicsNode"
+
+# PMX shape -> pmxRigidBody -shape name (the native command owns the enum).
+# Keyed by enum VALUE (int), not the enum class: mayapy can load mmd.core twice
+# (the plugin's sys.path insert uses a different path spelling than the test
+# runner), which produces two distinct ShapeType/PhysicsMode classes that are
+# not hash-equal — int keys are immune to that.
+_COLLIDER_NAME: dict[int, str] = {
+    ShapeType.SPHERE.value: "sphere",
+    ShapeType.BOX.value: "box",
+    ShapeType.CAPSULE.value: "capsule",
+}
+
+# PMX physics mode -> pmxRigidBody -physicsMode name.
+_PHYSICS_MODE_NAME: dict[int, str] = {
+    PhysicsMode.FOLLOW_BONE.value: "followBone",
+    PhysicsMode.PHYSICS.value: "physics",
+    PhysicsMode.PHYSICS_BONE.value: "physicsBone",
+}
 
 # Gravity — MMD's physics engine uses exactly -9.8 (Bullet's default) in the
 # model's own unit scale.  We must match that: using -98 (a 10x guess) made
@@ -91,12 +107,11 @@ def _create_physics_solver(
     the origin, so the Bullet world runs in the group's local space.
 
     NOTE: ``time1.outTime`` is intentionally NOT connected yet — the node's
-    bodies/joints arrays are empty until the native ``pmxRigidBody`` /
-    ``pmxRigidBodyConstraint`` commands land, and a ``time`` connection would
-    make compute() fail every frame.  The full builder (rigid-body commands
-    PR) connects it together with the body population, connects the physics
-    group's world inverse once into ``groupInverseWorldMatrix``, and fills
-    ``bodyShapeSize`` (PMX shape_size verbatim) per body.
+    ``joints`` array is empty until the native ``pmxRigidBodyConstraint``
+    command lands, and a ``time`` connection would make compute() fail every
+    frame.  The full builder (constraint-command PR) connects it together with
+    the joint population, connects the physics group's world inverse once into
+    ``groupInverseWorldMatrix``, and wires the Phase-3 write-back.
     """
     solver_name = name_registry.get_physics_solver_name()
     if parent_group:
@@ -107,6 +122,72 @@ def _create_physics_solver(
     return node
 
 
+def _joint_names_for(joints: Sequence[om.MObject]) -> dict[int, str]:
+    """Map PMX bone index -> full joint path name (for body->bone bindings).
+
+    ``joints`` is the list of joint MObjects in PMX bone order produced by the
+    bone builder; null entries (bones that failed to create) are skipped.
+    """
+    names: dict[int, str] = {}
+    for b_idx, j_obj in enumerate(joints):
+        if not j_obj.isNull():
+            try:
+                names[b_idx] = om.MFnDagNode(j_obj).fullPathName()
+            except Exception as e:
+                log.debug("Could not resolve joint %d path: %s", b_idx, e)
+    return names
+
+
+def _populate_rigid_bodies(
+    node: str, pmx_data: PmxModel, joint_names: dict[int, str]
+) -> None:
+    """Append one body per PMX rigid body through the native ``pmxRigidBody`` command.
+
+    Data + bone binding only — SIMULATION IS DISABLED (no write-back, no
+    constraints, no time connection).  Bodies are appended in PMX order so the
+    body index matches the PMX rigid-body index that the constraint command
+    (later PR) references.  FOLLOW_BONE bodies get their kinematic-anchor
+    input here; dynamic bodies are data-only.
+    """
+    for rb_idx, body in enumerate(pmx_data.rigid_bodies):
+        size = body.shape_size
+        bone = ""
+        if body.related_bone_index >= 0 and body.related_bone_index in joint_names:
+            bone = joint_names[body.related_bone_index]
+        try:
+            cmds.pmxRigidBody(
+                node,
+                name=body.name_local or "",
+                nameUniversal=body.name_universal or "",
+                bone=bone,
+                shape=_COLLIDER_NAME.get(body.shape.value, "sphere"),
+                size=(size.x, size.y, size.z),
+                position=(
+                    body.shape_position.x,
+                    body.shape_position.y,
+                    body.shape_position.z,
+                ),
+                rotation=(
+                    body.shape_rotation.x,
+                    body.shape_rotation.y,
+                    body.shape_rotation.z,
+                ),
+                mass=body.mass,
+                linearDamping=body.move_attenuation,
+                angularDamping=body.rotation_damping,
+                friction=body.friction_force,
+                restitution=body.repulsion,
+                group=body.group_id,
+                # The PMX non_collision_group field IS the "collides with"
+                # mask (bit i set = the body collides with group i) — MMD feeds
+                # it to Bullet directly.  Use it verbatim; do NOT invert.
+                mask=body.non_collision_group & 0xFFFF,
+                physicsMode=_PHYSICS_MODE_NAME.get(body.physics_mode.value, "physics"),
+            )
+        except Exception as exc:
+            log.warning("Could not create body %d: %s", rb_idx, exc)
+
+
 def create_physics_from_pmx_data(
     pmx_data: PmxModel,
     joints: Sequence[om.MObject],
@@ -115,18 +196,19 @@ def create_physics_from_pmx_data(
 ) -> Optional[str]:
     """Create the physics graph for a PMX model (no in-memory handle).
 
-    MILESTONE: creates the ``{model}_Physics`` group and one EMPTY
-    ``pmxPhysicsNode`` solver under it — per model.  The ``bodies`` /
-    ``joints`` arrays are populated through the native ``pmxRigidBody`` /
-    ``pmxRigidBodyConstraint`` commands in a later PR, which also wires the
-    kinematic anchors, the write-back into the joints and the ``time``
-    connection.
+    MILESTONE: creates the ``{model}_Physics`` group and one ``pmxPhysicsNode``
+    solver under it — per model — and POPULATES the ``bodies`` array through
+    the native ``pmxRigidBody`` command (one body per PMX rigid body, in PMX
+    order).  The ``joints`` array is still empty (the native
+    ``pmxRigidBodyConstraint`` command lands in a later PR), the ``time``
+    input is NOT connected, and there is no write-back wiring — the bodies are
+    present and inspectable, but the solver has nothing to step.
 
     Args:
-        pmx_data:            Parsed PMX model (bodies/joints used by the
-                             full builder in the rigid-body commands PR).
+        pmx_data:            Parsed PMX model (rigid bodies used here; joints
+                             used by the full builder in a later PR).
         joints:              Joint MObjects in PMX bone order (from bone
-                             builder; used by the full builder).
+                             builder; used to bind FOLLOW_BONE bodies).
         name_registry:       Naming manager for unique names.
         root_transform_obj:  MObject the physics group is parented under.
 
@@ -138,7 +220,7 @@ def create_physics_from_pmx_data(
     # The solver is a locator shape parented under the physics group — its
     # object space is the group's local space, which is the Bullet world frame.
     try:
-        return _create_physics_solver(name_registry, parent_group=group)
+        node = _create_physics_solver(name_registry, parent_group=group)
     except Exception as e:  # pragma: no cover - Maya-side failure path
         log.warning(
             "Could not create physics node for %s: %s",
@@ -146,3 +228,6 @@ def create_physics_from_pmx_data(
             e,
         )
         return None
+    joint_names = _joint_names_for(joints)
+    _populate_rigid_bodies(node, pmx_data, joint_names)
+    return node
