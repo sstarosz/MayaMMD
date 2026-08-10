@@ -432,9 +432,8 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
     matrix feeds ``groupWorldMatrix``, dynamic bodies carry their write-back
     parent body index and scrub-back reset anchor, and the node's
     ``outTranslate``/``outRotate`` connect STRAIGHT into the related joints
-    (rotation-only for PHYSICS_BONE).  The DG ``parentInverseMatrix``
-    fallback is used ONLY when the parent bone has no rigid body (no feedback
-    cycle).
+    (rotation-only for PHYSICS_BONE).  Bodies whose parent bone has no rigid
+    body are left UNDRIVEN (the DG ``parentInverseMatrix`` fallback is gone).
     """
     _group, solver = _find_physics_group_and_solver(maya_pmx_data)
     assert_true(solver is not None, "No physics solver")
@@ -448,7 +447,8 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
         cmds.isConnected("time1.outTime", f"{solver}.time"),
         "node.time is not connected (simulation not time-driven)",
     )
-    # Group world matrix for the DG-fallback write-back.
+    # Group world matrix (the node derives the group inverse for the
+    # kinematic anchors).
     assert_true(
         bool(cmds.listConnections(f"{solver}.groupWorldMatrix", source=True) or []),
         "groupWorldMatrix not connected",
@@ -461,7 +461,7 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
 
     dynamic = 0
     parent_body = 0
-    dg_fallback = 0
+    no_parent_body = 0
     out_translate = 0
     for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
         if rb.physics_mode.value == follow_bone or rb.related_bone_index < 0:
@@ -479,50 +479,55 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
         assert_eq(actual_pbi, expected_pbi, f"body {rb_idx} bodyParentBodyIndex")
         if expected_pbi >= 0:
             parent_body += 1
-            # No DG parent-inverse connection when the parent has a body —
-            # that connection created the feedback cycle that exploded the sim.
-            assert_true(
-                not cmds.listConnections(f"{solver}.bodyParentInverseMatrix[{rb_idx}]"),
-                f"body {rb_idx} has a DG parentInverse fallback despite a parent body",
-            )
-        else:
-            dg_fallback += 1
-            assert_true(
-                bool(
-                    cmds.listConnections(f"{solver}.bodyParentInverseMatrix[{rb_idx}]")
-                ),
-                f"body {rb_idx} missing the DG parentInverse fallback",
-            )
-        # Write-back outputs reach the joint (rotation always; translation
-        # except PHYSICS_BONE which is rotation-only).  The node's outputs are
-        # unit-typed compounds (kAngle/kDistance) connected DIRECTLY to the
-        # joint attrs — the destination must be the joint itself, never a
-        # unitConversion (the bone builder's own IK conversions are separate).
-        rot_dests = (
-            cmds.listConnections(f"{solver}.outRotate[{rb_idx}]", destination=True)
-            or []
-        )
-        assert_true(
-            bool(rot_dests) and all("unitConversion" not in str(d) for d in rot_dests),
-            f"outRotate[{rb_idx}] not connected directly to the joint",
-        )
-        if rb.physics_mode.value != physics_bone:
-            tr_dests = (
-                cmds.listConnections(
-                    f"{solver}.outTranslate[{rb_idx}]", destination=True
-                )
+            # The node derives the parent inverse from the PARENT BODY's
+            # solved Bullet transform — no DG parent-inverse input exists.
+            # Write-back outputs reach the joint (rotation always; translation
+            # except PHYSICS_BONE which is rotation-only).  The node's outputs
+            # are unit-typed compounds (kAngle/kDistance) connected DIRECTLY
+            # to the joint attrs — the destination must be the joint itself,
+            # never a unitConversion (the bone builder's own IK conversions
+            # are separate).
+            rot_dests = (
+                cmds.listConnections(f"{solver}.outRotate[{rb_idx}]", destination=True)
                 or []
             )
             assert_true(
-                bool(tr_dests)
-                and all("unitConversion" not in str(d) for d in tr_dests),
-                f"outTranslate[{rb_idx}] not connected directly to the joint",
+                bool(rot_dests)
+                and all("unitConversion" not in str(d) for d in rot_dests),
+                f"outRotate[{rb_idx}] not connected directly to the joint",
             )
-            out_translate += 1
+            if rb.physics_mode.value != physics_bone:
+                tr_dests = (
+                    cmds.listConnections(
+                        f"{solver}.outTranslate[{rb_idx}]", destination=True
+                    )
+                    or []
+                )
+                assert_true(
+                    bool(tr_dests)
+                    and all("unitConversion" not in str(d) for d in tr_dests),
+                    f"outTranslate[{rb_idx}] not connected directly to the joint",
+                )
+                out_translate += 1
+            else:
+                tr_srcs = cmds.listConnections(f"{jpath}.translate", source=True) or []
+                assert_true(
+                    not tr_srcs, f"PHYSICS_BONE joint {jpath} translate should be free"
+                )
         else:
-            tr_srcs = cmds.listConnections(f"{jpath}.translate", source=True) or []
+            # No parent body -> the node cannot write back a joint-local pose
+            # (the old DG bodyParentInverseMatrix fallback is gone), so the
+            # joint must be left free.
+            no_parent_body += 1
             assert_true(
-                not tr_srcs, f"PHYSICS_BONE joint {jpath} translate should be free"
+                not cmds.listConnections(
+                    f"{solver}.outRotate[{rb_idx}]", destination=True
+                ),
+                f"body {rb_idx} outRotate connected without a parent body",
+            )
+            assert_true(
+                not cmds.listConnections(f"{jpath}.rotate", source=True),
+                f"joint {jpath} rotate driven without a parent body",
             )
     assert_true(dynamic > 0, "no dynamic body with a related joint to verify")
 
@@ -536,9 +541,9 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
     assert_true(reset_anchors > 0, "no scrub-back reset anchors were set")
 
     print(
-        f"PASS: sim wired — {dynamic} dynamic joints driven "
-        f"({out_translate} with translate), {parent_body} parent-body refs, "
-        f"{dg_fallback} DG fallbacks, {reset_anchors} reset anchors"
+        f"PASS: sim wired — {parent_body} driven joints "
+        f"({out_translate} with translate), {no_parent_body} no-parent-body "
+        f"undriven, {reset_anchors} reset anchors"
     )
     return True
 

@@ -7,10 +7,12 @@
  * default).
  *
  * ``-create`` is the single body-modification path (the PMX import loops it;
- * there is no Python wiring anymore).  SIMULATION IS DISABLED: create writes
- * the body DATA and binds FOLLOW_BONE bodies to their related joint through
- * the kinematic-anchor input; dynamic bodies are data-only (no write-back,
- * no stepping).
+ * there is no Python wiring anymore).  Create writes the body DATA, binds
+ * FOLLOW_BONE bodies to their related joint through the kinematic-anchor
+ * input, and bakes the write-back K offset (``bodyWriteBackOffset``) for
+ * every body; the Python builder connects the solver (time + group world
+ * matrix) and wires outTranslate/outRotate into the joints after every body
+ * and joint exist.
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -462,15 +464,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // derives the parent joint's world from K[parentBodyIndex]
     // (M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the SAME
     // constant as the parent body's K, for kinematic AND dynamic parents), so
-    // no separate parent-offset array is needed.  bodyParentInverseMatrix
-    // starts as identity; Python connects the DG fallback later, ONLY for
-    // bodies whose parent bone has no rigid body (that parent is never
-    // node-driven, so it cannot feed back).
+    // no separate parent-offset array is needed.  (The old
+    // bodyParentInverseMatrix DG fallback is gone — bodies whose parent bone
+    // has no rigid body are not written back.)
     {
         MMatrix k;
         k.setToIdentity();
-        MMatrix identity;
-        identity.setToIdentity();
         if (jointPath.isValid())
         {
             // K = jointRestWorld * bodyRestWorld^-1 with the body's DIRECT
@@ -489,10 +488,6 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
                 .elementByLogicalIndex(n),
             k);
-        mmd::maya::setPlugMatrixValue(
-            fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
-                .elementByLogicalIndex(n),
-            identity);
     }
 
     outIndex = n;

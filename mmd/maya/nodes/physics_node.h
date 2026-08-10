@@ -154,9 +154,6 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aGroupWorldMatrix; // physics group's world matrix (single)
     static MObject
         aBodyWriteBackOffset; // matrix array, body-indexed: K = jointRestWorld * bodyRestWorld^-1
-    static MObject
-        aBodyParentInverseMatrix; // matrix array, body-indexed: related joint's parentInverseMatrix
-                                  // (DG fallback, no-body parent only)
     // Phase 3 cycle fix: the parent inverse for the write-back is derived from
     // the PARENT BODY's solved Bullet transform instead of the DG
     // (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1).  This removes

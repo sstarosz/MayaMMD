@@ -152,17 +152,17 @@ def _populate_rigid_bodies(
 ) -> int:
     """Append one body per PMX rigid body through the native ``pmxRigidBody`` command.
 
-    Data + bone binding only — SIMULATION IS DISABLED (no write-back, no
-    time connection).  Bodies are appended in PMX order so the body index
+    Data + bone binding.  Bodies are appended in PMX order so the body index
     matches the PMX rigid-body index that the constraint command references.
     FOLLOW_BONE bodies get their kinematic-anchor input here; dynamic bodies
-    are data-only.
+    with a related joint get their write-back K offset (``bodyWriteBackOffset``
+    = jointRestWorld * bodyRestWorld^-1) baked by the command.  The solver is
+    wired and time-driven later (see :func:`_wire_dynamic_write_back`).
 
     Returns the number of bodies successfully appended — the caller must
     compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every
     later PMX body index silently shifts (body i+1 lands at Maya index i-1),
-    so the constraints and the future write-back would reference WRONG
-    bodies.
+    so the constraints and the write-back would reference WRONG bodies.
     """
     created = 0
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
@@ -214,7 +214,8 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
     ``rigid_body_index_b``), so this MUST run after ``_populate_rigid_bodies``
     (the command validates the referenced body indices against the node's
     current body count).  Joints are appended in PMX order so the joint index
-    matches the PMX joint index.  Data only — SIMULATION IS DISABLED.
+    matches the PMX joint index.  Data only — the solver is wired and stepped
+    later (see :func:`_wire_dynamic_write_back`).
     """
     for jt_idx, joint in enumerate(pmx_data.joints):
         try:
@@ -269,12 +270,12 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
 #   K        = jointRestWorld * bodyRestWorld^-1              (bodyWriteBackOffset)
 #   M_parent = K[parentBodyIndex]                             (the same constant as the
 #               parent body's K — no separate parent-offset array)
-# FALLBACK (parent bone has no body — that parent is never node-driven):
-#   boneLocal = K * bodyLocal * groupWorld * jointParentInverse
 #
 # K is baked by the native pmxRigidBody -create command (it knows the related
 # joint and the body rest); this module only resolves the parent body index,
-# the DG fallback, the scrub-back reset anchors and the output connections.
+# the scrub-back reset anchors and the output connections.  Bodies whose
+# parent bone has no rigid body are left undriven (the old DG fallback is
+# gone).
 # ---------------------------------------------------------------------------
 
 
@@ -339,10 +340,8 @@ def _wire_dynamic_write_back(
       node derives the parent joint's world from the PARENT BODY's solved
       Bullet transform (M_parent = K[parentBodyIndex]) with no DG dependency on
       node-driven parent joints (that was the feedback cycle that exploded the
-      sim);
-    * the DG ``joint.parentInverseMatrix -> bodyParentInverseMatrix`` fallback
-      ONLY for bodies whose parent bone has no body (that parent is never
-      node-driven);
+      sim).  Bodies whose parent bone has no rigid body are left UNDRIVEN (the
+      old DG ``bodyParentInverseMatrix`` fallback is gone);
     * ``bodies[i].bodyResetAnchorIndex`` for scrub-back rewind (nearest
       kinematic ancestor);
     * ``outTranslate``/``outRotate`` -> joint.translate/rotate — LAST, so the
@@ -352,8 +351,8 @@ def _wire_dynamic_write_back(
     follow_bone = PhysicsMode.FOLLOW_BONE.value
     physics_bone = PhysicsMode.PHYSICS_BONE.value
 
-    # The node needs the physics group's world matrix for the DG-fallback
-    # write-back (the primary path cancels groupWorld).
+    # The node derives the physics group's INVERSE from groupWorldMatrix for
+    # the kinematic anchors; the write-back primary path cancels groupWorld.
     try:
         cmds.connectAttr(
             f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix", force=True
@@ -368,8 +367,12 @@ def _wire_dynamic_write_back(
         if body.related_bone_index >= 0 and body.related_bone_index in joint_names:
             bone_of_body.setdefault(body.related_bone_index, rb_idx)
 
-    # Parent body resolution + DG fallback (both need the WHOLE model: the
-    # parent body may be created later in the array).
+    # Parent body resolution (needs the WHOLE model: the parent body may be
+    # created later in the array).  A body whose parent bone has no rigid body
+    # (parent_rb = -1) is left UNDRIVEN — the old DG
+    # ``bodyParentInverseMatrix`` fallback is gone, so the node cannot write a
+    # joint-local pose for it.
+    parent_body: dict[int, int] = {}
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode.value == follow_bone:
             continue
@@ -382,20 +385,8 @@ def _wire_dynamic_write_back(
             and pmx_data.bones[bone_idx].parentIndex >= 0
         ):
             parent_rb = bone_of_body.get(pmx_data.bones[bone_idx].parentIndex, -1)
+        parent_body[rb_idx] = parent_rb
         cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex", int(parent_rb))
-        if parent_rb < 0:
-            # Parent bone has no rigid body: DG parent-inverse fallback (that
-            # parent is never node-driven, so it cannot feed back).
-            try:
-                cmds.connectAttr(
-                    f"{joint_names[bone_idx]}.parentInverseMatrix[0]",
-                    f"{node}.bodyParentInverseMatrix[{rb_idx}]",
-                    force=True,
-                )
-            except Exception as e:
-                log.warning(
-                    "Could not connect parent inverse for body %d: %s", rb_idx, e
-                )
 
     # Scrub-back reset anchors (dynamic body -> nearest kinematic ancestor).
     for rb_idx, anchor_idx in _compute_reset_anchor_map(
@@ -404,13 +395,18 @@ def _wire_dynamic_write_back(
         cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyResetAnchorIndex", int(anchor_idx))
 
     # Solved pose -> joints LAST (triggers the first evaluation, so every
-    # input above is already in place).
+    # input above is already in place).  Only bodies with a parent body are
+    # driven — the node derives the parent inverse from the PARENT BODY's
+    # solved transform, and the old DG fallback for no-parent-body bodies is
+    # gone, so those joints stay at their animated pose.
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode.value == follow_bone:
             continue
         bone_idx = body.related_bone_index
         if bone_idx < 0 or bone_idx not in joint_names:
             continue
+        if parent_body.get(rb_idx, -1) < 0:
+            continue  # no parent body -> node cannot write back; leave free
         jpath = joint_names[bone_idx]
         try:
             # Compound-to-compound connections: the node's outTranslate[i] /

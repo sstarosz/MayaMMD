@@ -31,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   populates a `pmxPhysicsNode`'s `bodies` array with PMX rigid-body data at
   import time. For every body it writes `bodyShapeSize`, `bodyPhysicsMode`,
   `bodyGroupId`/`bodyMask`, mass/damping/friction/restitution, and the
-  kinematic anchor data (`bodyWriteBackOffset`, `bodyParentInverseMatrix`,
-  `bodyResetAnchorIndex`, `bodyParentBodyIndex`); it also connects the
+  kinematic anchor data (`bodyWriteBackOffset`, `bodyResetAnchorIndex`,
+  `bodyParentBodyIndex`); it also connects the
   physics group's `worldMatrix[0]` to the solver's `groupWorldMatrix`. The
   PMX importer now calls it for each rigid body (matching PMX
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
@@ -65,10 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - After every body and joint exists, each dynamic body's write-back wiring
     is resolved: `bodyParentBodyIndex` (the parent bone's rigid body, so the
     node derives the parent inverse from the PARENT BODY's solved Bullet
-    transform — M_parent = K[parentBodyIndex], no DG feedback cycle), the
-    `joint.parentInverseMatrix → bodyParentInverseMatrix` DG fallback ONLY
-    when the parent bone has no rigid body, and `bodyResetAnchorIndex`
-    (nearest kinematic ancestor) for scrub-back rewinds.
+    transform — M_parent = K[parentBodyIndex], no DG feedback cycle) and
+    `bodyResetAnchorIndex` (nearest kinematic ancestor) for scrub-back
+    rewinds.  Dynamic bodies whose parent bone has no rigid body are left
+    UNDRIVEN — the old `joint.parentInverseMatrix → bodyParentInverseMatrix`
+    DG fallback (and the `bodyParentInverseMatrix` attribute) is gone.
   - `outTranslate`/`outRotate` connect STRAIGHT into the related joints
     (rotation-only for PHYSICS_BONE).  The output children are **unit-typed**
     (`MFnUnitAttribute` `kDistance`/`kAngle`, exactly like

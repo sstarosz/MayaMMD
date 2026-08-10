@@ -146,7 +146,6 @@ def test_attribute_surface_and_defaults():
         "anchorWorldMatrix",
         "groupWorldMatrix",
         "bodyWriteBackOffset",
-        "bodyParentInverseMatrix",
         "bodies",
         "joints",
         "outTranslate",

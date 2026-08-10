@@ -46,9 +46,9 @@
  *                                   magnitude, invariant under the
  *                                   reflection)
  *
- * SIMULATION IS DISABLED: create writes the joint DATA so the node holds the
- * full constraint set; no solver stepping happens here (the ``time`` input
- * is connected by the Python builder once bodies AND joints exist).
+ * Create writes the joint DATA so the node holds the full constraint set;
+ * no solver stepping happens here (the ``time`` input is connected by the
+ * Python builder once bodies AND joints exist).
  * Edit/query/remove and batch create are later steps.
  */
 

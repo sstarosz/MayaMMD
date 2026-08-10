@@ -44,11 +44,12 @@
  *                                  bodies[i].bodyMaskGroup0..15).  Default 0xFFFF.
  *         -physicsMode <followBone|physics|physicsBone>
  *
- * SIMULATION IS DISABLED: create writes the body DATA and binds FOLLOW_BONE
- * bodies to their related joint via the kinematic-anchor input (so the
- * collider lives on the correct bone and displays from its rest pose).  No
- * write-back wiring and no solver stepping — dynamic bodies are data-only
- * for now.  Edit/query/remove and batch create are later steps.
+ * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
+ * joint via the kinematic-anchor input (so the collider lives on the correct
+ * bone and displays from its rest pose), and bakes the write-back K offset
+ * (``bodyWriteBackOffset``) for every body.  It does NOT connect the solver
+ * or wire the write-back outputs — the Python builder does that after every
+ * body and joint exist.  Edit/query/remove and batch create are later steps.
  */
 
 #pragma once

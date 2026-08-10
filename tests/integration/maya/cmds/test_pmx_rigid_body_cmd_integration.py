@@ -448,12 +448,7 @@ def test_wiring_field_defaults():
     assert_eq(int(cmds.getAttr(f"{base}.bodyParentBodyIndex")), -1, "parentBody != -1")
     # Enabled by default.
     assert_eq(bool(cmds.getAttr(f"{base}.bodyEnabled")), True, "bodyEnabled != True")
-    # The DG-fallback parent inverse starts as identity.
-    pinv = cmds.getAttr(f"{solver}.bodyParentInverseMatrix[0]")
-    assert_true(pinv is not None and len(pinv) == 16, "bodyParentInverseMatrix not set")
-    print(
-        "✓ wiring fields default inert (resetAnchor -1, parent -1, enabled, identity)"
-    )
+    print("✓ wiring fields default inert (resetAnchor -1, parent -1, enabled)")
     return True
 
 

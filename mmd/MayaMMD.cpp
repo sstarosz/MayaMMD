@@ -104,8 +104,8 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
     //     OpenMaya's lazy MSyntax creation in mayapy 2026.  Create mode only
-    //     for now — SIMULATION IS DISABLED (body data + kinematic anchors;
-    //     no write-back wiring or solver stepping yet).
+    //     for now — body data + kinematic anchors + the baked write-back K
+    //     offset; the Python builder wires the solver and the outputs.
     {
         stat = plugin.registerCommand(RigidBodyCmd::kName, RigidBodyCmd::creator,
                                       RigidBodyCmd::syntaxCreator);
@@ -114,9 +114,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
         MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
 
     // 1d. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
-    //     Same C++ rationale as pmxRigidBody.  Create mode only — SIMULATION
-    //     IS DISABLED (writes the joint DATA; the node holds the full
-    //     constraint set but nothing steps yet).
+    //     Same C++ rationale as pmxRigidBody.  Create mode only — writes the
+    //     joint DATA; the node holds the full constraint set and the Python
+    //     builder wires it into the time-driven solver.
     {
         stat =
             plugin.registerCommand(RigidBodyConstraintCmd::kName, RigidBodyConstraintCmd::creator,

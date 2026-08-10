@@ -85,7 +85,6 @@ MObject PhysicsNode::aConfigVersion;
 MObject PhysicsNode::aAnchorWorldMatrix;
 MObject PhysicsNode::aGroupWorldMatrix;
 MObject PhysicsNode::aBodyWriteBackOffset;
-MObject PhysicsNode::aBodyParentInverseMatrix;
 
 MObject PhysicsNode::aBodies;
 MObject PhysicsNode::aBodyEnabled;
@@ -381,15 +380,14 @@ MStatus PhysicsNode::initialize()
     // --- write-back inputs ---
     // The physics group's world matrix (single).  The node derives the group
     // inverse internally (it is the exact inverse, so a separate
-    // groupInverseWorldMatrix input would be redundant) — used both to put the
-    // kinematic anchors in the group's local space and by the DG-fallback
-    // write-back path.
+    // groupInverseWorldMatrix input would be redundant) — used to put the
+    // kinematic anchors in the group's local space.
     mAttr.setKeyable(false);
 
     // Phase 3 direct write-back: the physics group's world matrix (single) and
-    // the per-dynamic-body baked offset + related-joint parent inverse.  These
-    // are TOP-LEVEL matrix arrays (compound matrix children are awkward), so
-    // the node reads them by body index in writeOutputs.
+    // the per-body baked write-back offset.  These are TOP-LEVEL matrix
+    // arrays (compound matrix children are awkward), so the node reads them
+    // by body index in writeOutputs.
     aGroupWorldMatrix = mAttr.create("groupWorldMatrix", "gwm", MFnMatrixAttribute::kDouble, &stat);
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
@@ -397,14 +395,6 @@ MStatus PhysicsNode::initialize()
 
     aBodyWriteBackOffset =
         mAttr.create("bodyWriteBackOffset", "bwo", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
-    mAttr.setKeyable(false);
-
-    aBodyParentInverseMatrix =
-        mAttr.create("bodyParentInverseMatrix", "bpim", MFnMatrixAttribute::kDouble, &stat);
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
     mAttr.setArray(true);
@@ -519,7 +509,8 @@ MStatus PhysicsNode::initialize()
     // Derived / wiring fields (no PMX JSON counterpart).
     // Rigid-body index of the related joint's PARENT joint's body (the
     // write-back derives the parent inverse from that body's solved Bullet
-    // transform); -1 = parent bone has no body (DG parentInverse fallback).
+    // transform); -1 = parent bone has no rigid body (no write-back for that
+    // body — the old DG parentInverse fallback is gone).
     aBodyParentBodyIndex =
         nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
     MMD_CHECK_MSTATUS(stat);
@@ -707,8 +698,6 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyWriteBackOffset);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyParentInverseMatrix);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodies);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJoints);
@@ -757,10 +746,6 @@ MStatus PhysicsNode::initialize()
     stat = attributeAffects(aBodyWriteBackOffset, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyWriteBackOffset, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyParentInverseMatrix, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyParentInverseMatrix, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
 
     return MS::kSuccess;
@@ -927,8 +912,6 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
     // baked constants; the parent-inverse matrices vary every frame).
     MArrayDataHandle wbOffset = dataBlock.inputArrayValue(aBodyWriteBackOffset);
     h = hashValue(h, wbOffset.elementCount());
-    MArrayDataHandle wbParentInv = dataBlock.inputArrayValue(aBodyParentInverseMatrix);
-    h = hashValue(h, wbParentInv.elementCount());
 
     return h;
 }
@@ -1055,8 +1038,7 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 {
     // Phase 3 direct write-back: the node outputs the JOINT-LOCAL pose so
     // Python can connect outTranslate/outRotate straight into the joints (no
-    // guide transforms, no parent/orientConstraints).  The primary transform
-    // is
+    // guide transforms, no parent/orientConstraints).  The transform is
     //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
     // where K = jointRestWorld * bodyRestWorld^-1 (baked by pmxRigidBody
     // -create) and the parent inverse is derived from the PARENT BODY's
@@ -1068,20 +1050,12 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
     // is EXACT at rest and invariant when the whole model is moved.  Deriving
     // the parent inverse from the parent BODY (not the DG joint matrix) is
     // what keeps the write-back free of the DG feedback cycle that exploded
-    // the simulation when a parent joint was itself node-driven.  For bodies
-    // whose parent bone has no body (and for old scenes) a DG
-    // parent-inverse fallback is used — that parent is never node-driven, so
-    // it cannot feed back.
-    MMatrix groupWorld;
-    bool haveGroupWorld = false;
-    MPlug gwPlug(thisMObject(), aGroupWorldMatrix);
-    if (gwPlug.isConnected())
-    {
-        groupWorld = dataBlock.inputValue(aGroupWorldMatrix).asMatrix();
-        haveGroupWorld = true;
-    }
+    // the simulation when a parent joint was itself node-driven.  Bodies whose
+    // parent bone has no rigid body (bodyParentBodyIndex = -1) get NO
+    // write-back — the old `bodyParentInverseMatrix` DG fallback is gone, so
+    // their output stays the raw solved group-space pose (Python leaves those
+    // joints unconnected, at their animated pose).
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
-    MArrayDataHandle parentInvHandle = dataBlock.inputArrayValue(aBodyParentInverseMatrix);
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
     // (kinematic bodies get no output element; reading them yields defaults).
@@ -1148,41 +1122,11 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
                 }
             }
         }
-        else if (haveGroupWorld &&
-                 offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
-        {
-            // FALLBACK (parent bone has no rigid body, or an old scene): the
-            // original formula with the DG parent-inverse input.  Only used
-            // when the parent joint is NOT node-driven (its bone has no body
-            // and no dynamic ancestor), so it cannot feed back into the node.
-            MMatrix k = offsetHandle.inputValue().asMatrix();
-            Matrix4 kRow;
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c)
-                    kRow(r, c) = k(r, c);
-            Matrix4 tmp;
-            rowMatrixMultiply(kRow, outRow, tmp);
-            Matrix4 gw;
-            for (int r = 0; r < 4; ++r)
-                for (int c = 0; c < 4; ++c)
-                    gw(r, c) = groupWorld(r, c);
-            Matrix4 tmp2;
-            rowMatrixMultiply(tmp, gw, tmp2);
-            if (parentInvHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
-            {
-                MMatrix pi = parentInvHandle.inputValue().asMatrix();
-                Matrix4 piRow;
-                for (int r = 0; r < 4; ++r)
-                    for (int c = 0; c < 4; ++c)
-                        piRow(r, c) = pi(r, c);
-                rowMatrixMultiply(tmp2, piRow, outRow);
-            }
-            else
-            {
-                outRow = tmp2;
-            }
-        }
 
+        // Bodies without a parent body (parentIdx < 0) get NO write-back:
+        // outRow stays the raw solved group-space pose and Python leaves the
+        // joint unconnected (the old `bodyParentInverseMatrix` DG fallback is
+        // gone).
         const double ox = outRow(3, 0); // row-vector translation
         const double oy = outRow(3, 1);
         const double oz = outRow(3, 2);
