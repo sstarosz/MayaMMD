@@ -293,6 +293,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         group = parser.flagArgumentInt(kGroupFlag, 0);
     if (parser.isFlagSet(kMaskFlag))
         mask = parser.flagArgumentInt(kMaskFlag, 0) & 0xFFFF;
+    // PMX collision groups are 0..15 (the bodyGroupId attribute is a 16-field
+    // enum) — clamp so an out-of-range flag cannot write a broken enum value.
+    if (group < 0)
+        group = 0;
+    else if (group > 15)
+        group = 15;
 
     // PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
     // damping/friction match the import path exactly.
@@ -452,7 +458,14 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             mmd::maya::connectOrReplace(
                 jointWorldPlug, fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
                                     .elementByLogicalIndex(k));
-            const MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            // offset = bodyRestWorld * jointRestWorld^-1 with the body's
+            // DIRECT world rest pose (MMD Z-flip + handedness) — exactly like
+            // the write-back K bake below.  Do NOT round-trip through the
+            // group-space decomposition (matrixFromTR(localT, localR) *
+            // groupWorld): when the physics group carries scale, the euler
+            // decomposition drops it, so the anchor would sit off its rest
+            // pose (same breakage the K path documents).
+            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             const MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
             mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
@@ -461,7 +474,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         else
         {
             // No related joint: a static collider pinned at its rest pose.
-            const MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
+            // Pin the body's DIRECT world rest pose (world * groupInverse
+            // gives the group-space rest in the node) — not the round-tripped
+            // group-space decomposition, which drops group scale.
+            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             MMatrix identity;
             identity.setToIdentity();
             mmd::maya::setPlugMatrixValue(

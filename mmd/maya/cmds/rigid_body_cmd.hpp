@@ -37,7 +37,7 @@
  *         -angularDamping <double>
  *         -friction <double>
  *         -restitution <double>
- *         -group <int>
+ *         -group <int>             PMX collision group 0..15 (clamped)
  *         -mask <int>              collide-with mask: bit i set = collides with
  *                                  group i (the PMX non_collision_group field
  *                                  stored verbatim; written into

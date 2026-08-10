@@ -680,6 +680,21 @@ def test_missing_solver_argument_rejected():
     return True
 
 
+def test_group_clamped():
+    """-group is clamped to the PMX 0..15 range."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    # Out-of-range values clamp to the enum bounds instead of writing garbage.
+    cmds.pmxRigidBody(solver, name="Low", group=-5, physicsMode="physics")
+    cmds.pmxRigidBody(solver, name="High", group=99, physicsMode="physics")
+    assert_eq(int(cmds.getAttr(f"{solver}.bodies[0].bodyGroupId")), 0, "group<0 -> 0")
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies[1].bodyGroupId")), 15, "group>15 -> 15"
+    )
+    print("✓ -group clamped to 0..15")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
@@ -705,4 +720,5 @@ _TESTS = [
     ("Query/edit rejected", test_query_edit_rejected),
     ("Invalid target rejected", test_invalid_target_rejected),
     ("Missing solver argument rejected", test_missing_solver_argument_rejected),
+    ("Group clamped", test_group_clamped),
 ]
