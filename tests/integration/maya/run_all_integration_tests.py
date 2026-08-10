@@ -347,9 +347,7 @@ TEST_SUITES: dict[str, SuiteInfo] = {
         dispatch_mode="vpd",
     ),
     # ── No-asset suites ─────────────────────────────────────────────
-    "node": SuiteInfo(
-        "BoneMorphNode Tests (No PMX)", get_node_tests, needs_model=False
-    ),
+    "node": SuiteInfo("Custom Nodes Tests (No PMX)", get_node_tests, needs_model=False),
     "ccd": SuiteInfo(
         "CCD IK Solver Node Tests (No PMX)", get_ccd_solver_tests, needs_model=False
     ),
