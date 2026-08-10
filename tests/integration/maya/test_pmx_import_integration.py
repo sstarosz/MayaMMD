@@ -7,13 +7,14 @@ and morph-specific tests are in test_pmx_morph_integration.py.
 """
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.api.OpenMayaAnim as oma  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
+import math
 
-from mmd.core.data_types import PmxModel  # noqa: E402
+import maya.api.OpenMaya as om
+import maya.api.OpenMayaAnim as oma
+from maya import cmds
 
-from tests.integration.test_helpers import (  # noqa: E402
+from mmd.core.data_types import PmxModel
+from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
     assert_true,
@@ -375,6 +376,277 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
 
 
 # ---------------------------------------------------------------------------
+# Physics simulation wiring + behavioural tests
+# ---------------------------------------------------------------------------
+
+
+def _find_physics_group_and_solver(maya_pmx_data):
+    """Return ``(physics_group_name, solver_name)`` or ``(None, None)``."""
+    root_obj = maya_pmx_data.root_obj
+    root_fn = om.MFnTransform(root_obj)
+    for i in range(root_fn.childCount()):
+        child = root_fn.child(i)
+        try:
+            child_fn = om.MFnTransform(child)
+        except Exception:
+            continue
+        if child_fn.name().endswith("_Physics"):
+            solvers = cmds.listRelatives(
+                child_fn.name(), children=True, type=_NODE_TYPE
+            )
+            if solvers:
+                return child_fn.name(), solvers[0]
+    return None, None
+
+
+def _joint_paths(maya_pmx_data) -> dict:
+    """PMX bone index -> full joint path (skips failed/null joints)."""
+    names: dict = {}
+    for b_idx, j_obj in enumerate(maya_pmx_data.joints):
+        if not j_obj.isNull():
+            try:
+                names[b_idx] = om.MFnDagNode(j_obj).fullPathName()
+            except Exception:
+                continue
+    return names
+
+
+def _step(node: str) -> None:
+    """Force a solver evaluation (demanding an output pulls compute())."""
+    cmds.dgdirty(node)
+    cmds.dgeval(f"{node}.outTranslate")
+
+
+def _root_joint(maya_pmx_data) -> str:
+    """Name of the model's root bone joint (drives the whole skeleton)."""
+    return om.MFnDagNode(maya_pmx_data.joints[0]).partialPathName()
+
+
+def _swing_root(maya_pmx_data, frame: int, degrees: float = 20.0) -> None:
+    """Rotate the root bone sinusoidally so the dynamic chains keep moving."""
+    angle = degrees * math.sin(math.radians(frame * 12.0))
+    root = _root_joint(maya_pmx_data)
+    cmds.setAttr(f"{root}.rotateZ", angle)
+    cmds.dgdirty(root)
+
+
+def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
+    """SIMULATION IS ENABLED: time-driven solver + Phase-3 write-back wiring.
+
+    The solver is connected to ``time1.outTime``, the physics group's world
+    matrix feeds ``groupWorldMatrix``, dynamic bodies carry their write-back
+    parent body index and scrub-back reset anchor, and the node's
+    ``outTranslate``/``outRotate`` connect STRAIGHT into the related joints
+    (rotation-only for PHYSICS_BONE).  The DG ``parentInverseMatrix``
+    fallback is used ONLY when the parent bone has no rigid body (no feedback
+    cycle).
+    """
+    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    assert_true(solver is not None, "No physics solver")
+    joint_names = _joint_paths(maya_pmx_data)
+
+    follow_bone = 0
+    physics_bone = 2
+
+    # Time-driven.
+    assert_true(
+        cmds.isConnected("time1.outTime", f"{solver}.time"),
+        "node.time is not connected (simulation not time-driven)",
+    )
+    # Group world matrix for the DG-fallback write-back.
+    assert_true(
+        bool(cmds.listConnections(f"{solver}.groupWorldMatrix", source=True) or []),
+        "groupWorldMatrix not connected",
+    )
+
+    bone_of_body: dict = {}
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.related_bone_index >= 0:
+            bone_of_body.setdefault(rb.related_bone_index, rb_idx)
+
+    dynamic = 0
+    parent_body = 0
+    dg_fallback = 0
+    out_translate = 0
+    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.physics_mode.value == follow_bone or rb.related_bone_index < 0:
+            continue
+        bone = rb.related_bone_index
+        jpath = joint_names.get(bone)
+        if not jpath:
+            continue
+        dynamic += 1
+        # Parent body index (M_parent = K[parentBodyIndex]).
+        expected_pbi = -1
+        if 0 <= bone < len(pmx_data.bones) and pmx_data.bones[bone].parentIndex >= 0:
+            expected_pbi = bone_of_body.get(pmx_data.bones[bone].parentIndex, -1)
+        actual_pbi = int(cmds.getAttr(f"{solver}.bodies[{rb_idx}].bodyParentBodyIndex"))
+        assert_eq(actual_pbi, expected_pbi, f"body {rb_idx} bodyParentBodyIndex")
+        if expected_pbi >= 0:
+            parent_body += 1
+            # No DG parent-inverse connection when the parent has a body —
+            # that connection created the feedback cycle that exploded the sim.
+            assert_true(
+                not cmds.listConnections(f"{solver}.bodyParentInverseMatrix[{rb_idx}]"),
+                f"body {rb_idx} has a DG parentInverse fallback despite a parent body",
+            )
+        else:
+            dg_fallback += 1
+            assert_true(
+                bool(
+                    cmds.listConnections(f"{solver}.bodyParentInverseMatrix[{rb_idx}]")
+                ),
+                f"body {rb_idx} missing the DG parentInverse fallback",
+            )
+        # Write-back outputs reach the joint (rotation always; translation
+        # except PHYSICS_BONE which is rotation-only).  Maya auto-inserts a
+        # unitConversion between the float3 output and the joint's angle
+        # attribute, so assert from the SOURCE side (outRotate[i] has a
+        # destination).
+        assert_true(
+            bool(
+                cmds.listConnections(
+                    f"{solver}.outRotate[{rb_idx}].outRotateValue", destination=True
+                )
+            ),
+            f"outRotate[{rb_idx}] not connected",
+        )
+        if rb.physics_mode.value != physics_bone:
+            assert_true(
+                bool(
+                    cmds.listConnections(
+                        f"{solver}.outTranslate[{rb_idx}].outTranslateValue",
+                        destination=True,
+                    )
+                ),
+                f"outTranslate[{rb_idx}] not connected",
+            )
+            out_translate += 1
+        else:
+            tr_srcs = cmds.listConnections(f"{jpath}.translate", source=True) or []
+            assert_true(
+                not tr_srcs, f"PHYSICS_BONE joint {jpath} translate should be free"
+            )
+    assert_true(dynamic > 0, "no dynamic body with a related joint to verify")
+
+    # Scrub-back reset anchors: at least one dynamic body has one.
+    reset_anchors = sum(
+        1
+        for rb_idx, rb in enumerate(pmx_data.rigid_bodies)
+        if rb.physics_mode.value != follow_bone
+        and int(cmds.getAttr(f"{solver}.bodies[{rb_idx}].bodyResetAnchorIndex")) >= 0
+    )
+    assert_true(reset_anchors > 0, "no scrub-back reset anchors were set")
+
+    print(
+        f"PASS: sim wired — {dynamic} dynamic joints driven "
+        f"({out_translate} with translate), {parent_body} parent-body refs, "
+        f"{dg_fallback} DG fallbacks, {reset_anchors} reset anchors"
+    )
+    return True
+
+
+def test_pmx_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
+    """BEHAVIOURAL: the time-driven sim steps and moves the dynamic chains.
+
+    Advancing time while swinging the root bone must change at least one
+    dynamic joint's LOCAL pose — the "simulation is alive" signal.
+    """
+    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    assert_true(solver is not None, "No physics solver")
+    joint_names = _joint_paths(maya_pmx_data)
+    dyn = {
+        rb_idx: joint_names[rb.related_bone_index]
+        for rb_idx, rb in enumerate(pmx_data.rigid_bodies)
+        if rb.physics_mode.value in (1, 2) and rb.related_bone_index in joint_names
+    }
+    if not dyn:
+        print("SKIP: model has no dynamic rigid bodies with a related joint")
+        return True
+
+    def _local_rot(jpath):
+        return cmds.getAttr(f"{jpath}.rotate")[0]
+
+    cmds.currentTime(1)
+    _step(solver)
+    starts = {rb: _local_rot(j) for rb, j in dyn.items()}
+    for f in (5, 10, 15, 20, 25, 30):
+        _swing_root(maya_pmx_data, f)
+        cmds.currentTime(f)
+        _step(solver)
+    moved = sum(
+        1
+        for rb, j in dyn.items()
+        if max(abs(cmds.getAttr(f"{j}.rotate")[0][i] - starts[rb][i]) for i in range(3))
+        > 0.05
+    )
+    assert_true(moved > 0, "no dynamic joint moved after stepping — sim not alive")
+    print(f"PASS: simulation steps — {moved}/{len(dyn)} dynamic joints moved")
+    return True
+
+
+def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
+    """BEHAVIOURAL: the node's solved pose reaches the related JOINTS.
+
+    The most-moved dynamic joint's LOCAL pose must change from its rest —
+    the "mesh binding" signal (if the solver froze, no dynamic joint would
+    move).  Rigid chains legitimately hold still, so we scan all dynamic
+    bodies and use the strongest signal.
+    """
+    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    assert_true(solver is not None, "No physics solver")
+    joint_names = _joint_paths(maya_pmx_data)
+    candidates = [
+        (rb_idx, joint_names[rb.related_bone_index], rb)
+        for rb_idx, rb in enumerate(pmx_data.rigid_bodies)
+        if rb.physics_mode.value in (1, 2) and rb.related_bone_index in joint_names
+    ]
+    if not candidates:
+        print("SKIP: no dynamic body with a related bone")
+        return True
+
+    def _local(jpath):
+        return (
+            cmds.getAttr(f"{jpath}.rotate")[0],
+            cmds.getAttr(f"{jpath}.translate")[0],
+        )
+
+    cmds.currentTime(1)
+    _step(solver)
+    starts = [(rb_idx, jpath, rb, _local(jpath)) for rb_idx, jpath, rb in candidates]
+    for f in (5, 10, 15, 20, 25, 30):
+        _swing_root(maya_pmx_data, f)
+        cmds.currentTime(f)
+        _step(solver)
+
+    def _disp(s):
+        _rb_idx, jpath, _rb, p0 = s
+        rot = cmds.getAttr(f"{jpath}.rotate")[0]
+        tr = cmds.getAttr(f"{jpath}.translate")[0]
+        return max(
+            max(abs(rot[i] - p0[0][i]) for i in range(3)),
+            max(abs(tr[i] - p0[1][i]) for i in range(3)),
+        )
+
+    best = max(starts, key=_disp)
+    rb_idx, jpath, rb, p0 = best
+    rot = cmds.getAttr(f"{jpath}.rotate")[0]
+    tr = cmds.getAttr(f"{jpath}.translate")[0]
+    dR = max(abs(rot[i] - p0[0][i]) for i in range(3))
+    dT = max(abs(tr[i] - p0[1][i]) for i in range(3))
+    ok = dR > 0.05 or (rb.physics_mode.value == 1 and dT > 0.005)
+    assert_true(
+        ok,
+        f"dynamic joint {jpath} (body {rb_idx}, mode {rb.physics_mode.value}) "
+        f"local pose did not change (dR={dR:.3f}, dT={dT:.4f}) — write-back broken",
+    )
+    print(
+        f"PASS: write-back drives joint {jpath} (body {rb_idx}) dR={dR:.3f} dT={dT:.4f}"
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Test registry and runner
 # ---------------------------------------------------------------------------
 
@@ -387,4 +659,7 @@ _TESTS = [
     ("Skin Cluster Creation", test_pmx_skin_cluster_creation),
     ("Skin Weights Applied", test_pmx_skin_weights_applied),
     ("Physics Node Creation", test_pmx_physics_node_creation),
+    ("Physics Wiring", test_pmx_physics_wiring),
+    ("Simulation Steps", test_pmx_simulation_steps),
+    ("Write-back Moves Bone", test_pmx_write_back_moves_bone),
 ]

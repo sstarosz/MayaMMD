@@ -56,6 +56,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the test model) was stored **mirrored** and would rotate the wrong way in
   the sim. Backed by 14 Maya integration tests (no PMX file required) +
   end-to-end import assertions that verify the reflection on a real model.
+- **Simulation wiring — the physics now RUNS (Phase 3 direct write-back)** —
+  the imported solver is fully wired and time-driven:
+  - `time1.outTime` drives the `pmxPhysicsNode`'s `time` input (the
+    evaluation manager steps the Bullet world every frame; the node declares
+    itself non-cacheable), and the physics group's `worldMatrix[0]` feeds
+    `groupWorldMatrix`.
+  - After every body and joint exists, each dynamic body's write-back wiring
+    is resolved: `bodyParentBodyIndex` (the parent bone's rigid body, so the
+    node derives the parent inverse from the PARENT BODY's solved Bullet
+    transform — M_parent = K[parentBodyIndex], no DG feedback cycle), the
+    `joint.parentInverseMatrix → bodyParentInverseMatrix` DG fallback ONLY
+    when the parent bone has no rigid body, and `bodyResetAnchorIndex`
+    (nearest kinematic ancestor) for scrub-back rewinds.
+  - `outTranslate`/`outRotate` connect STRAIGHT into the related joints
+    (rotation-only for PHYSICS_BONE; Maya auto-inserts the standard
+    unitConversion between the float3 outputs and the joint angle attrs).
+  - Headless `step_physics` / `write_back_physics` helpers for batch use.
+  Behavioural import-suite tests prove the sim is alive: 248/285 dynamic
+  joints move when the root bone swings, and the write-back drives a skirt
+  joint ~40° over 30 frames.
 
 ### Changed
 
