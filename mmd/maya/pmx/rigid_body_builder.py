@@ -12,8 +12,8 @@ constraint data).  SIMULATION IS ENABLED: the solver is driven by
 ``time1.outTime`` and the solved pose is written STRAIGHT into the related
 joints (Phase 3 direct write-back: ``boneLocal = K · bodyLocal ·
 B_parent⁻¹ · M_parent⁻¹``) — there is no separate finalize step; import
-wires everything in one pass.  The headless stepping helpers
-(:func:`step_physics`, :func:`write_back_physics`) remain for batch use.
+wires everything in one pass.  The headless stepping helper
+(:func:`step_physics`) remains for batch use.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
 Bullet world from ``mmd/core``.  It is parented under the physics group at
@@ -413,14 +413,18 @@ def _wire_dynamic_write_back(
             continue
         jpath = joint_names[bone_idx]
         try:
+            # Compound-to-compound connections: the node's outTranslate[i] /
+            # outRotate[i] children are UNIT-TYPED (kDistance/kAngle, like
+            # transform.translate/rotate), so Maya connects them DIRECTLY to
+            # joint.translate/rotate with NO auto-inserted unitConversion.
             if body.physics_mode.value != physics_bone:
                 cmds.connectAttr(
-                    f"{node}.outTranslate[{rb_idx}].outTranslateValue",
+                    f"{node}.outTranslate[{rb_idx}]",
                     f"{jpath}.translate",
                     force=True,
                 )
             cmds.connectAttr(
-                f"{node}.outRotate[{rb_idx}].outRotateValue",
+                f"{node}.outRotate[{rb_idx}]",
                 f"{jpath}.rotate",
                 force=True,
             )
@@ -429,12 +433,9 @@ def _wire_dynamic_write_back(
                 "Could not connect dynamic output %d (%s): %s", rb_idx, jpath, e
             )
 
-    # Belt-and-suspenders on top of the node's native Cached-Playback opt-out
-    # (getCacheSetup): never DG-cache the stateful solver.
-    try:
-        cmds.setAttr(f"{node}.caching", 0)
-    except Exception:
-        pass
+    # No `caching` override here: the node's getCacheSetup() already declares
+    # it non-cacheable (it is STATEFUL — caching its outputs would freeze the
+    # sim), so the attribute can stay at its default.
 
 
 def step_physics(node: Optional[str]) -> None:
@@ -458,24 +459,6 @@ def step_physics(node: Optional[str]) -> None:
             cmds.dgeval(node)
         except Exception as e:
             log.debug("physics step dgeval failed: %s", e)
-
-
-def write_back_physics(
-    node: Optional[str], driven_joints: Optional[dict[int, str]] = None
-) -> None:
-    """Propagate the solved pose to the driven joints (headless use).
-
-    The node writes the joint-local pose straight into the joints, so
-    "write-back" is just stepping the solver (:func:`step_physics`) and
-    re-evaluating the driven joints.  Exists for headless/batch stepping.
-    """
-    step_physics(node)
-    for joint in (driven_joints or {}).values():
-        try:
-            cmds.dgdirty(joint)
-            cmds.dgeval(joint)
-        except Exception as e:
-            log.debug("physics joint write_back failed: %s", e)
 
 
 def create_physics_from_pmx_data(

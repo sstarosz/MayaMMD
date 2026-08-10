@@ -70,9 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     when the parent bone has no rigid body, and `bodyResetAnchorIndex`
     (nearest kinematic ancestor) for scrub-back rewinds.
   - `outTranslate`/`outRotate` connect STRAIGHT into the related joints
-    (rotation-only for PHYSICS_BONE; Maya auto-inserts the standard
-    unitConversion between the float3 outputs and the joint angle attrs).
-  - Headless `step_physics` / `write_back_physics` helpers for batch use.
+    (rotation-only for PHYSICS_BONE).  The output children are **unit-typed**
+    (`MFnUnitAttribute` `kDistance`/`kAngle`, exactly like
+    `transform.translate`/`rotate`) so the connections are DIRECT — no
+    auto-inserted `unitConversion` (a unitless `k3Double` had forced one per
+    body).  Angle values are written in degrees (`MAngle::kDegrees` — the
+    default `MAngle` unit is radians, which would have inflated every angle
+    by 180/π).
+  - Headless `step_physics` helper for batch use.  Caching is left at the
+    node's default: `getCacheSetup()` already declares the stateful solver
+    non-cacheable, so the explicit `caching=0` override is gone.
   Behavioural import-suite tests prove the sim is alive: 248/285 dynamic
   joints move when the root bone swings, and the write-back drives a skirt
   joint ~40° over 30 frames.

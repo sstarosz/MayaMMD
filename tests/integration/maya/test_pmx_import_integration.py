@@ -14,6 +14,7 @@ import maya.api.OpenMayaAnim as oma
 from maya import cmds
 
 from mmd.core.data_types import PmxModel
+from mmd.maya.pmx.rigid_body_builder import step_physics
 from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
@@ -411,12 +412,6 @@ def _joint_paths(maya_pmx_data) -> dict:
     return names
 
 
-def _step(node: str) -> None:
-    """Force a solver evaluation (demanding an output pulls compute())."""
-    cmds.dgdirty(node)
-    cmds.dgeval(f"{node}.outTranslate")
-
-
 def _root_joint(maya_pmx_data) -> str:
     """Name of the model's root bone joint (drives the whole skeleton)."""
     return om.MFnDagNode(maya_pmx_data.joints[0]).partialPathName()
@@ -499,27 +494,29 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
                 f"body {rb_idx} missing the DG parentInverse fallback",
             )
         # Write-back outputs reach the joint (rotation always; translation
-        # except PHYSICS_BONE which is rotation-only).  Maya auto-inserts a
-        # unitConversion between the float3 output and the joint's angle
-        # attribute, so assert from the SOURCE side (outRotate[i] has a
-        # destination).
+        # except PHYSICS_BONE which is rotation-only).  The node's outputs are
+        # unit-typed compounds (kAngle/kDistance) connected DIRECTLY to the
+        # joint attrs — the destination must be the joint itself, never a
+        # unitConversion (the bone builder's own IK conversions are separate).
+        rot_dests = (
+            cmds.listConnections(f"{solver}.outRotate[{rb_idx}]", destination=True)
+            or []
+        )
         assert_true(
-            bool(
-                cmds.listConnections(
-                    f"{solver}.outRotate[{rb_idx}].outRotateValue", destination=True
-                )
-            ),
-            f"outRotate[{rb_idx}] not connected",
+            bool(rot_dests) and all("unitConversion" not in str(d) for d in rot_dests),
+            f"outRotate[{rb_idx}] not connected directly to the joint",
         )
         if rb.physics_mode.value != physics_bone:
+            tr_dests = (
+                cmds.listConnections(
+                    f"{solver}.outTranslate[{rb_idx}]", destination=True
+                )
+                or []
+            )
             assert_true(
-                bool(
-                    cmds.listConnections(
-                        f"{solver}.outTranslate[{rb_idx}].outTranslateValue",
-                        destination=True,
-                    )
-                ),
-                f"outTranslate[{rb_idx}] not connected",
+                bool(tr_dests)
+                and all("unitConversion" not in str(d) for d in tr_dests),
+                f"outTranslate[{rb_idx}] not connected directly to the joint",
             )
             out_translate += 1
         else:
@@ -568,12 +565,12 @@ def test_pmx_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
         return cmds.getAttr(f"{jpath}.rotate")[0]
 
     cmds.currentTime(1)
-    _step(solver)
+    step_physics(solver)
     starts = {rb: _local_rot(j) for rb, j in dyn.items()}
     for f in (5, 10, 15, 20, 25, 30):
         _swing_root(maya_pmx_data, f)
         cmds.currentTime(f)
-        _step(solver)
+        step_physics(solver)
     moved = sum(
         1
         for rb, j in dyn.items()
@@ -612,12 +609,12 @@ def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
         )
 
     cmds.currentTime(1)
-    _step(solver)
+    step_physics(solver)
     starts = [(rb_idx, jpath, rb, _local(jpath)) for rb_idx, jpath, rb in candidates]
     for f in (5, 10, 15, 20, 25, 30):
         _swing_root(maya_pmx_data, f)
         cmds.currentTime(f)
-        _step(solver)
+        step_physics(solver)
 
     def _disp(s):
         _rb_idx, jpath, _rb, p0 = s

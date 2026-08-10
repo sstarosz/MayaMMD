@@ -220,11 +220,20 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aJointLinearSpring;   // float3
     static MObject aJointAngularSpring;  // float3
 
-    // Outputs: solved local translate/rotate per body (float3 array).
+    // Outputs: solved local translate/rotate per body (compound arrays).
+    // The children are UNIT-TYPED (MFnUnitAttribute kDistance / kAngle) —
+    // exactly like transform.translate/rotate — so the write-back
+    // connections to joint.translate / joint.rotate are DIRECT.  A unitless
+    // k3Double forced Maya to auto-insert a unitConversion between the float3
+    // and the joint's angle/linear attributes.
     static MObject aOutTranslate;
-    static MObject aOutTranslateValue; // float3 child of aOutTranslate
+    static MObject aOutTranslateX; // kDistance child
+    static MObject aOutTranslateY; // kDistance child
+    static MObject aOutTranslateZ; // kDistance child
     static MObject aOutRotate;
-    static MObject aOutRotateValue; // float3 child of aOutRotate
+    static MObject aOutRotateX; // kAngle child
+    static MObject aOutRotateY; // kAngle child
+    static MObject aOutRotateZ; // kAngle child
 
   private:
     // Maya-free Bullet engine (simulation.hpp) + the PMX body/joint data

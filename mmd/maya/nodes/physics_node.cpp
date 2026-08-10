@@ -18,10 +18,12 @@
 
 #include "maya_utils.hpp"
 
+#include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
+#include <maya/MDistance.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnData.h>
 #include <maya/MFnEnumAttribute.h>
@@ -122,9 +124,13 @@ MObject PhysicsNode::aJointLinearSpring;
 MObject PhysicsNode::aJointAngularSpring;
 
 MObject PhysicsNode::aOutTranslate;
-MObject PhysicsNode::aOutTranslateValue;
+MObject PhysicsNode::aOutTranslateX;
+MObject PhysicsNode::aOutTranslateY;
+MObject PhysicsNode::aOutTranslateZ;
 MObject PhysicsNode::aOutRotate;
-MObject PhysicsNode::aOutRotateValue;
+MObject PhysicsNode::aOutRotateX;
+MObject PhysicsNode::aOutRotateY;
+MObject PhysicsNode::aOutRotateZ;
 
 // ===========================================================================
 // Maya-specific conversion (the shared pure math is in physics_math.hpp)
@@ -661,12 +667,21 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aJointAngularSpring);
 
     // --- outputs ---
-    aOutTranslateValue =
-        nAttr.create("outTranslateValue", "otv", MFnNumericData::k3Double, 0.0, &stat);
+    // Unit-typed compound children (MFnUnitAttribute), exactly like
+    // transform.translate/rotate — so the write-back connections to
+    // joint.translate / joint.rotate are DIRECT.  A unitless k3Double forced
+    // Maya to auto-insert a unitConversion between the float3 output and the
+    // joint's angle/linear attributes.
+    MFnUnitAttribute uOutAttr;
+    aOutTranslateX =
+        uOutAttr.create("outTranslateX", "otx", MFnUnitAttribute::kDistance, 0.0, &stat);
     MMD_CHECK_MSTATUS(stat);
-    MFnNumericAttribute otFn(aOutTranslateValue);
-    otFn.setWritable(false);
-    otFn.setStorable(false);
+    aOutTranslateY =
+        uOutAttr.create("outTranslateY", "oty", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutTranslateZ =
+        uOutAttr.create("outTranslateZ", "otz", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
 
     aOutTranslate = cAttr.create("outTranslate", "otr", &stat);
     MMD_CHECK_MSTATUS(stat);
@@ -674,13 +689,16 @@ MStatus PhysicsNode::initialize()
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setWritable(false);
     cAttr.setStorable(false);
-    cAttr.addChild(aOutTranslateValue);
+    cAttr.addChild(aOutTranslateX);
+    cAttr.addChild(aOutTranslateY);
+    cAttr.addChild(aOutTranslateZ);
 
-    aOutRotateValue = nAttr.create("outRotateValue", "orv", MFnNumericData::k3Double, 0.0, &stat);
+    aOutRotateX = uOutAttr.create("outRotateX", "orx", MFnUnitAttribute::kAngle, 0.0, &stat);
     MMD_CHECK_MSTATUS(stat);
-    MFnNumericAttribute orFn(aOutRotateValue);
-    orFn.setWritable(false);
-    orFn.setStorable(false);
+    aOutRotateY = uOutAttr.create("outRotateY", "ory", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutRotateZ = uOutAttr.create("outRotateZ", "orz", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
 
     aOutRotate = cAttr.create("outRotate", "ort", &stat);
     MMD_CHECK_MSTATUS(stat);
@@ -688,7 +706,9 @@ MStatus PhysicsNode::initialize()
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setWritable(false);
     cAttr.setStorable(false);
-    cAttr.addChild(aOutRotateValue);
+    cAttr.addChild(aOutRotateX);
+    cAttr.addChild(aOutRotateY);
+    cAttr.addChild(aOutRotateZ);
 
     // --- node attribute registration ---
     stat = addAttribute(aTime);
@@ -1209,13 +1229,23 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
         if (bd.physicsMode != Simulation::PhysicsMode::ePhysicsBone)
         {
             MDataHandle tEl = tBuilder.addElement((unsigned int) i);
-            MDataHandle tChild = tEl.child(aOutTranslateValue);
-            tChild.set3Double(ox, oy, oz);
+            // Unit-typed children (kDistance) — written in the attribute's
+            // default unit (the scene's linear unit, cm by default), so the
+            // direct connection to joint.translate carries the same values
+            // the old identity unitConversion did.
+            tEl.child(aOutTranslateX).setMDistance(MDistance(ox));
+            tEl.child(aOutTranslateY).setMDistance(MDistance(oy));
+            tEl.child(aOutTranslateZ).setMDistance(MDistance(oz));
         }
 
         MDataHandle rEl = rBuilder.addElement((unsigned int) i);
-        MDataHandle rChild = rEl.child(aOutRotateValue);
-        rChild.set3Double(rot.x, rot.y, rot.z);
+        // Unit-typed children (kAngle) — written in DEGREES (rot is
+        // quatToEulerXYZDegrees output; MAngle's default constructor unit is
+        // RADIANS, so the unit must be explicit or every angle is ×180/π),
+        // matching joint.rotate directly with no conversion.
+        rEl.child(aOutRotateX).setMAngle(MAngle(rot.x, MAngle::kDegrees));
+        rEl.child(aOutRotateY).setMAngle(MAngle(rot.y, MAngle::kDegrees));
+        rEl.child(aOutRotateZ).setMAngle(MAngle(rot.z, MAngle::kDegrees));
     }
 
     MArrayDataHandle tOut = dataBlock.outputArrayValue(aOutTranslate);

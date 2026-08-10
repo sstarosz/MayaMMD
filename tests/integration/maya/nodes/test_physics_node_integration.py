@@ -74,11 +74,11 @@ def _set_dynamic_body(node: str, index: int, rest_y: float) -> None:
 
 
 def _read_output(node: str, index: int) -> tuple[float, float, float]:
-    """Force evaluation and read outTranslate[index].outTranslateValue."""
+    """Force evaluation and read outTranslate[index] (unit-typed compound)."""
     cmds.dgeval(f"{node}.outTranslate")
-    # Maya returns double3 values as a list containing one tuple, e.g.
+    # Maya returns compound values as a list containing one tuple, e.g.
     # [(x, y, z)] — unwrap before indexing.
-    return tuple(cmds.getAttr(f"{node}.outTranslate[{index}].outTranslateValue")[0])
+    return tuple(cmds.getAttr(f"{node}.outTranslate[{index}]")[0])
 
 
 def _set_welded_chain(node: str) -> None:
