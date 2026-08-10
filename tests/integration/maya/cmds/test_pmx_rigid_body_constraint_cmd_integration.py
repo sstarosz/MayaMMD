@@ -347,6 +347,30 @@ def test_type_validated():
     return True
 
 
+def test_joint_type_enum_fields_exposed():
+    """jointType is an enum dropdown exposing the six PMX JointType fields."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+    _add_bodies(solver, 2)
+
+    fields = cmds.attributeQuery("jointType", node=solver, listEnum=True)
+    assert_true(
+        fields
+        and "Spring6Dof" in fields[0]
+        and "SixDof" in fields[0]
+        and "P2P" in fields[0]
+        and "ConeTwist" in fields[0]
+        and "Slider" in fields[0]
+        and "Hinge" in fields[0],
+        f"jointType fields missing {fields}",
+    )
+    # The field VALUES are the PMX JointType values (0..5) — writing 4 (Slider)
+    # and reading back yields 4.
+    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=4)
+    assert_eq(int(cmds.getAttr(f"{solver}.joints[0].jointType")), 4, "enum value write")
+    print("✓ jointType exposes the six PMX JointType fields as a dropdown")
+    return True
+
+
 def test_body_indices_validated():
     """bodyA/bodyB are validated against the node's current body count."""
     _group, solver, _ja, _jb = _make_physics_scene()
@@ -457,6 +481,7 @@ _TESTS = [
     ("Auto-increment joint indices", test_auto_increment_indices),
     ("Explicit index validated", test_explicit_index_validation),
     ("Joint type validated", test_type_validated),
+    ("Joint type enum dropdown", test_joint_type_enum_fields_exposed),
     ("Body indices validated", test_body_indices_validated),
     ("Model root resolution", test_model_root_resolution),
     ("Query/edit rejected", test_query_edit_rejected),

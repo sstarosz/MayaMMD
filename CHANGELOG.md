@@ -44,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PMX order). For every joint it writes `jointNameLocal`/`jointNameUniversal`,
   `jointBodyA`/`jointBodyB` (validated against the current body count and
   against each other — a body cannot constrain itself), the PMX `jointType`
-  (0..5, validated), and the joint frame stored in the physics group's local
+  (0..5, validated, and exposed as an **enum dropdown** — Spring6Dof/SixDof/
+  P2P/ConeTwist/Slider/Hinge), and the joint frame stored in the physics group's local
   space (Z-flip + MMD radians → Maya degrees handedness conversion, `world *
   groupWorld⁻¹` — matching `pmxRigidBody`). The linear/angular **limits are
   converted through the same MMD→Maya reflection** (the Z-flip

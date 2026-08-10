@@ -592,8 +592,22 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     aJointBodyB = nAttr.create("jointBodyB", "jbb", MFnNumericData::kLong, 0, &stat);
     MMD_CHECK_MSTATUS(stat);
-    aJointType = nAttr.create("jointType", "jt", MFnNumericData::kLong, 0, &stat);
-    MMD_CHECK_MSTATUS(stat);
+    // PMX joint type — enum: one field per PMX JointType (0..5, values match
+    // the PMX JointType enum).  Field names mirror the enumerators.  Read
+    // back via .asShort() like any other numeric attribute.
+    {
+        MFnEnumAttribute eAttr;
+        aJointType = eAttr.create("jointType", "jt", 0, &stat);
+        MMD_CHECK_MSTATUS(stat);
+        eAttr.addField("Spring6Dof", 0);
+        eAttr.addField("SixDof", 1);
+        eAttr.addField("P2P", 2);
+        eAttr.addField("ConeTwist", 3);
+        eAttr.addField("Slider", 4);
+        eAttr.addField("Hinge", 5);
+        eAttr.setStorable(true);
+        eAttr.setKeyable(false);
+    }
     aJointFrameTranslate =
         nAttr.create("jointFrameTranslate", "jft", MFnNumericData::k3Double, 0.0, &stat);
     MMD_CHECK_MSTATUS(stat);
@@ -617,9 +631,9 @@ MStatus PhysicsNode::initialize()
         nAttr.create("jointAngularSpring", "jas", MFnNumericData::k3Double, 0.0, &stat);
     MMD_CHECK_MSTATUS(stat);
 
-    for (MObject* a : {&aJointBodyA, &aJointBodyB, &aJointType, &aJointFrameTranslate,
-                       &aJointFrameRotate, &aJointLinearMin, &aJointLinearMax, &aJointAngularMin,
-                       &aJointAngularMax, &aJointLinearSpring, &aJointAngularSpring})
+    for (MObject* a : {&aJointBodyA, &aJointBodyB, &aJointFrameTranslate, &aJointFrameRotate,
+                       &aJointLinearMin, &aJointLinearMax, &aJointAngularMin, &aJointAngularMax,
+                       &aJointLinearSpring, &aJointAngularSpring})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);

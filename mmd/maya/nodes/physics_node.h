@@ -210,7 +210,7 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aJointNameUniversal;  // string — PMX name_universal; "" = none
     static MObject aJointBodyA;          // long
     static MObject aJointBodyB;          // long
-    static MObject aJointType;           // long 0..5 (PMX JointType)
+    static MObject aJointType;           // enum 0..5 (PMX JointType — dropdown)
     static MObject aJointFrameTranslate; // float3
     static MObject aJointFrameRotate;    // float3 degrees
     static MObject aJointLinearMin;      // float3

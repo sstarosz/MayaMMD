@@ -320,7 +320,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     elem.child(PhysicsNode::aJointNameUniversal).setString(nameUniversal);
     elem.child(PhysicsNode::aJointBodyA).setInt(bodyA);
     elem.child(PhysicsNode::aJointBodyB).setInt(bodyB);
-    elem.child(PhysicsNode::aJointType).setInt(type);
+    // jointType is an enum attribute — write through setShort (like the
+    // bodyGroupId enum).
+    elem.child(PhysicsNode::aJointType).setShort(static_cast<short>(type));
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate), localT);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate), localR);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMin), lmin);
