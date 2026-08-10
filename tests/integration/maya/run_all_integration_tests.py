@@ -356,9 +356,7 @@ TEST_SUITES: dict[str, SuiteInfo] = {
     "ccd": SuiteInfo(
         "CCD IK Solver Node Tests (No PMX)", get_ccd_solver_tests, needs_model=False
     ),
-    "cmd": SuiteInfo(
-        "Native Command Tests (No PMX)", get_cmd_tests, needs_model=False
-    ),
+    "cmd": SuiteInfo("Native Command Tests (No PMX)", get_cmd_tests, needs_model=False),
     # ── Multi-model / custom-dispatch suites ─────────────────────────
     "multi": SuiteInfo(
         "Multi-Import Tests", get_multi_import_tests, dispatch_mode="multi"
