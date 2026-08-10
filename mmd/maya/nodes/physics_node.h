@@ -139,17 +139,13 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aConfigVersion;
 
     // Anchor world matrices (kinematic drivers) — one per kinematic body, in
-    // kinematic (FOLLOW_BONE body) order.  The node computes each anchor's
-    // LOCAL matrix as world * groupInverseWorldMatrix so the Bullet world runs
-    // in the physics group's local space (mirrors mayaBullet's
-    // inWorldMatrix/inParentInverseMatrix).  Phase 3: the anchor world is the
-    // JOINT's world matrix, the group inverse is the PHYSICS GROUP's world
-    // inverse, and `anchorOffset` is a baked world-frame offset
-    // (bodyRestWorld * jointRestWorld^-1) so the collider tracks the joint
-    // with the PMX body<->bone offset preserved.
+    // kinematic (FOLLOW_BONE body) order.  The anchor world is the JOINT's
+    // world matrix; the node converts it to the group's local space with
+    // groupWorldMatrix^-1 and applies the body<->joint rest offset as K^-1
+    // (K = bodyWriteBackOffset is the SAME constant the write-back uses, so a
+    // separate anchorOffset array would be redundant — it is derived, not
+    // stored).
     static MObject aAnchorWorldMatrix;
-    static MObject aGroupInverseWorldMatrix; // physics group's world inverse (single)
-    static MObject aAnchorOffset;            // matrix array, kinematic-order indexed (Phase 3)
 
     // Phase 3 direct write-back inputs — the node outputs the JOINT-LOCAL
     // pose directly (boneLocal = K * bodyLocal * groupWorld * parentInverse),

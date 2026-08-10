@@ -363,10 +363,6 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     MDagPath groupPath = nodePath;
     groupPath.pop(); // |group|shape ⇒ |group
     const MMatrix groupWorld = groupPath.inclusiveMatrix();
-    MFnDependencyNode groupFn(groupPath.node());
-    MStatus groupPlugStat;
-    MPlug groupWorldInversePlug =
-        groupFn.findPlug("worldInverseMatrix", true, &groupPlugStat).elementByLogicalIndex(0);
 
     // Related joint (anchor / write-back target).
     const MDagPath jointPath = resolveBone(bone, groupPath);
@@ -434,30 +430,16 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                     .asShort() == static_cast<short>(Simulation::PhysicsMode::eFollowBone))
                 ++k;
         }
-        // The physics group's world inverse is a SINGLE input shared by every
-        // anchor (the node computes local = world * groupInverseWorldMatrix),
-        // so connect it once (connectOrReplace is idempotent for the same
-        // source — later bodies re-connect the same group inverse).
-        mmd::maya::connectOrReplace(
-            groupWorldInversePlug,
-            fn.findPlug(PhysicsNode::aGroupInverseWorldMatrix, true, &plugStat));
+        // The anchor world is the joint's world matrix (the node converts it
+        // to group space and applies the body<->joint offset as K^-1 — both
+        // derived internally from groupWorldMatrix and bodyWriteBackOffset,
+        // so there is no anchorOffset / groupInverseWorldMatrix input to
+        // populate).
         if (jointPath.isValid())
         {
             mmd::maya::connectOrReplace(
                 jointWorldPlug, fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
                                     .elementByLogicalIndex(k));
-            // offset = bodyRestWorld * jointRestWorld^-1 with the body's
-            // DIRECT world rest pose (MMD Z-flip + handedness) — exactly like
-            // the write-back K bake below.  Do NOT round-trip through the
-            // group-space decomposition (matrixFromTR(localT, localR) *
-            // groupWorld): when the physics group carries scale, the euler
-            // decomposition drops it, so the anchor would sit off its rest
-            // pose (same breakage the K path documents).
-            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            const MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
-            mmd::maya::setPlugMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
-                offset);
         }
         else
         {
@@ -466,15 +448,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // gives the group-space rest in the node) — not the round-tripped
             // group-space decomposition, which drops group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            MMatrix identity;
-            identity.setToIdentity();
             mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
                     .elementByLogicalIndex(k),
                 bodyWorld);
-            mmd::maya::setPlugMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
-                identity);
         }
     }
 

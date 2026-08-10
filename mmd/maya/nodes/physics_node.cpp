@@ -83,8 +83,6 @@ MObject PhysicsNode::aTime;
 MObject PhysicsNode::aGravity;
 MObject PhysicsNode::aConfigVersion;
 MObject PhysicsNode::aAnchorWorldMatrix;
-MObject PhysicsNode::aGroupInverseWorldMatrix;
-MObject PhysicsNode::aAnchorOffset;
 MObject PhysicsNode::aGroupWorldMatrix;
 MObject PhysicsNode::aBodyWriteBackOffset;
 MObject PhysicsNode::aBodyParentInverseMatrix;
@@ -380,26 +378,12 @@ MStatus PhysicsNode::initialize()
     mAttr.setUsesArrayDataBuilder(true);
     mAttr.setKeyable(false);
 
-    // The physics group's world inverse (single) — the SAME matrix every
-    // kinematic anchor used to receive per-anchor as anchorParentInverseMatrix.
-    // local = world * groupInverseWorldMatrix puts each anchor in the group's
-    // local space (the Bullet world frame); leaving it unconnected treats the
-    // anchors as world space (identity).
-    aGroupInverseWorldMatrix =
-        mAttr.create("groupInverseWorldMatrix", "giwm", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setKeyable(false);
-
-    // Phase 3: baked world-frame offset per kinematic anchor
-    // (colliderRestWorld * jointRestWorld^-1) so the collider tracks the JOINT
-    // with the PMX body<->bone offset preserved.  Indexed by kinematic order,
-    // 1:1 with anchorWorldMatrix.
-    aAnchorOffset = mAttr.create("anchorOffset", "aof", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
+    // --- write-back inputs ---
+    // The physics group's world matrix (single).  The node derives the group
+    // inverse internally (it is the exact inverse, so a separate
+    // groupInverseWorldMatrix input would be redundant) — used both to put the
+    // kinematic anchors in the group's local space and by the DG-fallback
+    // write-back path.
     mAttr.setKeyable(false);
 
     // Phase 3 direct write-back: the physics group's world matrix (single) and
@@ -719,10 +703,6 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorWorldMatrix);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aGroupInverseWorldMatrix);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aAnchorOffset);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGroupWorldMatrix);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyWriteBackOffset);
@@ -769,14 +749,6 @@ MStatus PhysicsNode::initialize()
     stat = attributeAffects(aAnchorWorldMatrix, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorldMatrix, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aGroupInverseWorldMatrix, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aGroupInverseWorldMatrix, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorOffset, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorOffset, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGroupWorldMatrix, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
@@ -953,8 +925,6 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
     h = hashValue(h, anchors.elementCount());
     // Phase 3 write-back arrays: only the COUNTS (the offset matrices are
     // baked constants; the parent-inverse matrices vary every frame).
-    MArrayDataHandle anchorOffset = dataBlock.inputArrayValue(aAnchorOffset);
-    h = hashValue(h, anchorOffset.elementCount());
     MArrayDataHandle wbOffset = dataBlock.inputArrayValue(aBodyWriteBackOffset);
     h = hashValue(h, wbOffset.elementCount());
     MArrayDataHandle wbParentInv = dataBlock.inputArrayValue(aBodyParentInverseMatrix);
@@ -1003,20 +973,20 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
     if (!mSim.initialized())
         return false;
     // anchorWorldMatrix[i] maps 1:1 to the kinematic bodies in body order.
-    // local = world * groupInverseWorldMatrix (row-vector convention) — the
-    // Bullet world runs in the physics group's local space.  The group-inverse
-    // is a SINGLE matrix applied to every anchor (previously each anchor
-    // carried its own parentInverse); unconnected = identity = world space.
+    // local = world * groupInverse (row-vector convention) — the Bullet world
+    // runs in the physics group's local space.  The group inverse is DERIVED
+    // from groupWorldMatrix (they are exact inverses — a separate
+    // groupInverseWorldMatrix input would be redundant); unconnected =
+    // identity = world space.
     bool anchorsMoved = false;
     MArrayDataHandle anchors = dataBlock.inputArrayValue(aAnchorWorldMatrix);
-    MArrayDataHandle anchorOffset = dataBlock.inputArrayValue(aAnchorOffset);
+    MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
     const unsigned int anchorCount = anchors.elementCount();
-    const unsigned int offsetCount = anchorOffset.elementCount();
     MMatrix groupInverse;
-    MPlug groupInversePlug(thisMObject(), aGroupInverseWorldMatrix);
-    if (groupInversePlug.isConnected())
+    MPlug groupWorldPlug(thisMObject(), aGroupWorldMatrix);
+    if (groupWorldPlug.isConnected())
     {
-        groupInverse = dataBlock.inputValue(aGroupInverseWorldMatrix).asMatrix();
+        groupInverse = dataBlock.inputValue(aGroupWorldMatrix).asMatrix().inverse();
     }
     else
     {
@@ -1031,17 +1001,17 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
         anchors.jumpToArrayElement(anchorIndex);
         MMatrix w = anchors.inputValue().asMatrix();
         w *= groupInverse;
-        // Phase 3: apply the baked world-frame offset (colliderRestWorld *
-        // jointRestWorld^-1) so the kinematic collider tracks the JOINT with
-        // the PMX body<->bone offset preserved (this is exactly what the old
-        // parentConstraint(joint, guide, maintainOffset) maintained — verified
-        // empirically: targetWorld = K * sourceWorld, K constant).  world here
-        // is the JOINT's world matrix and groupInverse is the physics GROUP's
-        // world inverse, so world * groupInverse is the joint in group space.
-        if (anchorIndex < (int) offsetCount)
+        // The body<->joint rest offset is K^-1: K = bodyWriteBackOffset[i] =
+        // jointRestWorld * bodyRestWorld^-1 is baked for EVERY body (identity
+        // for a joint-less collider), so the kinematic anchor offset
+        // (bodyRestWorld * jointRestWorld^-1) is its exact inverse — derived
+        // here, not stored in a separate anchorOffset array.  world is the
+        // JOINT's world matrix and groupInverse is the physics GROUP's world
+        // inverse, so world * groupInverse is the joint in group space, then
+        // offset moves the collider to its PMX body<->bone offset.
+        if (offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
         {
-            anchorOffset.jumpToArrayElement(anchorIndex);
-            w = anchorOffset.inputValue().asMatrix() * w;
+            w = offsetHandle.inputValue().asMatrix().inverse() * w;
         }
         // Convert the anchor's group-local pose to the engine's Pose — the sim
         // sets the Bullet transform, tracks the current pose and detects

@@ -10,9 +10,9 @@ Tests cover (the "add a body and configure it on addition" contract):
 - Auto-append body index (0, 1, 2 ...) and stored body DATA (names, mass,
   damping, friction, restitution, group, mask, shape, physics mode, rest pose,
   PMX shape_size verbatim).
-- FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by the
-  joint, the single groupInverseWorldMatrix fed by the group, baked
-  anchorOffset).
+- FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by
+  the joint; the group inverse and body<->bone offset are DERIVED by the
+  node from groupWorldMatrix / bodyWriteBackOffset).
 - PHYSICS / PHYSICS_BONE -> DATA ONLY (no anchor, no write-back connections).
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
@@ -149,7 +149,7 @@ def test_append_body_data():
 
 def test_follow_bone_binds_anchor():
     """FOLLOW_BONE + bone: the kinematic anchor is fed by the related joint."""
-    group, solver, joint_a, _jb = _make_physics_scene()
+    _group, solver, joint_a, _jb = _make_physics_scene()
 
     idx = cmds.pmxRigidBody(
         solver,
@@ -170,18 +170,9 @@ def test_follow_bone_binds_anchor():
         any(joint_a in src for src in srcs),
         f"anchorWorldMatrix[0] not fed by joint ({srcs})",
     )
-    # The SINGLE group inverse is fed by the physics group's worldInverseMatrix.
-    gsrcs = cmds.listConnections(f"{solver}.groupInverseWorldMatrix", source=True) or []
-    assert_true(
-        any(group in src for src in gsrcs),
-        f"groupInverseWorldMatrix not fed by group ({gsrcs})",
-    )
-    # Baked body<->bone offset present (16 floats).
-    offset = cmds.getAttr(f"{solver}.anchorOffset[0]")
-    assert_true(
-        offset is not None and len(offset) == 16,
-        f"anchorOffset[0] not baked ({offset})",
-    )
+    # The group inverse and the body<->bone offset are DERIVED by the node
+    # (from groupWorldMatrix and bodyWriteBackOffset) — the command no longer
+    # writes anchorOffset / groupInverseWorldMatrix inputs.
     print("✓ FOLLOW_BONE body bound to joint via kinematic anchor")
     return True
 
@@ -600,12 +591,6 @@ def test_kinematic_anchor_ordering():
     assert_true(
         any(joint_b in src for src in srcs1),
         f"anchor[1] not fed by joint_b ({srcs1})",
-    )
-    # Both anchors share the single group inverse (connected once).
-    gsrcs = cmds.listConnections(f"{solver}.groupInverseWorldMatrix", source=True) or []
-    assert_true(
-        any(group in src for src in gsrcs),
-        f"groupInverseWorldMatrix not fed by group ({gsrcs})",
     )
     print("✓ kinematic anchors indexed in FOLLOW_BONE body order")
     return True

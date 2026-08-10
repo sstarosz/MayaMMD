@@ -11,7 +11,8 @@ Tests cover:
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
 - configVersion forcing an in-place rebuild at the current pose
-- groupInverseWorldMatrix mapping anchors from world into group space
+- groupWorldMatrix^-1 (derived internally) mapping anchors from world into
+  group space
 """
 
 # ── Maya standalone initialised by the test runner ───────────────────────
@@ -143,8 +144,6 @@ def test_attribute_surface_and_defaults():
         "gravity",
         "configVersion",
         "anchorWorldMatrix",
-        "groupInverseWorldMatrix",
-        "anchorOffset",
         "groupWorldMatrix",
         "bodyWriteBackOffset",
         "bodyParentInverseMatrix",
@@ -319,9 +318,8 @@ def test_kinematic_anchor_drives_welded_body():
     cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
 
     # Anchor world matrix: translate the kinematic anchor to y=3 (group at
-    # the origin, so the single group-inverse = identity and no anchor offset
-    # is needed).
-    cmds.setAttr(f"{node}.groupInverseWorldMatrix", *_IDENTITY_MATRIX, type="matrix")
+    # the origin, so the derived group-inverse = identity and the derived
+    # offset (K^-1 = bodyWriteBackOffset[0]^-1) = identity).
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,
@@ -411,21 +409,27 @@ def test_config_version_forces_rebuild():
 
 
 def test_group_inverse_world_matrix_applies_to_anchors():
-    """groupInverseWorldMatrix maps every anchor's world matrix into group space."""
+    """groupWorldMatrix^-1 maps every anchor's world matrix into group space.
+
+    The node derives the group inverse internally from the single
+    ``groupWorldMatrix`` input (the two are exact inverses) — there is no
+    separate groupInverseWorldMatrix input.
+    """
     setup_test_environment()
     node = _create_node()
     _connect_time(node)
     _set_welded_chain(node)
 
-    # A physics group transform at y=3; its world inverse (T(0,-3,0)) is
-    # CONNECTED to the node's single group-inverse input (mirrors how the
-    # Python builder wires group.worldInverseMatrix).  The anchor's
-    # GROUP-LOCAL pose is then local = world * groupInverse = the origin, so
-    # the welded body settles 1 unit above the LOCAL origin (y=1) — not y=4,
-    # which is where it would sit if the group inverse were ignored.
+    # A physics group transform at y=3; its world matrix is CONNECTED to the
+    # node's single groupWorldMatrix input (mirrors how the Python builder
+    # wires group.worldMatrix[0]), and the node derives the inverse
+    # (T(0,-3,0)).  The anchor's GROUP-LOCAL pose is then local = world *
+    # groupInverse = the origin, so the welded body settles 1 unit above the
+    # LOCAL origin (y=1) — not y=4, which is where it would sit if the group
+    # inverse were ignored.
     group = cmds.createNode("transform", name="PhysicsGroupTest")
     cmds.setAttr(f"{group}.translateY", 3)
-    cmds.connectAttr(f"{group}.worldInverseMatrix", f"{node}.groupInverseWorldMatrix")
+    cmds.connectAttr(f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix")
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,

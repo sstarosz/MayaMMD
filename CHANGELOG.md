@@ -86,6 +86,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`pmxPhysicsNode` inputs simplified — derived, not stored** (breaking
+  schema change — re-import required).  Two matrix inputs are gone:
+  - `anchorOffset` is removed: it was the kinematic body<->joint rest offset
+    `bodyRestWorld * jointRestWorld^-1` — the exact inverse of
+    `bodyWriteBackOffset` (K = `jointRestWorld * bodyRestWorld^-1`, already
+    baked per body).  The node now derives each kinematic anchor's offset as
+    `K[body]^-1` (identity for joint-less static colliders, exactly as
+    before).
+  - `groupInverseWorldMatrix` is removed: it was the exact inverse of
+    `groupWorldMatrix` (already a single connected input) — the node derives
+    it internally.
+  Removes the two attributes, the `pmxRigidBody` anchor-offset writes and the
+  group-inverse connection.  Behaviourally identical (verified: 248/285
+  joints move, write-back dR=40.684 — unchanged before/after).
 - **`pmxPhysicsNode` schema refined to PMX verbatim** — the physics node's
   attribute surface now matches the PMX fields it stores:
   - `bodyRadius`/`bodyExtents`/`bodyLength` are replaced by a single
