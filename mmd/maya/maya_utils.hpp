@@ -52,19 +52,21 @@ inline void setPlugDouble3(MPlug plug, const mmd::core::Double3& v)
 }
 
 // Connect src → dst, first disconnecting any other source already driving dst.
+// Idempotent: if dst is already driven by the SAME source, nothing is changed
+// and kSuccess is returned (the group-inverse input is re-connected by every
+// kinematic body create — this makes the repeated call a cheap no-op).
 inline MStatus connectOrReplace(const MPlug& src, const MPlug& dst)
 {
-    MDGModifier mod;
-    if (dst.isConnected())
+    MPlugArray sources;
+    dst.connectedTo(sources, true, false);
+    for (unsigned int i = 0; i < sources.length(); ++i)
     {
-        MPlugArray sources;
-        dst.connectedTo(sources, true, false);
-        for (unsigned int i = 0; i < sources.length(); ++i)
-        {
-            if (sources[i] != src)
-                mod.disconnect(sources[i], dst);
-        }
+        if (sources[i] == src)
+            return MS::kSuccess; // already connected to the requested source
     }
+    MDGModifier mod;
+    for (unsigned int i = 0; i < sources.length(); ++i)
+        mod.disconnect(sources[i], dst);
     if (mod.connect(src, dst) != MS::kSuccess)
         return MS::kFailure;
     return mod.doIt();

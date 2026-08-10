@@ -611,6 +611,75 @@ def test_kinematic_anchor_ordering():
     return True
 
 
+def test_numeric_bone_index():
+    """-bone <pmxBoneIdx> resolves the related joint by its PMX bone index."""
+    _group, solver, joint_a, _jb = _make_physics_scene()
+    # Give the joint a PMX bone index (as the bone builder does on import).
+    cmds.addAttr(joint_a, longName="pmxBoneIndex", attributeType="long")
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 7)
+
+    idx = cmds.pmxRigidBody(solver, name="ByIdx", bone="7", physicsMode="followBone")
+    assert_eq(idx, 0, "index != 0")
+    # Anchor fed by the joint that carries pmxBoneIndex == 7.
+    srcs = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
+    assert_true(
+        any(joint_a in src for src in srcs),
+        f"anchor[0] not fed by the pmxBoneIndex=7 joint ({srcs})",
+    )
+    print("✓ -bone <pmxBoneIdx> resolves the related joint")
+    return True
+
+
+def test_query_edit_rejected():
+    """Query/edit modes are not implemented yet and are rejected."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    try:
+        cmds.pmxRigidBody(solver, query=True)
+        assert_true(False, "query mode was accepted")
+    except RuntimeError:
+        pass
+    try:
+        cmds.pmxRigidBody(solver, edit=True, name="Edited")
+        assert_true(False, "edit mode was accepted")
+    except RuntimeError:
+        pass
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies", size=True) or 0),
+        0,
+        "rejected query/edit should not create a body",
+    )
+    print("✓ query/edit modes rejected (not implemented yet)")
+    return True
+
+
+def test_invalid_target_rejected():
+    """A non-solver, non-model-root target is rejected."""
+    _group, _solver, _ja, _jb = _make_physics_scene()
+    plain = cmds.createNode("transform", name="plainTransform")
+
+    try:
+        cmds.pmxRigidBody(plain, name="Bad", physicsMode="physics")
+        assert_true(False, "non-solver target was accepted")
+    except RuntimeError:
+        pass
+    print("✓ non-solver target rejected")
+    return True
+
+
+def test_missing_solver_argument_rejected():
+    """A missing solver argument is reported as an error."""
+    _group, _solver, _ja, _jb = _make_physics_scene()
+
+    try:
+        cmds.pmxRigidBody()
+        assert_true(False, "missing solver argument was accepted")
+    except RuntimeError:
+        pass
+    print("✓ missing solver argument rejected")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
@@ -632,4 +701,8 @@ _TESTS = [
     ("Shape size verbatim per collider", test_shape_size_verbatim_per_collider),
     ("Rest pose conversion", test_rest_pose_conversion),
     ("Kinematic anchor ordering", test_kinematic_anchor_ordering),
+    ("Numeric bone index", test_numeric_bone_index),
+    ("Query/edit rejected", test_query_edit_rejected),
+    ("Invalid target rejected", test_invalid_target_rejected),
+    ("Missing solver argument rejected", test_missing_solver_argument_rejected),
 ]
