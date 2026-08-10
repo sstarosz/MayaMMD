@@ -938,8 +938,10 @@ bool PhysicsNode::buildWorld(MDataBlock& dataBlock)
     // definition (gravity + bodies + joints) read from the attributes.
     Simulation::Definition definition;
     MDataHandle gravHandle = dataBlock.inputValue(aGravity);
-    definition.gravity =
-        Double3(gravHandle.asDouble3()[0], gravHandle.asDouble3()[1], gravHandle.asDouble3()[2]);
+    // asDouble3() decays inside the SDK header (same as readDouble3).
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    const double* g = gravHandle.asDouble3();
+    definition.gravity = Double3(g[0], g[1], g[2]);
     definition.bodies = mBodies;
     definition.joints = mJoints;
     return mSim.initialize(definition);
@@ -1204,12 +1206,17 @@ void PhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
     // visible immediately after import (and whenever nothing pulls the DG).
     if (mBodies.empty())
     {
+        // Fallback reads straight from the attributes (before the first
+        // compute) — mirror the solved path by skipping disabled bodies.
         MPlug bodiesPlug(thisMObject(), aBodies);
         const unsigned int n = bodiesPlug.evaluateNumElements();
         for (unsigned int i = 0; i < n; ++i)
         {
+            MPlug el = bodiesPlug.elementByLogicalIndex(i);
+            if (!el.child(aBodyEnabled).asBool())
+                continue;
             DrawBody db;
-            readDrawBodyFromPlug(bodiesPlug.elementByLogicalIndex(i), db);
+            readDrawBodyFromPlug(el, db);
             out.push_back(db);
         }
         return;
@@ -1318,15 +1325,16 @@ bool PhysicsNode::rebuildSimulationAtCurrentPose(MDataBlock& dataBlock, uint64_t
     // Shared by ConfigurationChanged and Rewind: rebuild the Bullet world from
     // the CURRENT skeleton pose — an in-place config edit must not teleport the
     // chains to the PMX rest pose, and a rewind must not carry stale solver
-    // warm-start state into the reset.
-    updateKinematicAnchors(dataBlock); // capture the current skeleton pose
+    // warm-start state into the reset.  (The old world is discarded entirely,
+    // so its anchor state is not "captured" — the anchors are re-applied to
+    // the fresh world below.)
     destroyWorld();
     readBodyData(dataBlock);
     readJointData(dataBlock);
     if (!buildWorld(dataBlock))
         return false;
     mConfigSignature = configSignature;
-    updateKinematicAnchors(dataBlock); // re-apply current anchors
+    updateKinematicAnchors(dataBlock); // re-apply current anchors to the fresh world
     resetDynamicBodies(dataBlock);     // chains stay at the current pose
     mLastTime = nowTime.value();       // no time-step on the rebuild frame
     mLastTimeUnit = nowTime.unit();

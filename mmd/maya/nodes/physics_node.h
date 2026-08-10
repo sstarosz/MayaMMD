@@ -176,10 +176,9 @@ class PhysicsNode : public MPxLocatorNode
     // body collides with that group.  This is the PMX non_collision_group
     // field stored VERBATIM (bit i set = collides with group i — MMD feeds it
     // to Bullet directly, no inversion); the node uses it exactly as read.
-    // THE collision mask — one bool per collision group.  Declared as
-    // std::array so the attribute loops can use bounds-checked .at() (the
-    // cppcoreguidelines constant-array-index check rejects `[]` with a loop
-    // counter on a C array).
+    // Declared as std::array so the attribute loops can use bounds-checked
+    // .at() (the cppcoreguidelines constant-array-index check rejects `[]`
+    // with a loop counter on a C array).
     static std::array<MObject, 16> aBodyMaskGroup;
     static MObject aBodyColliderType;    // enum — PMX shape (kColliderBox/Sphere/Capsule)
     static MObject aBodyRadius;          // double — PMX shape_size.x (sphere/capsule radius)

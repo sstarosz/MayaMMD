@@ -281,7 +281,6 @@ def test_kinematic_anchor_drives_welded_body():
 
     # Anchor world matrix: translate the kinematic anchor to y=3 (group at
     # the origin, so parent-inverse = identity and no anchor offset needed).
-    cmds.setAttr(f"{node}.anchorWorldMatrix[0]", *_IDENTITY_MATRIX, type="matrix")
     cmds.setAttr(
         f"{node}.anchorParentInverseMatrix[0]", *_IDENTITY_MATRIX, type="matrix"
     )
