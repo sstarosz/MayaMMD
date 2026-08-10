@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
   bodies on the physics node immediately. Backed by 36 Maya integration
   tests (no PMX file required).
+- **Native `pmxRigidBodyConstraint` command (create mode)** — the C++
+  command that populates a `pmxPhysicsNode`'s `joints` array with PMX
+  rigid-body constraint data at import time (one joint per PMX joint, in
+  PMX order). For every joint it writes `jointBodyA`/`jointBodyB` (the
+  referenced rigid-body indices, validated against the current body count),
+  the PMX `jointType` (0..5, validated), the joint frame (Z-flip + MMD
+  radians → Maya degrees handedness conversion) and the linear/angular
+  limits and spring constants **verbatim** (angular stays in PMX radians —
+  the node hands them to Bullet unchanged). The PMX importer now calls it
+  for every rigid-body constraint after the bodies exist, so imported
+  models hold the full constraint set. Backed by 11 Maya integration tests
+  (no PMX file required) + end-to-end import assertions.
 
 ### Changed
 

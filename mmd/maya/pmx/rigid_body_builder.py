@@ -4,13 +4,13 @@ rigid_body_builder.py — rigid bodies for PMX models.
 Creates the native ``pmxPhysicsNode`` (embedded Bullet) for a PMX model.
 
 MILESTONE (this PR): the ``{model}_Physics`` group, one ``pmxPhysicsNode``
-per model, gravity, and the ``bodies`` compound array POPULATED through the
-native ``pmxRigidBody`` command — one entry per PMX rigid body (data + bone
-binding for FOLLOW_BONE bodies via the kinematic-anchor input).  SIMULATION
-IS DISABLED: the node's ``joints`` array is still empty (the native
-``pmxRigidBodyConstraint`` command lands in a later PR), the ``time`` input
-is NOT connected, and no write-back wiring happens — the bodies are present
-and inspectable, and the solver has nothing to step.
+per model, gravity, and the ``bodies`` + ``joints`` compound arrays
+POPULATED through the native ``pmxRigidBody`` and ``pmxRigidBodyConstraint``
+commands — one entry per PMX rigid body (data + bone binding for FOLLOW_BONE
+bodies via the kinematic-anchor input) and one per PMX joint (rigid-body
+constraint data).  SIMULATION IS DISABLED: the ``time`` input is NOT
+connected and no write-back wiring happens — the bodies and constraints are
+present and inspectable, and the solver has nothing to step.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
 Bullet world from ``mmd/core``.  It is parented under the physics group at
@@ -106,12 +106,11 @@ def _create_physics_solver(
     override (planned, redesigned).  It is parented under the physics group at
     the origin, so the Bullet world runs in the group's local space.
 
-    NOTE: ``time1.outTime`` is intentionally NOT connected yet — the node's
-    ``joints`` array is empty until the native ``pmxRigidBodyConstraint``
-    command lands, and a ``time`` connection would make compute() fail every
-    frame.  The full builder (constraint-command PR) connects it together with
-    the joint population, connects the physics group's world inverse once into
-    ``groupInverseWorldMatrix``, and wires the Phase-3 write-back.
+    NOTE: ``time1.outTime`` is intentionally NOT connected yet — SIMULATION
+    IS DISABLED (body/joint data only), and a ``time`` connection would make
+    compute() step an unwired world every frame.  The simulation-wiring PR
+    connects it together with the physics group's world inverse once into
+    ``groupInverseWorldMatrix`` and the Phase-3 write-back.
     """
     solver_name = name_registry.get_physics_solver_name()
     if parent_group:
@@ -144,10 +143,10 @@ def _populate_rigid_bodies(
     """Append one body per PMX rigid body through the native ``pmxRigidBody`` command.
 
     Data + bone binding only — SIMULATION IS DISABLED (no write-back, no
-    constraints, no time connection).  Bodies are appended in PMX order so the
-    body index matches the PMX rigid-body index that the constraint command
-    (later PR) references.  FOLLOW_BONE bodies get their kinematic-anchor
-    input here; dynamic bodies are data-only.
+    time connection).  Bodies are appended in PMX order so the body index
+    matches the PMX rigid-body index that the constraint command references.
+    FOLLOW_BONE bodies get their kinematic-anchor input here; dynamic bodies
+    are data-only.
     """
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         size = body.shape_size
@@ -188,6 +187,60 @@ def _populate_rigid_bodies(
             log.warning("Could not create body %d: %s", rb_idx, exc)
 
 
+def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
+    """Append one joint per PMX rigid-body constraint through the native
+    ``pmxRigidBodyConstraint`` command.
+
+    PMX joints are CONSTRAINTS between rigid bodies (``rigid_body_index_a`` /
+    ``rigid_body_index_b``), so this MUST run after ``_populate_rigid_bodies``
+    (the command validates the referenced body indices against the node's
+    current body count).  Joints are appended in PMX order so the joint index
+    matches the PMX joint index.  Data only — SIMULATION IS DISABLED.
+    """
+    for jt_idx, joint in enumerate(pmx_data.joints):
+        try:
+            cmds.pmxRigidBodyConstraint(
+                node,
+                bodyA=int(joint.rigid_body_index_a),
+                bodyB=int(joint.rigid_body_index_b),
+                type=int(joint.type.value),
+                position=(joint.position.x, joint.position.y, joint.position.z),
+                rotation=(joint.rotation.x, joint.rotation.y, joint.rotation.z),
+                linearMin=(
+                    joint.position_min.x,
+                    joint.position_min.y,
+                    joint.position_min.z,
+                ),
+                linearMax=(
+                    joint.position_max.x,
+                    joint.position_max.y,
+                    joint.position_max.z,
+                ),
+                angularMin=(
+                    joint.rotation_min.x,
+                    joint.rotation_min.y,
+                    joint.rotation_min.z,
+                ),
+                angularMax=(
+                    joint.rotation_max.x,
+                    joint.rotation_max.y,
+                    joint.rotation_max.z,
+                ),
+                linearSpring=(
+                    joint.position_spring_constant.x,
+                    joint.position_spring_constant.y,
+                    joint.position_spring_constant.z,
+                ),
+                angularSpring=(
+                    joint.rotation_spring_constant.x,
+                    joint.rotation_spring_constant.y,
+                    joint.rotation_spring_constant.z,
+                ),
+            )
+        except Exception as exc:
+            log.warning("Could not create joint %d: %s", jt_idx, exc)
+
+
 def create_physics_from_pmx_data(
     pmx_data: PmxModel,
     joints: Sequence[om.MObject],
@@ -199,14 +252,15 @@ def create_physics_from_pmx_data(
     MILESTONE: creates the ``{model}_Physics`` group and one ``pmxPhysicsNode``
     solver under it — per model — and POPULATES the ``bodies`` array through
     the native ``pmxRigidBody`` command (one body per PMX rigid body, in PMX
-    order).  The ``joints`` array is still empty (the native
-    ``pmxRigidBodyConstraint`` command lands in a later PR), the ``time``
-    input is NOT connected, and there is no write-back wiring — the bodies are
-    present and inspectable, but the solver has nothing to step.
+    order) and the ``joints`` array through the native
+    ``pmxRigidBodyConstraint`` command (one joint per PMX rigid-body
+    constraint, in PMX order).  SIMULATION IS DISABLED: the ``time`` input is
+    NOT connected and there is no write-back wiring — the bodies and
+    constraints are present and inspectable, but the solver has nothing to
+    step.
 
     Args:
-        pmx_data:            Parsed PMX model (rigid bodies used here; joints
-                             used by the full builder in a later PR).
+        pmx_data:            Parsed PMX model (rigid bodies + joints).
         joints:              Joint MObjects in PMX bone order (from bone
                              builder; used to bind FOLLOW_BONE bodies).
         name_registry:       Naming manager for unique names.
@@ -230,4 +284,6 @@ def create_physics_from_pmx_data(
         return None
     joint_names = _joint_names_for(joints)
     _populate_rigid_bodies(node, pmx_data, joint_names)
+    # Constraints reference bodies by index, so they come AFTER every body.
+    _populate_rigid_body_constraints(node, pmx_data)
     return node

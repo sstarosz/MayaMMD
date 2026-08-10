@@ -283,7 +283,50 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
             0,
             "no-body model should have an empty bodies array",
         )
-    print(f"PASS: physics group + {_NODE_TYPE} with {expected_bodies} bodies created")
+
+    # The joints array mirrors the PMX rigid-body constraints (one joint per
+    # PMX joint, in PMX order — appended by the native pmxRigidBodyConstraint
+    # command after every body exists).
+    expected_joints = len(pmx_data.joints)
+    assert_true(
+        cmds.attributeQuery("joints", node=solver, exists=True),
+        "solver has no joints attribute",
+    )
+    if expected_joints > 0:
+        assert_eq(
+            int(cmds.getAttr(f"{solver}.joints", size=True)),
+            expected_joints,
+            "joints count != PMX joint count",
+        )
+        # First joint's data mirrors the first PMX joint.
+        first = pmx_data.joints[0]
+        jbase = f"{solver}.joints[0]"
+        assert_eq(
+            int(cmds.getAttr(f"{jbase}.jointBodyA")),
+            int(first.rigid_body_index_a),
+            "first joint bodyA",
+        )
+        assert_eq(
+            int(cmds.getAttr(f"{jbase}.jointBodyB")),
+            int(first.rigid_body_index_b),
+            "first joint bodyB",
+        )
+        assert_eq(
+            int(cmds.getAttr(f"{jbase}.jointType")),
+            int(first.type.value),
+            "first joint type",
+        )
+    else:
+        # Models with no joints get an empty joints array.
+        assert_eq(
+            int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+            0,
+            "no-joint model should have an empty joints array",
+        )
+    print(
+        f"PASS: physics group + {_NODE_TYPE} with {expected_bodies} bodies, "
+        f"{expected_joints} joints created"
+    )
     return True
 
 
