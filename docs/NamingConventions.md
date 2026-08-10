@@ -21,6 +21,8 @@ All suffixes start with a capital letter for consistency.
 | Mesh shape                | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
 | Geo group                 | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
 | RigidBodies group         | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
+| Physics group             | DAG  | `{model}_Physics`                      | `GirlsFrontline_TololoDefault_Physics`           |
+| PhysicsSolver (pmxPhysicsNode) | DAG | `{model}_PhysicsSolver`            | `GirlsFrontline_TololoDefault_PhysicsSolver`     |
 | rotScale (multiplyDivide) | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
 | ccdSolver                 | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
 | BoneMorph node            | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |

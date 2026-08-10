@@ -200,10 +200,14 @@ def get_morph_tests():
 
 
 def get_node_tests():
-    """Import test_bone_morph_node_integration and return its test list (no PMX data needed)."""
+    """Import the no-PMX node suites and return their combined test list."""
     from tests.integration.maya.nodes import test_bone_morph_node_integration
+    from tests.integration.maya.nodes import test_physics_node_integration
 
-    return test_bone_morph_node_integration._TESTS
+    return [
+        *test_bone_morph_node_integration._TESTS,
+        *test_physics_node_integration._TESTS,
+    ]
 
 
 def get_ccd_solver_tests():
@@ -343,9 +347,7 @@ TEST_SUITES: dict[str, SuiteInfo] = {
         dispatch_mode="vpd",
     ),
     # ── No-asset suites ─────────────────────────────────────────────
-    "node": SuiteInfo(
-        "BoneMorphNode Tests (No PMX)", get_node_tests, needs_model=False
-    ),
+    "node": SuiteInfo("Custom Nodes Tests (No PMX)", get_node_tests, needs_model=False),
     "ccd": SuiteInfo(
         "CCD IK Solver Node Tests (No PMX)", get_ccd_solver_tests, needs_model=False
     ),

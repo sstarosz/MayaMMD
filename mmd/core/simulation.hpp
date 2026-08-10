@@ -180,4 +180,43 @@ class Simulation
     std::unique_ptr<SimulationImpl> mImpl; // Bullet is an implementation detail
 };
 
+/// Map a PMX `shape_size` (3 doubles, FULL size — box extents are full, not
+/// half) onto a BodyDefinition's radius/extents/length according to its
+/// collider type.  The engine stores box extents as HALF-extents (as
+/// btBoxShape expects), so boxes are halved here.  PMX verbatim in,
+/// engine-ready out.
+inline void applyShapeSize(Simulation::BodyDefinition& b, const Double3& size)
+{
+    switch (b.colliderType)
+    {
+    case Simulation::ColliderType::eSphere:
+        b.radius = size.x; // sphere uses shape_size[0] as its radius
+        break;
+    case Simulation::ColliderType::eBox:
+        b.extents = Double3(size.x * 0.5, size.y * 0.5, size.z * 0.5); // FULL -> half
+        break;
+    case Simulation::ColliderType::eCapsule:
+        b.radius = size.x; // capsule: shape_size[0] = radius
+        b.length = size.y; //          shape_size[1] = cylinder length
+        break;
+    }
+}
+
+/// Inverse of applyShapeSize — reconstruct the PMX `shape_size` (FULL size,
+/// box extents doubled) from a BodyDefinition.  Used to build the draw-data
+/// contract (DrawBody.shapeSize) from a solved/rest BodyDefinition.
+inline Double3 shapeSizeFromBodyDefinition(const Simulation::BodyDefinition& b)
+{
+    switch (b.colliderType)
+    {
+    case Simulation::ColliderType::eSphere:
+        return Double3(b.radius, 0.0, 0.0);
+    case Simulation::ColliderType::eBox:
+        return Double3(b.extents.x * 2.0, b.extents.y * 2.0, b.extents.z * 2.0);
+    case Simulation::ColliderType::eCapsule:
+        return Double3(b.radius, b.length, 0.0);
+    }
+    return Double3(0.0, 0.0, 0.0);
+}
+
 } // namespace mmd::core

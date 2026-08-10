@@ -113,11 +113,12 @@ Only present when the corresponding PMX flag is set:
 **Stored on:** The root transform node (`{model}_Root`).  
 **Added by:** `pmx_scene_builder.py:build_pmx_scene()`
 
-This attribute stores the model's display name for fast root discovery and UI display.
+These attributes make the model self-describing for fast root discovery and UI display.
 
-| Long name      | Type   | Description                                                                 |
-| -------------- | ------ | --------------------------------------------------------------------------- |
-| `pmxModelName` | string | Model display name (local name, falling back to universal name, then ASCII) |
+| Long name        | Type   | Description                                                                 |
+| ---------------- | ------ | --------------------------------------------------------------------------- |
+| `pmxModelName`   | string | Model display name (local name, falling back to universal name, then ASCII) |
+| `pmxPhysicsNode` | string | Solver node name of the model's `pmxPhysicsNode` (only when one was created) |
 
 ---
 
@@ -187,5 +188,6 @@ model data from the scene:
 | BlendShape node name | ✅ Yes         | Mesh deformation history scan (listHistory, type=`blendShape`) |
 | BoneMorph node name  | ✅ Yes         | Type scan + `outputRotate` connection tracing to root          |
 | IK handle list       | ✅ Yes         | `listRelatives(root, type="ikHandle")`                         |
+| Physics node name    | ✅ Yes         | `pmxPhysicsNode` on root                                         |
 | Rest pose values     | ✅ Yes         | `pmxRest*` on joints, `pmxIkRest*` on IK handles               |
 | Bone flags           | ✅ Yes         | `pmx*` bool attributes on joints                               |

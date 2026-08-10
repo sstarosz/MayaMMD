@@ -155,7 +155,9 @@ mmd/                          # Python package + C++ plugin entry point
 │   ├── nodes/                # C++ and Python MPxNode implementations
 │   │   ├── bone_morph_node.py         # Python bone morph node
 │   │   ├── ccd_ik_solver_node.h       # C++ CCD IK solver header
-│   │   └── ccd_ik_solver_node.cpp     # C++ CCD IK solver implementation
+│   │   ├── ccd_ik_solver_node.cpp     # C++ CCD IK solver implementation
+│   │   ├── physics_node.h             # C++ rigid-body physics node header
+│   │   └── physics_node.cpp           # C++ rigid-body physics node (embedded Bullet)
 │   ├── pmx/                  # PMX scene builders
 │   └── ...
 └── ui/                       # Qt UI widgets

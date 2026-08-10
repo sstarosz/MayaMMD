@@ -15,9 +15,12 @@ from mmd.core.data_types import PmxModel  # noqa: E402
 
 from tests.integration.test_helpers import assert_true, assert_eq  # noqa: E402
 
+_NODE_TYPE = "pmxPhysicsNode"
+
 
 # ---------------------------------------------------------------------------
-# General PMX import tests (root, geometry, mesh, hierarchy, materials, skin)
+# General PMX import tests (root, geometry, mesh, hierarchy, materials, skin,
+# physics)
 # ---------------------------------------------------------------------------
 
 
@@ -198,6 +201,56 @@ def test_pmx_skin_weights_applied(pmx_data: PmxModel, maya_pmx_data):
     return True
 
 
+def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
+    """Test that the physics group + empty pmxPhysicsNode are created per model.
+
+    ``build_pmx_scene`` creates a ``{model}_Physics`` group under the root with
+    one empty ``pmxPhysicsNode`` solver (gravity -9.8) and stamps the solver
+    name on the root's ``pmxPhysicsNode`` string attribute for discovery.
+    """
+    root_obj = maya_pmx_data.root_obj
+    root_fn = om.MFnTransform(root_obj)
+    root_name = root_fn.name()
+
+    # Find the physics group under the root (mirror the _Geo lookup).
+    physics_group = None
+    for i in range(root_fn.childCount()):
+        child = root_fn.child(i)
+        child_fn = om.MFnTransform(child)
+        if child_fn.name().endswith("_Physics"):
+            physics_group = child_fn
+            break
+    assert_true(physics_group is not None, "Physics group not found under root")
+    assert_eq(
+        om.MFnTransform(physics_group.parent(0)).name(),
+        root_name,
+        "Physics group parent is not root",
+    )
+
+    # Exactly one empty pmxPhysicsNode solver shape under the group.
+    solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
+    assert_true(bool(solvers), "No pmxPhysicsNode under the physics group")
+    solver = solvers[0]
+    assert_eq(cmds.nodeType(solver), _NODE_TYPE, "solver has the wrong node type")
+
+    # Gravity default is exactly MMD's -9.8 on Y.
+    grav = cmds.getAttr(f"{solver}.gravity")[0]
+    assert_eq(round(grav[1], 4), -9.8, "physics node gravity y")
+
+    # The solver name is stamped on the root for discovery.
+    assert_true(
+        cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True),
+        "pmxPhysicsNode root attribute missing",
+    )
+    assert_eq(
+        cmds.getAttr(f"{root_name}.pmxPhysicsNode"),
+        solver,
+        "root pmxPhysicsNode attribute should name the solver",
+    )
+    print(f"PASS: physics group + empty {_NODE_TYPE} created")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Test registry and runner
 # ---------------------------------------------------------------------------
@@ -210,4 +263,5 @@ _TESTS = [
     ("Material Creation", test_pmx_material_creation),
     ("Skin Cluster Creation", test_pmx_skin_cluster_creation),
     ("Skin Weights Applied", test_pmx_skin_weights_applied),
+    ("Physics Node Creation", test_pmx_physics_node_creation),
 ]
