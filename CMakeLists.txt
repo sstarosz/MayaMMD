@@ -175,6 +175,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     # =====================================================================
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
+        mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
         mmd/maya/nodes/physics_node.cpp
     )

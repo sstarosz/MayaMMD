@@ -21,6 +21,7 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
+#include "maya/cmds/rigid_body_cmd.h"
 #include "maya/nodes/ccd_ik_solver_node.h"
 #include "maya/nodes/physics_node.h"
 #include "version.hpp"
@@ -99,6 +100,18 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxPhysicsNode registration failed");
 
+    // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
+    //     C++ (not Python) because the Python command layer crashed inside
+    //     OpenMaya's lazy MSyntax creation in mayapy 2026.  Create mode only
+    //     for now — SIMULATION IS DISABLED (body data + kinematic anchors;
+    //     no write-back wiring or solver stepping yet).
+    {
+        stat = plugin.registerCommand(RigidBodyCmd::kName, RigidBodyCmd::creator,
+                                      RigidBodyCmd::syntaxCreator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
+
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before
     //    plugin loading, so mmd/ is already importable.
@@ -122,6 +135,7 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     // 2. Deregister C++ nodes and commands
     plugin.deregisterNode(PhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
+    plugin.deregisterCommand(RigidBodyCmd::kName);
 
     return MS::kSuccess;
 }
