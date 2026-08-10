@@ -46,7 +46,6 @@
 
 using mmd::core::Double3;
 using mmd::core::Simulation;
-using mmd::core::physics_math::deg2rad;
 using mmd::core::physics_math::rad2deg;
 
 namespace
@@ -86,17 +85,6 @@ constexpr double clamp01(double v)
 MMatrix worldMatrix(const MDagPath& path)
 {
     return path.inclusiveMatrix();
-}
-
-// 4x4 row-vector matrix from translate + XYZ euler degrees.
-MMatrix matrixFromTR(const Double3& t, const Double3& r)
-{
-    MTransformationMatrix mt;
-    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
-    double rot[3] = {deg2rad(r.x), deg2rad(r.y), deg2rad(r.z)};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    mt.setRotation(rot, MTransformationMatrix::kXYZ);
-    return mt.asMatrix();
 }
 
 // A joint's stored PMX bone index (pmxBoneIndex), or -1.
@@ -394,7 +382,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness) ──
     const Double3 worldT(pos.x, pos.y, -pos.z);
     const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
-    const MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
+    const MMatrix local = mmd::maya::matrixFromTR(worldT, worldR) * groupWorld.inverse();
     MTransformationMatrix mt(local);
     const MVector lt = mt.getTranslation(MSpace::kTransform);
     const MEulerRotation le = mt.eulerRotation();
@@ -465,7 +453,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // groupWorld): when the physics group carries scale, the euler
             // decomposition drops it, so the anchor would sit off its rest
             // pose (same breakage the K path documents).
-            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
+            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
             const MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
             mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
@@ -477,7 +465,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // Pin the body's DIRECT world rest pose (world * groupInverse
             // gives the group-space rest in the node) — not the round-tripped
             // group-space decomposition, which drops group scale.
-            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
+            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
             MMatrix identity;
             identity.setToIdentity();
             mmd::maya::setPlugMatrixValue(
@@ -517,7 +505,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // is scaled wrongly and every write-back-driven bone lands off its
             // rest pose (the collider guides stay correct — they render the
             // scale back through the DAG — which is the exact breakage seen).
-            const MMatrix bodyWorld = matrixFromTR(worldT, worldR);
+            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }
         mmd::maya::setPlugMatrixValue(

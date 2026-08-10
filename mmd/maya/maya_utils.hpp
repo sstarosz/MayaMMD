@@ -12,8 +12,11 @@
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
 #include <maya/MStatus.h>
+#include <maya/MTransformationMatrix.h>
+#include <maya/MVector.h>
 
 #include "common.hpp"
+#include "physics_math.hpp"
 
 namespace mmd::maya
 {
@@ -49,6 +52,22 @@ inline void setPlugDouble3(MPlug plug, const mmd::core::Double3& v)
     const MObject obj = data.create(MFnNumericData::k3Double);
     data.setData3Double(v.x, v.y, v.z);
     plug.setValue(obj);
+}
+
+// 4x4 row-vector matrix from translate + XYZ euler DEGREES.  Shared by the
+// pmxRigidBody / pmxRigidBodyConstraint commands for the world/group-space
+// rest-pose conversions (deliberately does NOT re-read a scale component —
+// the callers build the matrix from PMX T/R and then multiply by a
+// groupWorld⁻¹, which is the scale-correct direction).
+inline MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double3& r)
+{
+    MTransformationMatrix mt;
+    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
+    double rot[3] = {mmd::core::physics_math::deg2rad(r.x), mmd::core::physics_math::deg2rad(r.y),
+                     mmd::core::physics_math::deg2rad(r.z)};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    mt.setRotation(rot, MTransformationMatrix::kXYZ);
+    return mt.asMatrix();
 }
 
 // Connect src → dst, first disconnecting any other source already driving dst.

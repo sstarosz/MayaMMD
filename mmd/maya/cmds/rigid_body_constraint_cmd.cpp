@@ -58,7 +58,6 @@
 #include <string>
 
 using mmd::core::Double3;
-using mmd::core::physics_math::deg2rad;
 using mmd::core::physics_math::rad2deg;
 
 namespace
@@ -85,18 +84,6 @@ constexpr const char* kAngularSpringFlag = "as";
 
 // Highest PMX joint type value (JointType::HINGE).
 constexpr int kMaxJointType = 5;
-
-// 4x4 row-vector matrix from translate + XYZ euler degrees (same helper as
-// pmxRigidBody — shared by the frame's group-space conversion).
-MMatrix matrixFromTR(const Double3& t, const Double3& r)
-{
-    MTransformationMatrix mt;
-    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
-    double rot[3] = {deg2rad(r.x), deg2rad(r.y), deg2rad(r.z)};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    mt.setRotation(rot, MTransformationMatrix::kXYZ);
-    return mt.asMatrix();
-}
 
 // Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
 bool resolveSolver(const MString& target, MObject& outNode)
@@ -310,7 +297,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness).
     const Double3 worldT(pos.x, pos.y, -pos.z);
     const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
-    const MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
+    const MMatrix local = mmd::maya::matrixFromTR(worldT, worldR) * groupWorld.inverse();
     MTransformationMatrix mt(local);
     const MVector lt = mt.getTranslation(MSpace::kTransform);
     const MEulerRotation le = mt.eulerRotation();

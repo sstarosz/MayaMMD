@@ -139,7 +139,7 @@ def _joint_names_for(joints: Sequence[om.MObject]) -> dict[int, str]:
 
 def _populate_rigid_bodies(
     node: str, pmx_data: PmxModel, joint_names: dict[int, str]
-) -> None:
+) -> int:
     """Append one body per PMX rigid body through the native ``pmxRigidBody`` command.
 
     Data + bone binding only — SIMULATION IS DISABLED (no write-back, no
@@ -147,7 +147,14 @@ def _populate_rigid_bodies(
     matches the PMX rigid-body index that the constraint command references.
     FOLLOW_BONE bodies get their kinematic-anchor input here; dynamic bodies
     are data-only.
+
+    Returns the number of bodies successfully appended — the caller must
+    compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every
+    later PMX body index silently shifts (body i+1 lands at Maya index i-1),
+    so the constraints and the future write-back would reference WRONG
+    bodies.
     """
+    created = 0
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         size = body.shape_size
         bone = ""
@@ -183,8 +190,10 @@ def _populate_rigid_bodies(
                 mask=body.non_collision_group & 0xFFFF,
                 physicsMode=_PHYSICS_MODE_NAME.get(body.physics_mode.value, "physics"),
             )
+            created += 1
         except Exception as exc:
             log.warning("Could not create body %d: %s", rb_idx, exc)
+    return created
 
 
 def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
@@ -285,7 +294,18 @@ def create_physics_from_pmx_data(
         )
         return None
     joint_names = _joint_names_for(joints)
-    _populate_rigid_bodies(node, pmx_data, joint_names)
+    created = _populate_rigid_bodies(node, pmx_data, joint_names)
+    # A body that failed to create shifts every later PMX body index, which
+    # would make the constraint (and future write-back) references point at
+    # the WRONG bodies — fail loudly instead of importing a silently-corrupt
+    # constraint set.
+    if created != len(pmx_data.rigid_bodies):
+        log.warning(
+            "Physics: created %d/%d rigid bodies — PMX body indices no longer "
+            "match Maya body indices, so constraints are unreliable for this model",
+            created,
+            len(pmx_data.rigid_bodies),
+        )
     # Constraints reference bodies by index, so they come AFTER every body.
     _populate_rigid_body_constraints(node, pmx_data)
     return node
