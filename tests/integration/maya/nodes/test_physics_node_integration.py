@@ -186,6 +186,8 @@ def test_attribute_surface_and_defaults():
         )
 
     joint_children = [
+        "jointNameLocal",
+        "jointNameUniversal",
         "jointBodyA",
         "jointBodyB",
         "jointType",

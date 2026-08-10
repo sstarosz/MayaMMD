@@ -19,9 +19,11 @@
  *     pmxRigidBodyConstraint <solver | modelRoot>
  *         -index <int>              optional target index (must be the next
  *                                   free index; omit to auto-append)
+ *         -name <string>            PMX joint name (local) → joints[j].jointNameLocal
+ *         -nameUniversal <string>   PMX joint name (universal) → joints[j].jointNameUniversal
  *         -bodyA <int> -bodyB <int>   PMX rigid-body indices the joint links
  *                                   (validated against the current body
- *                                   count)
+ *                                   count; bodyA must differ from bodyB)
  *         -type <int>               PMX joint type 0..5 (validated)
  *                                   SPRING_6DOF=0 / 6DOF=1 / P2P=2 /
  *                                   CONETWIST=3 / SLIDER=4 / HINGE=5
@@ -29,13 +31,20 @@
  *         -rotation <x y z>         joint frame rotation (MMD radians;
  *                                   handedness flip to Maya degrees)
  *         -linearMin <x y z> -linearMax <x y z>
- *                                   PMX verbatim (position limits, PMX units)
+ *                                   PMX position limits, converted through the
+ *                                   same MMD→Maya reflection as the frame
+ *                                   (Z component negated + min/max swapped)
  *         -angularMin <x y z> -angularMax <x y z>
- *                                   PMX radians VERBATIM — the node hands
- *                                   angular limits to Bullet unchanged
- *                                   (they are NOT converted to degrees)
+ *                                   PMX rotation limits in RADIANS, converted
+ *                                   through the handedness reflection (X/Y
+ *                                   negated + min/max swapped; Z unchanged) —
+ *                                   the node hands angular values to Bullet
+ *                                   unchanged (they are NOT converted to
+ *                                   degrees)
  *         -linearSpring <x y z> -angularSpring <x y z>
- *                                   PMX verbatim (spring stiffness)
+ *                                   PMX verbatim (spring stiffness — a
+ *                                   magnitude, invariant under the
+ *                                   reflection)
  *
  * SIMULATION IS DISABLED: create writes the joint DATA so the node holds the
  * full constraint set; no solver stepping happens here (the ``time`` input

@@ -201,6 +201,8 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
         try:
             cmds.pmxRigidBodyConstraint(
                 node,
+                name=joint.name_local or "",
+                nameUniversal=joint.name_universal or "",
                 bodyA=int(joint.rigid_body_index_a),
                 bodyB=int(joint.rigid_body_index_b),
                 type=int(joint.type.value),

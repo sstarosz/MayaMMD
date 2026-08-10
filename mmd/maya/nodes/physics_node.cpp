@@ -58,12 +58,12 @@
 // SDK; the Bullet-facing conversions live in bullet_bridge.hpp (the only
 // core header that exposes Bullet types).
 using namespace mmd::core::physics_math;
+using mmd::core::applyShapeSize;
 using mmd::core::Double3;
 using mmd::core::Double4;
 using mmd::core::Matrix4;
-using mmd::core::Simulation;
-using mmd::core::applyShapeSize;
 using mmd::core::shapeSizeFromBodyDefinition;
+using mmd::core::Simulation;
 
 // ===========================================================================
 // Constants
@@ -107,6 +107,8 @@ MObject PhysicsNode::aBodyParentBodyIndex;
 MObject PhysicsNode::aBodyResetAnchorIndex;
 
 MObject PhysicsNode::aJoints;
+MObject PhysicsNode::aJointNameLocal;
+MObject PhysicsNode::aJointNameUniversal;
 MObject PhysicsNode::aJointBodyA;
 MObject PhysicsNode::aJointBodyB;
 MObject PhysicsNode::aJointType;
@@ -535,10 +537,9 @@ MStatus PhysicsNode::initialize()
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
     MMD_CHECK_MSTATUS(stat);
 
-    for (MObject* a :
-         {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate,
-          &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping,
-          &aBodyRestitution, &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a : {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate, &aBodyRestRotate,
+                       &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution,
+                       &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -577,6 +578,16 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aBodyResetAnchorIndex);
 
     // --- joint compound ---
+    aJointNameLocal =
+        tAttr.create("jointNameLocal", "jnml", MFnData::kString, MObject::kNullObj, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    tAttr.setStorable(true);
+    tAttr.setKeyable(false);
+    aJointNameUniversal =
+        tAttr.create("jointNameUniversal", "jnmu", MFnData::kString, MObject::kNullObj, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    tAttr.setStorable(true);
+    tAttr.setKeyable(false);
     aJointBodyA = nAttr.create("jointBodyA", "jba", MFnNumericData::kLong, 0, &stat);
     MMD_CHECK_MSTATUS(stat);
     aJointBodyB = nAttr.create("jointBodyB", "jbb", MFnNumericData::kLong, 0, &stat);
@@ -621,6 +632,8 @@ MStatus PhysicsNode::initialize()
     cAttr.setUsesArrayDataBuilder(true);
     cAttr.setStorable(true);
     cAttr.setKeyable(false);
+    cAttr.addChild(aJointNameLocal);
+    cAttr.addChild(aJointNameUniversal);
     cAttr.addChild(aJointBodyA);
     cAttr.addChild(aJointBodyB);
     cAttr.addChild(aJointType);

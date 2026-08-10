@@ -118,9 +118,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     //     IS DISABLED (writes the joint DATA; the node holds the full
     //     constraint set but nothing steps yet).
     {
-        stat = plugin.registerCommand(RigidBodyConstraintCmd::kName,
-                                      RigidBodyConstraintCmd::creator,
-                                      RigidBodyConstraintCmd::syntaxCreator);
+        stat =
+            plugin.registerCommand(RigidBodyConstraintCmd::kName, RigidBodyConstraintCmd::creator,
+                                   RigidBodyConstraintCmd::syntaxCreator);
     }
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyConstraint command registration failed");

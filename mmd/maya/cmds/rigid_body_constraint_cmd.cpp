@@ -8,11 +8,25 @@
  * ``joints`` array at the next free index, replacing the former Python
  * ``_set_joint_attributes``.
  *
- * Data conversions match the old Python writer exactly:
- *   frame translate = (px, py, -pz)             (Z-flip)
- *   frame rotate    = (-rx, -ry, +rz) degrees   (MMD radians -> Maya degrees)
- *   limits / springs pass straight through (linear in PMX units, angular in
- *   PMX radians — the node hands angular values to Bullet unchanged).
+ * Data conversions mirror the old Python writer's frame handling (Z-flip +
+ * MMD radians -> Maya degrees handedness flip) and add the reflection to the
+ * LIMITS that the old writer was missing:
+ *   frame translate = (px, py, -pz)            (Z-flip)
+ *   frame rotate    = (-rx, -ry, +rz) degrees  (MMD radians -> Maya degrees)
+ *   frame stored in GROUP space (world * groupWorld^-1 — same as pmxRigidBody)
+ *   linearMin/Max   = Z component negated + min/max swapped
+ *   angularMin/Max  = X/Y negated + min/max swapped, Z unchanged (radians)
+ *   springs         = verbatim (magnitudes, invariant under the reflection)
+ *
+ * WHY the limits are reflected: the MMD->Maya conversion is the reflection
+ * F = diag(1, 1, -1) (Z-flip on position, rotation negated on X/Y).  The
+ * joint limits live in the FRAME's local space, so they transform under the
+ * same reflection: a rotation about local X/Y negates (F·Rx·F⁻¹ = Rx(-θ)), so
+ * its [min, max] interval negates AND swaps; rotation about Z and linear X/Y
+ * are unchanged; linear Z negates (the local Z axis reverses) so its interval
+ * negates AND swaps.  Without this, every joint with ASYMMETRIC limits is
+ * stored MIRRORED (429/496 joints in the test model have asymmetric angular
+ * limits) and the constraint allows rotation in the wrong sense.
  *
  * The command's interface is minimal (see rigid_body_constraint_cmd.hpp); all
  * the implementation helpers live in the anonymous namespace below so the
@@ -23,14 +37,19 @@
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
+#include <maya/MDagPath.h>
+#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
+#include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
+#include <maya/MTransformationMatrix.h>
+#include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
@@ -39,6 +58,7 @@
 #include <string>
 
 using mmd::core::Double3;
+using mmd::core::physics_math::deg2rad;
 using mmd::core::physics_math::rad2deg;
 
 namespace
@@ -47,6 +67,8 @@ namespace
 // Flag short names (single/compound, Maya API style).
 // ---------------------------------------------------------------------------
 constexpr const char* kIndexFlag = "i";
+constexpr const char* kNameFlag = "n";
+constexpr const char* kNameUniversalFlag = "nu";
 constexpr const char* kBodyAFlag = "ba";
 constexpr const char* kBodyBFlag = "bb";
 constexpr const char* kTypeFlag = "t";
@@ -63,6 +85,18 @@ constexpr const char* kAngularSpringFlag = "as";
 
 // Highest PMX joint type value (JointType::HINGE).
 constexpr int kMaxJointType = 5;
+
+// 4x4 row-vector matrix from translate + XYZ euler degrees (same helper as
+// pmxRigidBody — shared by the frame's group-space conversion).
+MMatrix matrixFromTR(const Double3& t, const Double3& r)
+{
+    MTransformationMatrix mt;
+    mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
+    double rot[3] = {deg2rad(r.x), deg2rad(r.y), deg2rad(r.z)};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    mt.setRotation(rot, MTransformationMatrix::kXYZ);
+    return mt.asMatrix();
+}
 
 // Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
 bool resolveSolver(const MString& target, MObject& outNode)
@@ -139,12 +173,19 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     if (parser.isFlagSet(kTypeFlag))
         type = parser.flagArgumentInt(kTypeFlag, 0);
 
+    MString nameLocal;
+    MString nameUniversal;
+    if (parser.isFlagSet(kNameFlag))
+        nameLocal = parser.flagArgumentString(kNameFlag, 0);
+    if (parser.isFlagSet(kNameUniversalFlag))
+        nameUniversal = parser.flagArgumentString(kNameUniversalFlag, 0);
+
     Double3 pos;
     Double3 rot;
-    Double3 lmin;
-    Double3 lmax;
-    Double3 amin;
-    Double3 amax;
+    Double3 lmin0;
+    Double3 lmax0;
+    Double3 amin0;
+    Double3 amax0;
     Double3 ls;
     Double3 as;
     if (parser.isFlagSet(kPositionFlag))
@@ -160,22 +201,22 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     if (parser.isFlagSet(kLinearMinFlag))
     {
         for (int i = 0; i < 3; ++i)
-            lmin[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
+            lmin0[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
     }
     if (parser.isFlagSet(kLinearMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
-            lmax[i] = parser.flagArgumentDouble(kLinearMaxFlag, i);
+            lmax0[i] = parser.flagArgumentDouble(kLinearMaxFlag, i);
     }
     if (parser.isFlagSet(kAngularMinFlag))
     {
         for (int i = 0; i < 3; ++i)
-            amin[i] = parser.flagArgumentDouble(kAngularMinFlag, i);
+            amin0[i] = parser.flagArgumentDouble(kAngularMinFlag, i);
     }
     if (parser.isFlagSet(kAngularMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
-            amax[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
+            amax0[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
     }
     if (parser.isFlagSet(kLinearSpringFlag))
     {
@@ -239,20 +280,62 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         MGlobal::displayError(msg);
         return MS::kFailure;
     }
+    // A joint linking a body to ITSELF is degenerate (frameInA == frameInB on
+    // the same body) and never meaningful — PMX never produces it (the test
+    // model has 0/496), so reject it instead of writing a broken constraint.
+    if (bodyA == bodyB)
+    {
+        MString msg = MString("bodyA == bodyB (") + MString(std::to_string(bodyA).c_str()) +
+                      MString(") — a joint must link two DIFFERENT bodies");
+        MGlobal::displayError(msg);
+        return MS::kFailure;
+    }
+
+    // ── Group-space frame ──
+    // The Bullet world runs in the physics group's local space (bodies store
+    // group-space rest poses), so the joint frame must too — mirror the
+    // pmxRigidBody group-space conversion (world * groupWorld^-1).  At import
+    // the group is identity so this is a no-op; it keeps frames attached to
+    // the bodies if the user ever transforms the physics group.
+    MDagPath nodePath;
+    if (MDagPath::getAPathTo(solverNode, nodePath) != MS::kSuccess)
+    {
+        MGlobal::displayError("pmxRigidBodyConstraint: could not resolve solver dag path");
+        return MS::kFailure;
+    }
+    MDagPath groupPath = nodePath;
+    groupPath.pop(); // |group|shape ⇒ |group
+    const MMatrix groupWorld = groupPath.inclusiveMatrix();
+
+    // Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness).
+    const Double3 worldT(pos.x, pos.y, -pos.z);
+    const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
+    const MMatrix local = matrixFromTR(worldT, worldR) * groupWorld.inverse();
+    MTransformationMatrix mt(local);
+    const MVector lt = mt.getTranslation(MSpace::kTransform);
+    const MEulerRotation le = mt.eulerRotation();
+    const Double3 localT(lt.x, lt.y, lt.z);
+    const Double3 localR(rad2deg(le.x), rad2deg(le.y), rad2deg(le.z));
+
+    // ── Limits through the MMD→Maya reflection F = diag(1, 1, -1) ──
+    // Linear: X/Y unchanged; local Z reverses so its interval negates AND
+    // swaps.  Angular: rotations about local X/Y negate (F·Rx·F⁻¹ = Rx(-θ)) so
+    // their intervals negate AND swap; rotation about Z is invariant.  Springs
+    // are magnitudes — invariant, passed through.
+    const Double3 lmin(lmin0.x, lmin0.y, -lmax0.z);
+    const Double3 lmax(lmax0.x, lmax0.y, -lmin0.z);
+    const Double3 amin(-amax0.x, -amax0.y, amin0.z);
+    const Double3 amax(-amin0.x, -amin0.y, amax0.z);
 
     // ── Write the joint data (simple create) ──
-    // Frame conversions match the old Python writer: Z-flip on position,
-    // MMD radians -> Maya degrees with the handedness flip on rotation.
-    // Limits/springs pass straight through (linear in PMX units, angular in
-    // PMX radians — the node hands angular values to Bullet unchanged).
     MPlug elem = jointsPlug.elementByLogicalIndex(n);
+    elem.child(PhysicsNode::aJointNameLocal).setString(nameLocal);
+    elem.child(PhysicsNode::aJointNameUniversal).setString(nameUniversal);
     elem.child(PhysicsNode::aJointBodyA).setInt(bodyA);
     elem.child(PhysicsNode::aJointBodyB).setInt(bodyB);
     elem.child(PhysicsNode::aJointType).setInt(type);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate),
-                              Double3(pos.x, pos.y, -pos.z));
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate),
-                              Double3(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z)));
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate), localT);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate), localR);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMin), lmin);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMax), lmax);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointAngularMin), amin);
@@ -282,6 +365,8 @@ MSyntax RigidBodyConstraintCmd::syntaxCreator()
     syntax.addArg(MSyntax::kString);
 
     syntax.addFlag(kIndexFlag, "index", MSyntax::kLong);
+    syntax.addFlag(kNameFlag, "name", MSyntax::kString);
+    syntax.addFlag(kNameUniversalFlag, "nameUniversal", MSyntax::kString);
     syntax.addFlag(kBodyAFlag, "bodyA", MSyntax::kLong);
     syntax.addFlag(kBodyBFlag, "bodyB", MSyntax::kLong);
     syntax.addFlag(kTypeFlag, "type", MSyntax::kLong);

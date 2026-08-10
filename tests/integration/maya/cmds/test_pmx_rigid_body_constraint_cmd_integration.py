@@ -73,6 +73,8 @@ def test_append_joint_data():
 
     idx = cmds.pmxRigidBodyConstraint(
         solver,
+        name="LeftChest",
+        nameUniversal="LeftChest_univ",
         bodyA=0,
         bodyB=1,
         type=0,
@@ -89,10 +91,16 @@ def test_append_joint_data():
     assert_eq(int(cmds.getAttr(f"{solver}.joints", size=True)), 1, "joints count != 1")
 
     base = f"{solver}.joints[0]"
+    assert_eq(cmds.getAttr(f"{base}.jointNameLocal"), "LeftChest", "jointNameLocal")
+    assert_eq(
+        cmds.getAttr(f"{base}.jointNameUniversal"),
+        "LeftChest_univ",
+        "jointNameUniversal",
+    )
     assert_eq(int(cmds.getAttr(f"{base}.jointBodyA")), 0, "jointBodyA")
     assert_eq(int(cmds.getAttr(f"{base}.jointBodyB")), 1, "jointBodyB")
     assert_eq(int(cmds.getAttr(f"{base}.jointType")), 0, "jointType")
-    print("✓ joint appended with bodyA/bodyB/type at the next free index")
+    print("✓ joint appended with names/bodyA/bodyB/type at the next free index")
     return True
 
 
@@ -127,8 +135,14 @@ def test_frame_conversion():
     return True
 
 
-def test_limits_springs_verbatim():
-    """Limits/springs are stored VERBATIM (angular stays in PMX radians)."""
+def test_limits_springs_converted():
+    """Limits pass through the MMD->Maya reflection; springs stay verbatim.
+
+    The MMD->Maya conversion is the reflection F = diag(1, 1, -1): linear Z
+    negates + min/max swap, angular X/Y negate + min/max swap, angular Z and
+    springs are invariant.  SYMMETRIC limits are unchanged by the flip, so
+    this test uses ASYMMETRIC values to prove the conversion actually ran.
+    """
     _group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
 
@@ -138,37 +152,37 @@ def test_limits_springs_verbatim():
         bodyB=1,
         type=0,
         linearMin=(-1.0, -2.0, -3.0),
-        linearMax=(1.0, 2.0, 3.0),
-        angularMin=(-0.5, -0.6, -0.7),
-        angularMax=(0.5, 0.6, 0.7),
+        linearMax=(4.0, 5.0, 6.0),
+        angularMin=(-0.5, -0.2, -0.7),
+        angularMax=(0.1, 0.6, 0.7),
         linearSpring=(4.0, 5.0, 6.0),
         angularSpring=(7.0, 8.0, 9.0),
     )
     base = f"{solver}.joints[0]"
-    # Linear limits in PMX units, verbatim.
+    # Linear: X/Y unchanged; Z negated + min/max swapped.
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{base}.jointLinearMin")[0], (-1.0, -2.0, -3.0)
+            cmds.getAttr(f"{base}.jointLinearMin")[0], (-1.0, -2.0, -6.0)
         ),
-        "jointLinearMin not verbatim",
+        f"jointLinearMin flip wrong {cmds.getAttr(f'{base}.jointLinearMin')}",
     )
     assert_true(
-        approx_equal_tuple(cmds.getAttr(f"{base}.jointLinearMax")[0], (1.0, 2.0, 3.0)),
-        "jointLinearMax not verbatim",
+        approx_equal_tuple(cmds.getAttr(f"{base}.jointLinearMax")[0], (4.0, 5.0, 3.0)),
+        f"jointLinearMax flip wrong {cmds.getAttr(f'{base}.jointLinearMax')}",
     )
-    # Angular limits stay in PMX RADIANS (NOT converted to degrees — the node
-    # hands angular values to Bullet unchanged).
+    # Angular: X/Y negated + min/max swapped; Z unchanged (radians, NOT
+    # converted to degrees — the node hands angular values to Bullet).
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{base}.jointAngularMin")[0], (-0.5, -0.6, -0.7)
+            cmds.getAttr(f"{base}.jointAngularMin")[0], (-0.1, -0.6, -0.7)
         ),
-        "jointAngularMin not verbatim (should stay radians)",
+        f"jointAngularMin flip wrong {cmds.getAttr(f'{base}.jointAngularMin')}",
     )
     assert_true(
-        approx_equal_tuple(cmds.getAttr(f"{base}.jointAngularMax")[0], (0.5, 0.6, 0.7)),
-        "jointAngularMax not verbatim (should stay radians)",
+        approx_equal_tuple(cmds.getAttr(f"{base}.jointAngularMax")[0], (0.5, 0.2, 0.7)),
+        f"jointAngularMax flip wrong {cmds.getAttr(f'{base}.jointAngularMax')}",
     )
-    # Springs verbatim.
+    # Springs are magnitudes — invariant under the reflection.
     assert_true(
         approx_equal_tuple(
             cmds.getAttr(f"{base}.jointLinearSpring")[0], (4.0, 5.0, 6.0)
@@ -181,7 +195,92 @@ def test_limits_springs_verbatim():
         ),
         "jointAngularSpring not verbatim",
     )
-    print("✓ limits/springs stored verbatim (angular stays in radians)")
+    print("✓ limits converted through the MMD->Maya reflection; springs verbatim")
+    return True
+
+
+def test_asymmetric_angular_limits_real_model():
+    """A real chest-joint's asymmetric angular limits are NOT stored mirrored.
+
+    The Endfield test model's chest joints carry min=(-0.524,-0.175,-0.087)
+    max=(0.087,0.175,0.087).  Under the reflection the X interval must become
+    [-0.087, +0.524] (negated + swapped) — storing it verbatim would let the
+    joint rotate the wrong way in the sim.
+    """
+    _group, solver, _ja, _jb = _make_physics_scene()
+    _add_bodies(solver, 2)
+
+    cmds.pmxRigidBodyConstraint(
+        solver,
+        bodyA=0,
+        bodyB=1,
+        type=0,
+        angularMin=(-0.524, -0.175, -0.087),
+        angularMax=(0.087, 0.175, 0.087),
+    )
+    base = f"{solver}.joints[0]"
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{base}.jointAngularMin")[0], (-0.087, -0.175, -0.087)
+        ),
+        f"chest angularMin wrong {cmds.getAttr(f'{base}.jointAngularMin')}",
+    )
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{base}.jointAngularMax")[0], (0.524, 0.175, 0.087)
+        ),
+        f"chest angularMax wrong {cmds.getAttr(f'{base}.jointAngularMax')}",
+    )
+    print("✓ asymmetric chest-joint limits converted (not mirrored)")
+    return True
+
+
+def test_frame_in_group_space():
+    """The joint frame is stored in the physics group's LOCAL space.
+
+    Mirrors pmxRigidBody: the Bullet world runs in group space, so a joint at
+    world (1,2,3) under a group translated to (10,0,0) must be stored at
+    group-space (-9,2,-3) — NOT the raw world position.  (Without the group
+    conversion the stored value would be (1,2,-3).)
+    """
+    group, solver, _ja, _jb = _make_physics_scene()
+    _add_bodies(solver, 2)
+    cmds.move(10.0, 0.0, 0.0, group)
+
+    cmds.pmxRigidBodyConstraint(
+        solver,
+        bodyA=0,
+        bodyB=1,
+        type=0,
+        position=(1.0, 2.0, 3.0),
+    )
+    base = f"{solver}.joints[0]"
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{base}.jointFrameTranslate")[0], (-9.0, 2.0, -3.0)
+        ),
+        f"jointFrameTranslate not in group space {cmds.getAttr(f'{base}.jointFrameTranslate')}",
+    )
+    print("✓ joint frame stored in the physics group's local space")
+    return True
+
+
+def test_self_constraint_rejected():
+    """A joint linking a body to ITSELF (bodyA == bodyB) is rejected."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+    _add_bodies(solver, 2)
+
+    try:
+        cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=1, type=0)
+        assert_true(False, "bodyA == bodyB was accepted")
+    except RuntimeError:
+        pass
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+        0,
+        "rejected self-constraint should not create a joint",
+    )
+    print("✓ bodyA == bodyB self-constraint rejected")
     return True
 
 
@@ -348,7 +447,13 @@ def test_missing_solver_argument_rejected():
 _TESTS = [
     ("Append joint stores data", test_append_joint_data),
     ("Joint frame conversion", test_frame_conversion),
-    ("Limits/springs verbatim", test_limits_springs_verbatim),
+    ("Limits converted through reflection", test_limits_springs_converted),
+    (
+        "Asymmetric angular limits (real model)",
+        test_asymmetric_angular_limits_real_model,
+    ),
+    ("Frame stored in group space", test_frame_in_group_space),
+    ("Self-constraint rejected", test_self_constraint_rejected),
     ("Auto-increment joint indices", test_auto_increment_indices),
     ("Explicit index validated", test_explicit_index_validation),
     ("Joint type validated", test_type_validated),

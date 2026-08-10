@@ -13,7 +13,11 @@ import maya.cmds as cmds  # noqa: E402
 
 from mmd.core.data_types import PmxModel  # noqa: E402
 
-from tests.integration.test_helpers import assert_true, assert_eq  # noqa: E402
+from tests.integration.test_helpers import (  # noqa: E402
+    approx_equal_tuple,
+    assert_eq,
+    assert_true,
+)
 
 _NODE_TYPE = "pmxPhysicsNode"
 
@@ -298,7 +302,10 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
             expected_joints,
             "joints count != PMX joint count",
         )
-        # First joint's data mirrors the first PMX joint.
+        # First joint's data mirrors the first PMX joint: body refs, type,
+        # name, and the frame/limit conversion (Z-flip on position; angular
+        # limits reflected through F = diag(1,1,-1): X/Y negated + swapped,
+        # Z unchanged).
         first = pmx_data.joints[0]
         jbase = f"{solver}.joints[0]"
         assert_eq(
@@ -315,6 +322,43 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
             int(cmds.getAttr(f"{jbase}.jointType")),
             int(first.type.value),
             "first joint type",
+        )
+        assert_eq(
+            cmds.getAttr(f"{jbase}.jointNameLocal"),
+            first.name_local,
+            "first joint name_local",
+        )
+        assert_true(
+            approx_equal_tuple(
+                cmds.getAttr(f"{jbase}.jointFrameTranslate")[0],
+                (first.position.x, first.position.y, -first.position.z),
+            ),
+            f"first joint frame translate Z-flip wrong "
+            f"{cmds.getAttr(f'{jbase}.jointFrameTranslate')}",
+        )
+        assert_true(
+            approx_equal_tuple(
+                cmds.getAttr(f"{jbase}.jointAngularMin")[0],
+                (
+                    -first.rotation_max.x,
+                    -first.rotation_max.y,
+                    first.rotation_min.z,
+                ),
+            ),
+            f"first joint angularMin reflection wrong "
+            f"{cmds.getAttr(f'{jbase}.jointAngularMin')}",
+        )
+        assert_true(
+            approx_equal_tuple(
+                cmds.getAttr(f"{jbase}.jointAngularMax")[0],
+                (
+                    -first.rotation_min.x,
+                    -first.rotation_min.y,
+                    first.rotation_max.z,
+                ),
+            ),
+            f"first joint angularMax reflection wrong "
+            f"{cmds.getAttr(f'{jbase}.jointAngularMax')}",
         )
     else:
         # Models with no joints get an empty joints array.
