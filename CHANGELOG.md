@@ -25,7 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MPxLocatorNode` that owns the embedded Bullet world is now registered by
   the plugin and created as an **empty node per imported model** (under a
   `{model}_Physics` group). The `bodies`/`joints` arrays and the solved-pose
-  write-back are populated by the upcoming rigid-body commands PR.
+  write-back are populated by the rigid-body commands (see the
+  `pmxRigidBody` command below).
+- **Native `pmxRigidBody` command (create mode)** — the C++ command that
+  populates a `pmxPhysicsNode`'s `bodies` array with PMX rigid-body data at
+  import time. For every body it writes `bodyShapeSize`, `bodyPhysicsMode`,
+  `bodyGroupId`/`bodyMask`, mass/damping/friction/restitution, and the
+  kinematic anchor data (`bodyWriteBackOffset`, `bodyParentInverseMatrix`,
+  `bodyResetAnchorIndex`, `bodyParentBodyIndex`); it also connects the
+  physics group's `worldMatrix[0]` to the solver's `groupWorldMatrix`. The
+  PMX importer now calls it for each rigid body (matching PMX
+  `body`/`bone`/`group`/`mask` semantics), so imported models show their
+  bodies on the physics node immediately. Backed by 36 Maya integration
+  tests (no PMX file required).
 
 ### Changed
 
@@ -66,6 +78,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cmake/FindMaya.cmake` checks the cached SDK matching `MAYA_VERSION` first
   (a Maya-2027 build can no longer resolve the 2026 SDK just because it was
   cached earlier), falling back to the remaining cached SDKs newest-first.
+- **`pmxRigidBody` anchor offsets no longer drop group scale** — body anchor
+  offsets are built from the body's world-space translation/rotation directly
+  instead of round-tripping through the group's matrix (an euler rebuild
+  silently lost scale), which would have produced the wrong write-back pose
+  for bodies under a scaled physics group.
+- **`pmxRigidBody -group` is clamped to the PMX 0..15 range** — out-of-range
+  values can no longer write an invalid `bodyGroupId` enum index.
+- **Physics bodies reappear after a plugin reload** — `rigid_body_builder`
+  is now force-reloaded on plugin init, so a stale cached module no longer
+  leaves the physics node empty after a reload in the same Maya session.
 
 ### Removed
 
