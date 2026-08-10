@@ -38,12 +38,11 @@ static MStatus run_python_initialization()
     // when the .mll is reloaded without restarting Maya (the bare
     // ``import mmd.plugin`` would be a no-op on a cached module).
     MStatus stat;
-    stat = MGlobal::executePythonCommand(
-        "import sys; "
-        "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
-        "import importlib, mmd.plugin; "
-        "importlib.reload(mmd.plugin); "
-        "mmd.plugin.initializePlugin()");
+    stat = MGlobal::executePythonCommand("import sys; "
+                                         "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
+                                         "import importlib, mmd.plugin; "
+                                         "importlib.reload(mmd.plugin); "
+                                         "mmd.plugin.initializePlugin()");
     if (!stat)
     {
         MGlobal::displayWarning("  Python initialization failed — "
@@ -54,12 +53,11 @@ static MStatus run_python_initialization()
 
 static MStatus run_python_uninitialization()
 {
-    MGlobal::executePythonCommand(
-        "import sys; "
-        "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
-        "import importlib, mmd.plugin; "
-        "importlib.reload(mmd.plugin); "
-        "mmd.plugin.uninitializePlugin()");
+    MGlobal::executePythonCommand("import sys; "
+                                  "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
+                                  "import importlib, mmd.plugin; "
+                                  "importlib.reload(mmd.plugin); "
+                                  "mmd.plugin.uninitializePlugin()");
     return MS::kSuccess;
 }
 
@@ -94,9 +92,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     //     visualization is also planned but intentionally not added yet.)
     {
         MString classification(PhysicsNode::kNodeClassify);
-        stat = plugin.registerNode(PhysicsNode::kNodeName, PhysicsNode::kTypeId,
-                                   PhysicsNode::creator, PhysicsNode::initialize,
-                                   MPxNode::kLocatorNode, &classification);
+        stat =
+            plugin.registerNode(PhysicsNode::kNodeName, PhysicsNode::kTypeId, PhysicsNode::creator,
+                                PhysicsNode::initialize, MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxPhysicsNode registration failed");

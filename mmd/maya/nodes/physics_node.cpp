@@ -907,8 +907,13 @@ bool PhysicsNode::buildWorld(MDataBlock& dataBlock)
 {
     if (mSim.initialized())
         return true;
+    // An EMPTY node (no bodies) is a valid no-op state — the node exists in the
+    // scene but has nothing to simulate.  Treat it as success so compute() stays
+    // inert instead of failing on every evaluation (this is the normal state for
+    // a freshly-created node before the rigid-body commands populate the bodies
+    // array).
     if (mBodies.empty())
-        return false;
+        return true;
 
     // NOTE: do NOT call destroyWorld() here — it clears mBodies/mJoints which
     // were just read from the datablock.  The caller guarantees the world is

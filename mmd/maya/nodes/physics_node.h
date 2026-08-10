@@ -94,7 +94,7 @@ class PhysicsNode : public MPxLocatorNode
     struct DrawBody
     {
         double pos[3] = {};
-        double quat[4] = {};                // (x, y, z, w)
+        double quat[4] = {};                      // (x, y, z, w)
         ColliderType colliderType = kColliderBox; // PMX shape type (box/sphere/capsule)
         double radius = 0.0;
         double extents[3] = {}; // box half extents

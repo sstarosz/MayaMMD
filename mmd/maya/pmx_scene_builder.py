@@ -887,17 +887,14 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
         root_name,
     )
 
-    # Rigid-body physics: one native pmxPhysicsNode per model (embedded
-    # Bullet).  Currently an EMPTY node — the bodies/joints arrays are
-    # populated by the rigid-body commands PR.  Stamp the solver name on the
-    # root so discovery can find it directly.
-    # (The v1.0 visual guide shapes above are superseded by this node.)
+    # Rigid-body physics
     solver_node = create_physics_from_pmx_data(
         pmx_data,
         joints=joints,
         name_registry=name_registry,
         root_transform_obj=root_obj,
     )
+    #TODO: Validate if we need new extra attribute for physics node or if we can use something else
     if solver_node:
         if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
             cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
