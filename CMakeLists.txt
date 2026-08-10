@@ -180,6 +180,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
+        "${CMAKE_CURRENT_SOURCE_DIR}/mmd/maya"
         ${BULLET_INCLUDE_DIRS}
     )
     # The physics node includes Bullet headers directly and links the

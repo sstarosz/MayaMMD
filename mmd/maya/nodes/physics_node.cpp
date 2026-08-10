@@ -16,7 +16,7 @@
 
 #include "physics_node.h"
 
-#include "../maya_utils.hpp"
+#include "maya_utils.hpp"
 
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
