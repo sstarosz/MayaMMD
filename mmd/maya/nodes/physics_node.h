@@ -64,19 +64,13 @@ class PhysicsNode : public MPxLocatorNode
     static constexpr const char* kNodeClassify = "drawdb/geometry/pmxPhysicsNode";
 
     // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
-    // attribute and used by the pmxRigidBody command to classify bodies.  The
-    // full PMX mode is KEPT on every Body (never collapsed to a bool) so the
-    // physics layer can distinguish follow-bone / full-physics / rotation-only
-    // physics; kinematic is only a derived property (Body::isKinematic()).
-    enum class PhysicsMode : short
-    {
-        FollowBone = 0, // kinematic anchor — driven by the related joint
-        Physics = 1,    // full dynamic body
-        PhysicsBone = 2 // dynamic, rotation-only write-back
-    };
-
-    // PMX rigid-body collider shape — stored in the bodyColliderType enum
-    // attribute and used by the pmxRigidBody command.
+    // attribute.  The attribute VALUES are mmd::core::Simulation::PhysicsMode
+    // (eFollowBone=0 / ePhysics=1 / ePhysicsBone=2) so readBodyData can cast
+    // directly — there is deliberately NO separate node-side enum (the PMX
+    // mode is KEPT on every body, never collapsed to a bool, so follow-bone /
+    // full-physics / rotation-only stay distinguishable downstream).
+    // The bodyColliderType enum below DOES differ from the engine's (attribute
+    // values are persisted in scenes), hence the explicit collider mapping.
     enum ColliderType : short
     {
         kColliderBox = 1,

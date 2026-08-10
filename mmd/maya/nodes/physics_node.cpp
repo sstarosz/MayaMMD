@@ -162,6 +162,17 @@ void matrix4ToCArray(const Matrix4& m, double out[4][4])
     }
 }
 
+// Read a k3Double child attribute into a core Double3.  The Maya API returns a
+// `const double*` to three elements; we write into the named members — never
+// past them (the old .data() + out[0..2] pattern was out-of-bounds access).
+void readDouble3(MDataHandle& hd, const MObject& attr, Double3& out)
+{
+    const double* v = hd.child(attr).asDouble3();
+    out.x = v[0];
+    out.y = v[1];
+    out.z = v[2];
+}
+
 // Map the node's persisted attribute enum (kColliderBox=1..kColliderCapsule=3)
 // to the engine's PMX-aligned enum (eSphere=0..eCapsule=2).  The attribute
 // values are stored in scenes, so they cannot change; the engine enum matches
@@ -209,7 +220,7 @@ void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
     db.extents[2] = e[2];
     db.length = el.child(PhysicsNode::aBodyLength).asDouble();
     db.kinematic = (el.child(PhysicsNode::aBodyPhysicsMode).asShort() ==
-                    static_cast<short>(PhysicsNode::PhysicsMode::FollowBone));
+                    static_cast<short>(Simulation::PhysicsMode::eFollowBone));
     // group id straight from the raw PMX id (the Bullet group bit is derived
     // from it in buildWorld); clamp legacy scenes where it is -1.
     db.groupId = el.child(PhysicsNode::aBodyGroupId).asShort();
@@ -257,6 +268,13 @@ uint64_t hashDouble3(uint64_t h, const double v[3])
     h = hashValue(h, v[0]);
     h = hashValue(h, v[1]);
     return hashValue(h, v[2]);
+}
+
+uint64_t hashDouble3(uint64_t h, const Double3& v)
+{
+    h = hashValue(h, v.x);
+    h = hashValue(h, v.y);
+    return hashValue(h, v.z);
 }
 
 } // namespace
@@ -468,17 +486,17 @@ MStatus PhysicsNode::initialize()
     CHECK_MSTATUS(stat);
 
     // PMX physics mode — enum: followBone / physics / physicsBone (field
-    // values match PhysicsMode).  Field names mirror the enumerators.  The
-    // node writes the joint-local pose for mode 1/2 (mode 2 = rotation only —
-    // Python connects only outRotate for those bodies).
+    // values match Simulation::PhysicsMode).  Field names mirror the
+    // enumerators.  The node writes the joint-local pose for mode 1/2 (mode 2
+    // = rotation only — Python connects only outRotate for those bodies).
     {
         MFnEnumAttribute eAttr;
-        aBodyPhysicsMode =
-            eAttr.create("bodyPhysicsMode", "bpm", static_cast<short>(PhysicsMode::Physics), &stat);
+        aBodyPhysicsMode = eAttr.create(
+            "bodyPhysicsMode", "bpm", static_cast<short>(Simulation::PhysicsMode::ePhysics), &stat);
         CHECK_MSTATUS(stat);
-        eAttr.addField("FollowBone", static_cast<short>(PhysicsMode::FollowBone));
-        eAttr.addField("Physics", static_cast<short>(PhysicsMode::Physics));
-        eAttr.addField("PhysicsBone", static_cast<short>(PhysicsMode::PhysicsBone));
+        eAttr.addField("FollowBone", static_cast<short>(Simulation::PhysicsMode::eFollowBone));
+        eAttr.addField("Physics", static_cast<short>(Simulation::PhysicsMode::ePhysics));
+        eAttr.addField("PhysicsBone", static_cast<short>(Simulation::PhysicsMode::ePhysicsBone));
         eAttr.setStorable(true);
         eAttr.setKeyable(false);
     }
@@ -721,15 +739,8 @@ bool PhysicsNode::readBodyData(MDataBlock& dataBlock)
         bodiesHandle.jumpToArrayElement(i);
         MDataHandle bodyHandle = bodiesHandle.inputValue();
         Simulation::BodyDefinition b;
-        auto read3 = [&](const MObject& attr, Double3& out)
-        {
-            const double* v = bodyHandle.child(attr).asDouble3();
-            out.x = v[0];
-            out.y = v[1];
-            out.z = v[2];
-        };
-        read3(aBodyRestTranslate, b.restPos);
-        read3(aBodyRestRotate, b.restRot);
+        readDouble3(bodyHandle, aBodyRestTranslate, b.restPos);
+        readDouble3(bodyHandle, aBodyRestRotate, b.restRot);
         b.mass = bodyHandle.child(aBodyMass).asDouble();
         b.linearDamping = bodyHandle.child(aBodyLinearDamping).asDouble();
         b.angularDamping = bodyHandle.child(aBodyAngularDamping).asDouble();
@@ -737,7 +748,7 @@ bool PhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.restitution = bodyHandle.child(aBodyRestitution).asDouble();
         b.colliderType = colliderToEngine(bodyHandle.child(aBodyColliderType).asShort());
         b.radius = bodyHandle.child(aBodyRadius).asDouble();
-        read3(aBodyExtents, b.extents);
+        readDouble3(bodyHandle, aBodyExtents, b.extents);
         b.length = bodyHandle.child(aBodyLength).asDouble();
         b.mask = 0;
         for (int g = 0; g < 16; ++g)
@@ -770,21 +781,14 @@ bool PhysicsNode::readJointData(MDataBlock& dataBlock)
         j.bodyA = jointHandle.child(aJointBodyA).asInt();
         j.bodyB = jointHandle.child(aJointBodyB).asInt();
         j.type = jointHandle.child(aJointType).asInt();
-        auto read3 = [&](const MObject& attr, Double3& out)
-        {
-            const double* v = jointHandle.child(attr).asDouble3();
-            out.x = v[0];
-            out.y = v[1];
-            out.z = v[2];
-        };
-        read3(aJointFrameTranslate, j.frameT);
-        read3(aJointFrameRotate, j.frameR);
-        read3(aJointLinearMin, j.linearMin);
-        read3(aJointLinearMax, j.linearMax);
-        read3(aJointAngularMin, j.angularMin);
-        read3(aJointAngularMax, j.angularMax);
-        read3(aJointLinearSpring, j.linearSpring);
-        read3(aJointAngularSpring, j.angularSpring);
+        readDouble3(jointHandle, aJointFrameTranslate, j.frameT);
+        readDouble3(jointHandle, aJointFrameRotate, j.frameR);
+        readDouble3(jointHandle, aJointLinearMin, j.linearMin);
+        readDouble3(jointHandle, aJointLinearMax, j.linearMax);
+        readDouble3(jointHandle, aJointAngularMin, j.angularMin);
+        readDouble3(jointHandle, aJointAngularMax, j.angularMax);
+        readDouble3(jointHandle, aJointLinearSpring, j.linearSpring);
+        readDouble3(jointHandle, aJointAngularSpring, j.angularSpring);
         mJoints.push_back(j);
     }
     return true;
@@ -805,14 +809,6 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
 {
     uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a offset basis
 
-    auto read3 = [](MDataHandle& hd, const MObject& attr, double out[3])
-    {
-        MDataHandle ch = hd.child(attr);
-        out[0] = ch.asDouble3()[0];
-        out[1] = ch.asDouble3()[1];
-        out[2] = ch.asDouble3()[2];
-    };
-
     // gravity + fps
     MDataHandle grav = dataBlock.inputValue(aGravity);
     h = hashDouble3(h, grav.asDouble3());
@@ -822,14 +818,14 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
     const unsigned int bodyCount = bodiesHandle.elementCount();
     h = hashValue(h, bodyCount);
-    double v3[3];
+    Double3 v3;
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
         bodiesHandle.jumpToArrayElement(i);
         MDataHandle bh = bodiesHandle.inputValue();
-        read3(bh, aBodyRestTranslate, v3);
+        readDouble3(bh, aBodyRestTranslate, v3);
         h = hashDouble3(h, v3);
-        read3(bh, aBodyRestRotate, v3);
+        readDouble3(bh, aBodyRestRotate, v3);
         h = hashDouble3(h, v3);
         h = hashValue(h, bh.child(aBodyMass).asDouble());
         h = hashValue(h, bh.child(aBodyLinearDamping).asDouble());
@@ -838,7 +834,7 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
         h = hashValue(h, bh.child(aBodyRestitution).asDouble());
         h = hashValue(h, bh.child(aBodyColliderType).asShort());
         h = hashValue(h, bh.child(aBodyRadius).asDouble());
-        read3(bh, aBodyExtents, v3);
+        readDouble3(bh, aBodyExtents, v3);
         h = hashDouble3(h, v3);
         h = hashValue(h, bh.child(aBodyLength).asDouble());
         // One hash input per collision-group toggle (any edit rebuilds).
@@ -864,21 +860,21 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
         h = hashValue(h, jh.child(aJointBodyA).asInt());
         h = hashValue(h, jh.child(aJointBodyB).asInt());
         h = hashValue(h, jh.child(aJointType).asInt());
-        read3(jh, aJointFrameTranslate, v3);
+        readDouble3(jh, aJointFrameTranslate, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointFrameRotate, v3);
+        readDouble3(jh, aJointFrameRotate, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointLinearMin, v3);
+        readDouble3(jh, aJointLinearMin, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointLinearMax, v3);
+        readDouble3(jh, aJointLinearMax, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointAngularMin, v3);
+        readDouble3(jh, aJointAngularMin, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointAngularMax, v3);
+        readDouble3(jh, aJointAngularMax, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointLinearSpring, v3);
+        readDouble3(jh, aJointLinearSpring, v3);
         h = hashDouble3(h, v3);
-        read3(jh, aJointAngularSpring, v3);
+        readDouble3(jh, aJointAngularSpring, v3);
         h = hashDouble3(h, v3);
     }
 
