@@ -894,7 +894,7 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
         name_registry=name_registry,
         root_transform_obj=root_obj,
     )
-    #TODO: Validate if we need new extra attribute for physics node or if we can use something else
+    # TODO: Validate if we need new extra attribute for physics node or if we can use something else
     if solver_node:
         if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
             cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
