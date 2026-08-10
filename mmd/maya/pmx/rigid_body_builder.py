@@ -7,10 +7,12 @@ MILESTONE (this PR): one EMPTY ``pmxPhysicsNode`` per model — the node and
 its ``{model}_Physics`` group are created, and gravity is set.  The node's
 ``bodies`` / ``joints`` compound arrays are still empty: they are populated
 through the native ``pmxRigidBody`` / ``pmxRigidBodyConstraint`` commands (a
-later PR), which also wire the kinematic anchors and the Phase-3 direct
-write-back into the related joints.  The node's ``time`` input is therefore
-NOT connected yet — with empty bodies the solver has nothing to step, and a
-``time`` connection would make compute() fail every frame.
+later PR), which also connect the group's world inverse once into the single
+``groupInverseWorldMatrix`` input, wire the kinematic anchors and the Phase-3
+direct write-back into the related joints, and set each body's
+``bodyShapeSize`` (PMX shape_size verbatim).  The node's ``time`` input is
+therefore NOT connected yet — with empty bodies the solver has nothing to
+step, and a ``time`` connection would make compute() fail every frame.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
 Bullet world from ``mmd/core``.  It is parented under the physics group at
@@ -92,7 +94,9 @@ def _create_physics_solver(
     bodies/joints arrays are empty until the native ``pmxRigidBody`` /
     ``pmxRigidBodyConstraint`` commands land, and a ``time`` connection would
     make compute() fail every frame.  The full builder (rigid-body commands
-    PR) connects it together with the body population.
+    PR) connects it together with the body population, connects the physics
+    group's world inverse once into ``groupInverseWorldMatrix``, and fills
+    ``bodyShapeSize`` (PMX shape_size verbatim) per body.
     """
     solver_name = name_registry.get_physics_solver_name()
     if parent_group:

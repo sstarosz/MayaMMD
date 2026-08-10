@@ -27,6 +27,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{model}_Physics` group). The `bodies`/`joints` arrays and the solved-pose
   write-back are populated by the upcoming rigid-body commands PR.
 
+### Changed
+
+- **`pmxPhysicsNode` schema refined to PMX verbatim** — the physics node's
+  attribute surface now matches the PMX fields it stores:
+  - `bodyRadius`/`bodyExtents`/`bodyLength` are replaced by a single
+    `bodyShapeSize` double3 — the PMX `shape_size` **verbatim** (full size).
+    The node derives the engine's radius / box half-extents / capsule length
+    by collider type via the new Maya-free `mmd::core::applyShapeSize` /
+    `shapeSizeFromBodyDefinition` helpers (covered by Catch2 unit tests).
+    `DrawBody` carries `shapeSize[3]` as the data contract for the follow-up
+    viewport draw override.
+  - The per-anchor `anchorParentInverseMatrix[]` array is replaced by a single
+    `groupInverseWorldMatrix` matrix (the physics group's world inverse),
+    applied once to every kinematic anchor.
+  - The `fps` attribute (which only ever served as a rebuild trigger — dt is
+    derived from the scene's time unit via `MTime`) is replaced by a hidden
+    `configVersion` long as the clean forced-rebuild trigger.
+  - Scenes saved with the old schema need a re-import.
+
 ### Fixed
 
 - **CCD IK solver reliability** — `ccdIKSolverNode` no longer overshoots the IK

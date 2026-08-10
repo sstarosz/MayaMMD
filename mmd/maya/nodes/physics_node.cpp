@@ -62,6 +62,8 @@ using mmd::core::Double3;
 using mmd::core::Double4;
 using mmd::core::Matrix4;
 using mmd::core::Simulation;
+using mmd::core::applyShapeSize;
+using mmd::core::shapeSizeFromBodyDefinition;
 
 // ===========================================================================
 // Constants
@@ -77,9 +79,9 @@ const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for 
 // ===========================================================================
 MObject PhysicsNode::aTime;
 MObject PhysicsNode::aGravity;
-MObject PhysicsNode::aFps;
+MObject PhysicsNode::aConfigVersion;
 MObject PhysicsNode::aAnchorWorldMatrix;
-MObject PhysicsNode::aAnchorParentInverseMatrix;
+MObject PhysicsNode::aGroupInverseWorldMatrix;
 MObject PhysicsNode::aAnchorOffset;
 MObject PhysicsNode::aGroupWorldMatrix;
 MObject PhysicsNode::aBodyWriteBackOffset;
@@ -92,9 +94,7 @@ MObject PhysicsNode::aBodyNameUniversal;
 MObject PhysicsNode::aBodyGroupId;
 std::array<MObject, 16> PhysicsNode::aBodyMaskGroup;
 MObject PhysicsNode::aBodyColliderType;
-MObject PhysicsNode::aBodyRadius;
-MObject PhysicsNode::aBodyExtents;
-MObject PhysicsNode::aBodyLength;
+MObject PhysicsNode::aBodyShapeSize;
 MObject PhysicsNode::aBodyRestTranslate;
 MObject PhysicsNode::aBodyRestRotate;
 MObject PhysicsNode::aBodyMass;
@@ -220,19 +220,19 @@ PhysicsNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
 // (mBodies is only filled lazily on first evaluation) — so the colliders are
 // visible immediately after import and whenever the solver is not being pulled
 // by the DG.
-// (The three asDouble3() calls are NOLINT'd — the decay happens inside the
-// Maya SDK header, not in this file.)
+// (The asDouble3() calls are NOLINT'd — the decay happens inside the Maya SDK
+// header, not in this file.)
 void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
 {
     db.colliderType =
         static_cast<PhysicsNode::ColliderType>(el.child(PhysicsNode::aBodyColliderType).asShort());
-    db.radius = el.child(PhysicsNode::aBodyRadius).asDouble();
+    // PMX shape_size VERBATIM (full size) — the draw contract reads it
+    // directly and derives the primitive by collider type.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* e = el.child(PhysicsNode::aBodyExtents).asMDataHandle().asDouble3();
-    db.extents[0] = e[0];
-    db.extents[1] = e[1];
-    db.extents[2] = e[2];
-    db.length = el.child(PhysicsNode::aBodyLength).asDouble();
+    const double* s = el.child(PhysicsNode::aBodyShapeSize).asMDataHandle().asDouble3();
+    db.shapeSize[0] = s[0];
+    db.shapeSize[1] = s[1];
+    db.shapeSize[2] = s[2];
     db.kinematic = (el.child(PhysicsNode::aBodyPhysicsMode).asShort() ==
                     static_cast<short>(Simulation::PhysicsMode::eFollowBone));
     // group id straight from the raw PMX id (the Bullet group bit is derived
@@ -351,11 +351,16 @@ MStatus PhysicsNode::initialize()
     nAttr.setStorable(true);
     nAttr.setKeyable(false);
 
-    // --- fps ---
-    aFps = nAttr.create("fps", "fps", MFnNumericData::kDouble, 30.0, &stat);
+    // --- configVersion ---
+    // Hidden forced-rebuild trigger (see physics_node.h).  Bumping it changes
+    // the config signature, so compute() rebuilds the Bullet world even when
+    // no other input changed.  dt is derived from the scene's time unit via
+    // MTime, so the old `fps` attribute (which only ever served as this
+    // trigger) is gone.
+    aConfigVersion = nAttr.create("configVersion", "cfgv", MFnNumericData::kLong, 0, &stat);
     MMD_CHECK_MSTATUS(stat);
     nAttr.setStorable(true);
-    nAttr.setMin(1.0);
+    nAttr.setHidden(true);
     nAttr.setKeyable(false);
 
     // --- anchor world matrices ---
@@ -367,12 +372,15 @@ MStatus PhysicsNode::initialize()
     mAttr.setUsesArrayDataBuilder(true);
     mAttr.setKeyable(false);
 
-    aAnchorParentInverseMatrix =
-        mAttr.create("anchorParentInverseMatrix", "apim", MFnMatrixAttribute::kDouble, &stat);
+    // The physics group's world inverse (single) — the SAME matrix every
+    // kinematic anchor used to receive per-anchor as anchorParentInverseMatrix.
+    // local = world * groupInverseWorldMatrix puts each anchor in the group's
+    // local space (the Bullet world frame); leaving it unconnected treats the
+    // anchors as world space (identity).
+    aGroupInverseWorldMatrix =
+        mAttr.create("groupInverseWorldMatrix", "giwm", MFnMatrixAttribute::kDouble, &stat);
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
     mAttr.setKeyable(false);
 
     // Phase 3: baked world-frame offset per kinematic anchor
@@ -475,11 +483,10 @@ MStatus PhysicsNode::initialize()
         eAttr.setStorable(true);
         eAttr.setKeyable(false);
     }
-    aBodyRadius = nAttr.create("bodyRadius", "brad", MFnNumericData::kDouble, 0.5, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    aBodyExtents = nAttr.create("bodyExtents", "bext", MFnNumericData::k3Double, 1.0, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    aBodyLength = nAttr.create("bodyLength", "blen", MFnNumericData::kDouble, 1.0, &stat);
+    // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
+    // engine's radius / box half-extents / capsule length by collider type
+    // (mmd::core::applyShapeSize) wherever a body is read.
+    aBodyShapeSize = nAttr.create("bodyShapeSize", "bss", MFnNumericData::k3Double, 1.0, &stat);
     MMD_CHECK_MSTATUS(stat);
 
     aBodyRestTranslate =
@@ -529,7 +536,7 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
 
     for (MObject* a :
-         {&aBodyEnabled, &aBodyRadius, &aBodyExtents, &aBodyLength, &aBodyRestTranslate,
+         {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate,
           &aBodyRestRotate, &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping,
           &aBodyRestitution, &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
     {
@@ -557,9 +564,7 @@ MStatus PhysicsNode::initialize()
     for (int g = 0; g < 16; ++g)
         cAttr.addChild(aBodyMaskGroup.at(g));
     cAttr.addChild(aBodyColliderType);
-    cAttr.addChild(aBodyRadius);
-    cAttr.addChild(aBodyExtents);
-    cAttr.addChild(aBodyLength);
+    cAttr.addChild(aBodyShapeSize);
     cAttr.addChild(aBodyRestTranslate);
     cAttr.addChild(aBodyRestRotate);
     cAttr.addChild(aBodyMass);
@@ -663,11 +668,11 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aFps);
+    stat = addAttribute(aConfigVersion);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorWorldMatrix);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aAnchorParentInverseMatrix);
+    stat = addAttribute(aGroupInverseWorldMatrix);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorOffset);
     MMD_CHECK_MSTATUS(stat);
@@ -702,9 +707,9 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aFps, aOutTranslate);
+    stat = attributeAffects(aConfigVersion, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aFps, aOutRotate);
+    stat = attributeAffects(aConfigVersion, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodies, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
@@ -718,9 +723,9 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorldMatrix, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorParentInverseMatrix, aOutTranslate);
+    stat = attributeAffects(aGroupInverseWorldMatrix, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorParentInverseMatrix, aOutRotate);
+    stat = attributeAffects(aGroupInverseWorldMatrix, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorOffset, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
@@ -763,9 +768,9 @@ bool PhysicsNode::readBodyData(MDataBlock& dataBlock)
         b.friction = bodyHandle.child(aBodyFriction).asDouble();
         b.restitution = bodyHandle.child(aBodyRestitution).asDouble();
         b.colliderType = colliderToEngine(bodyHandle.child(aBodyColliderType).asShort());
-        b.radius = bodyHandle.child(aBodyRadius).asDouble();
-        readDouble3(bodyHandle, aBodyExtents, b.extents);
-        b.length = bodyHandle.child(aBodyLength).asDouble();
+        Double3 shapeSize;
+        readDouble3(bodyHandle, aBodyShapeSize, shapeSize);
+        applyShapeSize(b, shapeSize); // PMX shape_size -> engine radius/extents/length
         b.mask = 0;
         for (int g = 0; g < 16; ++g)
             if (bodyHandle.child(aBodyMaskGroup.at(g)).asBool())
@@ -814,8 +819,8 @@ bool PhysicsNode::readJointData(MDataBlock& dataBlock)
 // Config signature (Phase 4)
 // ===========================================================================
 // The node rebuilds the Bullet world when the user edits any of the inputs
-// that DEFINE it: gravity, fps, the bodies/joints arrays (values AND counts),
-// and the number of kinematic anchors.  The anchor matrix VALUES are
+// that DEFINE it: gravity, configVersion, the bodies/joints arrays (values AND
+// counts), and the number of kinematic anchors.  The anchor matrix VALUES are
 // deliberately excluded — they change every frame — only their counts matter.
 // Mass, damping, friction, restitution, collider size, group/mask, joint
 // limits and springs are all baked into the Bullet construction info at build
@@ -825,13 +830,13 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
 {
     uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a offset basis
 
-    // gravity + fps
+    // gravity + configVersion
     MDataHandle grav = dataBlock.inputValue(aGravity);
     // asDouble3() decays to a C array inside the SDK; hashDouble3 reads it by
     // const pointer — the decay is unavoidable at the Maya API boundary.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     h = hashDouble3(h, grav.asDouble3());
-    h = hashValue(h, dataBlock.inputValue(aFps).asDouble());
+    h = hashValue(h, dataBlock.inputValue(aConfigVersion).asLong());
 
     // bodies
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
@@ -852,10 +857,8 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
         h = hashValue(h, bh.child(aBodyFriction).asDouble());
         h = hashValue(h, bh.child(aBodyRestitution).asDouble());
         h = hashValue(h, bh.child(aBodyColliderType).asShort());
-        h = hashValue(h, bh.child(aBodyRadius).asDouble());
-        readDouble3(bh, aBodyExtents, v3);
+        readDouble3(bh, aBodyShapeSize, v3);
         h = hashDouble3(h, v3);
-        h = hashValue(h, bh.child(aBodyLength).asDouble());
         // One hash input per collision-group toggle (any edit rebuilds).
         for (int g = 0; g < 16; ++g)
             h = hashValue(h, bh.child(aBodyMaskGroup.at(g)).asBool());
@@ -901,8 +904,6 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
     // structure — adding/removing a kinematic anchor is a config change)
     MArrayDataHandle anchors = dataBlock.inputArrayValue(aAnchorWorldMatrix);
     h = hashValue(h, anchors.elementCount());
-    MArrayDataHandle parentInv = dataBlock.inputArrayValue(aAnchorParentInverseMatrix);
-    h = hashValue(h, parentInv.elementCount());
     // Phase 3 write-back arrays: only the COUNTS (the offset matrices are
     // baked constants; the parent-inverse matrices vary every frame).
     MArrayDataHandle anchorOffset = dataBlock.inputArrayValue(aAnchorOffset);
@@ -954,16 +955,26 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
 {
     if (!mSim.initialized())
         return false;
-    // anchorWorldMatrix[i] + anchorParentInverseMatrix[i] map 1:1 to the
-    // kinematic bodies in body order.  local = world * parentInverse (row-vector
-    // convention) — the Bullet world runs in the physics group's local space.
+    // anchorWorldMatrix[i] maps 1:1 to the kinematic bodies in body order.
+    // local = world * groupInverseWorldMatrix (row-vector convention) — the
+    // Bullet world runs in the physics group's local space.  The group-inverse
+    // is a SINGLE matrix applied to every anchor (previously each anchor
+    // carried its own parentInverse); unconnected = identity = world space.
     bool anchorsMoved = false;
     MArrayDataHandle anchors = dataBlock.inputArrayValue(aAnchorWorldMatrix);
-    MArrayDataHandle parentInverse = dataBlock.inputArrayValue(aAnchorParentInverseMatrix);
     MArrayDataHandle anchorOffset = dataBlock.inputArrayValue(aAnchorOffset);
     const unsigned int anchorCount = anchors.elementCount();
-    const unsigned int parentInverseCount = parentInverse.elementCount();
     const unsigned int offsetCount = anchorOffset.elementCount();
+    MMatrix groupInverse;
+    MPlug groupInversePlug(thisMObject(), aGroupInverseWorldMatrix);
+    if (groupInversePlug.isConnected())
+    {
+        groupInverse = dataBlock.inputValue(aGroupInverseWorldMatrix).asMatrix();
+    }
+    else
+    {
+        groupInverse.setToIdentity();
+    }
     int anchorIndex = 0;
     for (size_t i = 0; i < mBodies.size() && anchorIndex < (int) anchorCount; ++i)
     {
@@ -972,18 +983,14 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
             continue;
         anchors.jumpToArrayElement(anchorIndex);
         MMatrix w = anchors.inputValue().asMatrix();
-        if (anchorIndex < (int) parentInverseCount)
-        {
-            parentInverse.jumpToArrayElement(anchorIndex);
-            w *= parentInverse.inputValue().asMatrix();
-        }
+        w *= groupInverse;
         // Phase 3: apply the baked world-frame offset (colliderRestWorld *
         // jointRestWorld^-1) so the kinematic collider tracks the JOINT with
         // the PMX body<->bone offset preserved (this is exactly what the old
         // parentConstraint(joint, guide, maintainOffset) maintained — verified
         // empirically: targetWorld = K * sourceWorld, K constant).  world here
-        // is the JOINT's world matrix and parentInverse is the physics GROUP's
-        // world inverse, so world * parentInverse is the joint in group space.
+        // is the JOINT's world matrix and groupInverse is the physics GROUP's
+        // world inverse, so world * groupInverse is the joint in group space.
         if (anchorIndex < (int) offsetCount)
         {
             anchorOffset.jumpToArrayElement(anchorIndex);
@@ -1229,11 +1236,10 @@ void PhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
             continue;
         DrawBody db;
         db.colliderType = colliderFromEngine(b.colliderType);
-        db.radius = b.radius;
-        db.extents[0] = b.extents.x;
-        db.extents[1] = b.extents.y;
-        db.extents[2] = b.extents.z;
-        db.length = b.length;
+        const Double3 size = shapeSizeFromBodyDefinition(b);
+        db.shapeSize[0] = size.x;
+        db.shapeSize[1] = size.y;
+        db.shapeSize[2] = size.z;
         db.kinematic = b.isKinematic();
         // group id straight from the raw PMX group id (clamp legacy -1).
         db.groupId = b.groupId >= 0 ? b.groupId : 0;

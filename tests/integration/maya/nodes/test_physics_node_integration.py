@@ -6,7 +6,7 @@ physics node (embedded Bullet via the Maya-free mmd_core engine).
 
 Tests cover:
 - Node registration and creation
-- Attribute surface and key defaults (gravity, fps, collision mask)
+- Attribute surface and key defaults (gravity, configVersion, collision mask)
 - Empty-node evaluation (no bodies = valid no-op, no errors)
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
@@ -51,7 +51,8 @@ def _set_body_common(node: str, index: int) -> str:
     p = f"{node}.bodies[{index}]"
     cmds.setAttr(f"{p}.bodyEnabled", True)
     cmds.setAttr(f"{p}.bodyColliderType", _COLLIDER_SPHERE)
-    cmds.setAttr(f"{p}.bodyRadius", 0.5)
+    # PMX shape_size verbatim — sphere radius = shape_size[0].
+    cmds.setAttr(f"{p}.bodyShapeSize", 0.5, 0.5, 0.0, type="double3")
     cmds.setAttr(f"{p}.bodyRestRotate", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{p}.bodyLinearDamping", 0.0)
     cmds.setAttr(f"{p}.bodyAngularDamping", 0.0)
@@ -106,9 +107,9 @@ def test_attribute_surface_and_defaults():
     top_level = [
         "time",
         "gravity",
-        "fps",
+        "configVersion",
         "anchorWorldMatrix",
-        "anchorParentInverseMatrix",
+        "groupInverseWorldMatrix",
         "anchorOffset",
         "groupWorldMatrix",
         "bodyWriteBackOffset",
@@ -132,9 +133,7 @@ def test_attribute_surface_and_defaults():
         "bodyMaskGroup0",
         "bodyMaskGroup15",
         "bodyColliderType",
-        "bodyRadius",
-        "bodyExtents",
-        "bodyLength",
+        "bodyShapeSize",
         "bodyRestTranslate",
         "bodyRestRotate",
         "bodyMass",
@@ -174,7 +173,11 @@ def test_attribute_surface_and_defaults():
     # Defaults
     grav = cmds.getAttr(f"{node}.gravity")[0]
     assert_eq(round(grav[1], 4), -9.8, "gravity default y (MMD uses exactly -9.8)")
-    assert_eq(cmds.getAttr(f"{node}.fps"), 30.0, "fps default")
+    assert_eq(
+        cmds.getAttr(f"{node}.configVersion"),
+        0,
+        "configVersion default (0 = never force a rebuild)",
+    )
 
     # Collision mask defaults to "collides with every group" (True each).
     assert_eq(
@@ -280,10 +283,9 @@ def test_kinematic_anchor_drives_welded_body():
     cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
 
     # Anchor world matrix: translate the kinematic anchor to y=3 (group at
-    # the origin, so parent-inverse = identity and no anchor offset needed).
-    cmds.setAttr(
-        f"{node}.anchorParentInverseMatrix[0]", *_IDENTITY_MATRIX, type="matrix"
-    )
+    # the origin, so the single group-inverse = identity and no anchor offset
+    # is needed).
+    cmds.setAttr(f"{node}.groupInverseWorldMatrix", *_IDENTITY_MATRIX, type="matrix")
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,

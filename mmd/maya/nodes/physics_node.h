@@ -91,9 +91,12 @@ class PhysicsNode : public MPxLocatorNode
         double pos[3] = {};
         double quat[4] = {};                      // (x, y, z, w)
         ColliderType colliderType = kColliderBox; // PMX shape type (box/sphere/capsule)
-        double radius = 0.0;
-        double extents[3] = {}; // box half extents
-        double length = 0.0;    // capsule cylinder length
+        // PMX shape_size VERBATIM (3 doubles, FULL size — box extents are
+        // full, not half).  This is the data contract the follow-up viewport
+        // draw override reads; it is derived from the engine's
+        // radius/extents/length by collider type via
+        // mmd::core::shapeSizeFromBodyDefinition.
+        double shapeSize[3] = {};
         int groupId = 0;        // collision group 0..15 (draw palette)
         bool kinematic = false;
     };
@@ -127,22 +130,25 @@ class PhysicsNode : public MPxLocatorNode
     // ------------------------------------------------------------------
     static MObject aTime;
     static MObject aGravity;
-    // playback frames per second (default 30) — RETAINED for backward
-    // compatibility and as the Phase-4 rebuild trigger (pmx_model_utils toggles
-    // it); dt is now derived from the scene's time unit via MTime, so this
-    // attribute no longer drives the frame→seconds conversion.
-    static MObject aFps;
+    // Hidden forced-rebuild trigger.  dt is derived from the scene's time unit
+    // via MTime, so the old `fps` attribute (which only ever served as the
+    // rebuild trigger) is gone.  Bumping configVersion changes the config
+    // signature, so compute() rebuilds the Bullet world even when no other
+    // input changed (e.g. after the Python side re-bakes the anchor/write-back
+    // offsets).  The default is 0 — an untouched scene never forces a rebuild.
+    static MObject aConfigVersion;
 
-    // Anchor world matrices + parent-inverse matrices (kinematic drivers) —
-    // one per kinematic body.  The node computes each anchor's LOCAL matrix as
-    // world * parentInverse so the Bullet world runs in the physics group's
-    // local space (mirrors mayaBullet's inWorldMatrix/inParentInverseMatrix).
-    // Phase 3: the anchor world is the JOINT's world matrix, the parent
-    // inverse is the PHYSICS GROUP's world inverse, and `anchorOffset` is a
-    // baked world-frame offset (bodyRestWorld * jointRestWorld^-1) so the
-    // collider tracks the joint with the PMX body<->bone offset preserved.
+    // Anchor world matrices (kinematic drivers) — one per kinematic body, in
+    // kinematic (FOLLOW_BONE body) order.  The node computes each anchor's
+    // LOCAL matrix as world * groupInverseWorldMatrix so the Bullet world runs
+    // in the physics group's local space (mirrors mayaBullet's
+    // inWorldMatrix/inParentInverseMatrix).  Phase 3: the anchor world is the
+    // JOINT's world matrix, the group inverse is the PHYSICS GROUP's world
+    // inverse, and `anchorOffset` is a baked world-frame offset
+    // (bodyRestWorld * jointRestWorld^-1) so the collider tracks the joint
+    // with the PMX body<->bone offset preserved.
     static MObject aAnchorWorldMatrix;
-    static MObject aAnchorParentInverseMatrix;
+    static MObject aGroupInverseWorldMatrix; // physics group's world inverse (single)
     static MObject aAnchorOffset; // matrix array, kinematic-order indexed (Phase 3)
 
     // Phase 3 direct write-back inputs — the node outputs the JOINT-LOCAL
@@ -180,11 +186,13 @@ class PhysicsNode : public MPxLocatorNode
     // .at() (the cppcoreguidelines constant-array-index check rejects `[]`
     // with a loop counter on a C array).
     static std::array<MObject, 16> aBodyMaskGroup;
-    static MObject aBodyColliderType;    // enum — PMX shape (kColliderBox/Sphere/Capsule)
-    static MObject aBodyRadius;          // double — PMX shape_size.x (sphere/capsule radius)
-    static MObject aBodyExtents;         // float3 — PMX shape_size (box half extents)
-    static MObject aBodyLength;          // double — PMX shape_size.y (capsule cylinder length)
-    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyColliderType;  // enum — PMX shape (kColliderBox/Sphere/Capsule)
+    // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
+    // engine's radius / box half-extents / capsule length by collider type
+    // (mmd::core::applyShapeSize) in readBodyData, computeConfigSignature and
+    // the attribute-fallback reader.
+    static MObject aBodyShapeSize;     // float3 — PMX shape_size verbatim
+    static MObject aBodyRestTranslate; // float3 — PMX shape_position (rest, group space)
     static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
     static MObject aBodyMass;            // double — PMX mass
     static MObject aBodyLinearDamping;   // double — PMX move_attenuation
@@ -228,10 +236,10 @@ class PhysicsNode : public MPxLocatorNode
 
     double mLastTime = -1.0;
     MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
-    // Phase 4: FNV-1a hash of the config inputs (gravity/fps/bodies/joints/
-    // anchor counts) captured at build time.  When compute() sees a different
-    // signature the world is rebuilt in place — a body/joint/gravity edit takes
-    // effect immediately, without a rewind.
+    // Phase 4: FNV-1a hash of the config inputs (gravity/configVersion/
+    // bodies/joints/anchor counts) captured at build time.  When compute() sees
+    // a different signature the world is rebuilt in place — a body/joint/
+    // gravity/configVersion edit takes effect immediately, without a rewind.
     uint64_t mConfigSignature = 0;
 
     // Timeline/state machine — compute() classifies each evaluation into one of
