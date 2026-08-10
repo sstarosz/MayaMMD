@@ -103,11 +103,13 @@ class PhysicsNode : public MPxLocatorNode
     MBoundingBox boundingBox() const override;
 
     PhysicsNode();
+    // Defaulted out-of-line: the node is destroyed polymorphically through its
+    // MPxNode base (Maya deletes it via the base pointer), and the default
+    // teardown is exactly what we want — see the lifecycle notes in the cpp.
     ~PhysicsNode() override;
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
-    void postConstructor() override;
     // This node owns a STATEFUL Bullet world that advances in compute().
     // Cached Playback must NOT treat its outputs as pure functions of its
     // inputs — disable caching so the node is re-evaluated every frame.

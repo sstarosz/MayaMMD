@@ -151,9 +151,9 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
     return doubleMatrixToBtTransform(mm);
 }
 
-// NOLINTBEGIN(cppcoreguidelines-pro-bounds-array-to-pointer-decay, cppcoreguidelines-pro-bounds-constant-array-index)
 // MMatrix has no constructor from the core Matrix4 (only from a C array) — the
-// C array is required by the Maya API boundary, so these two checks do not
+// C array is required by the Maya API boundary, so the bounds checks on the
+// two lines below (loop-indexed subscript + array-to-pointer decay) do not
 // apply to this bridge.
 MMatrix matrix4ToMMatrix(const Matrix4& m)
 {
@@ -162,12 +162,13 @@ MMatrix matrix4ToMMatrix(const Matrix4& m)
     {
         for (int c = 0; c < 4; ++c)
         {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
             tmp[r][c] = m(r, c);
         }
     }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     return MMatrix(tmp);
 }
-// NOLINTEND(cppcoreguidelines-pro-bounds-array-to-pointer-decay, cppcoreguidelines-pro-bounds-constant-array-index)
 
 // Read a k3Double child attribute into a core Double3.  The Maya API returns a
 // `const double*` to three elements; we write into the named members — never
@@ -299,30 +300,30 @@ uint64_t hashDouble3(uint64_t h, const Double3& v)
 // ===========================================================================
 PhysicsNode::PhysicsNode() = default;
 
-PhysicsNode::~PhysicsNode()
-{
-    destroyWorld();
-}
-
-void PhysicsNode::postConstructor()
-{
-    // Nothing extra needed — Bullet world is built lazily on first compute.
-}
-
-void* PhysicsNode::creator()
-{
-    return new PhysicsNode();
-}
+// Defaulted: the node is destroyed polymorphically through its MPxNode base
+// (Maya deletes it via the base pointer).  The default teardown is exactly
+// what we want — mSim (Simulation) tears down the Bullet world in its own
+// PIMPL destructor, mBodies/mJoints are plain vectors, and the scalars are
+// trivial.  The only explicit teardown is destroyWorld() below, used to reset
+// to the unbuilt state for a rebuild.
+PhysicsNode::~PhysicsNode() = default;
 
 void PhysicsNode::destroyWorld()
 {
-    // The engine tears down the Bullet world in Simulation::clear()
-    // (world before bodies — the order that avoids a use-after-free).
+    // Reset to the unbuilt state for an in-place rebuild (see
+    // rebuildSimulationAtCurrentPose): clear the Bullet world + the cached
+    // body/joint data.  The engine owns the Bullet teardown order (world
+    // before bodies).
     mSim.clear();
     mLastTime = -1.0;
     mLastTimeUnit = MTime::kFilm;
     mBodies.clear();
     mJoints.clear();
+}
+
+void* PhysicsNode::creator()
+{
+    return new PhysicsNode();
 }
 
 // ===========================================================================
@@ -826,7 +827,10 @@ uint64_t PhysicsNode::computeConfigSignature(MDataBlock& dataBlock)
 
     // gravity + fps
     MDataHandle grav = dataBlock.inputValue(aGravity);
-    h = hashDouble3(h, grav.asDouble3()); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay) — asDouble3() decays inside the SDK
+    // asDouble3() decays to a C array inside the SDK; hashDouble3 reads it by
+    // const pointer — the decay is unavoidable at the Maya API boundary.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    h = hashDouble3(h, grav.asDouble3());
     h = hashValue(h, dataBlock.inputValue(aFps).asDouble());
 
     // bodies
