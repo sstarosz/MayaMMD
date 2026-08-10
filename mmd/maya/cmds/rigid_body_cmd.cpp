@@ -306,7 +306,8 @@ MDagPath RigidBodyCmd::resolveBone(const MString& bone, const MDagPath& groupPat
         return out;
 
     // Numeric string ⇒ PMX bone index: scan the model root's joints.
-    const char* boneStr = bone.asChar(); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    const char* boneStr =
+        bone.asChar(); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
     unsigned int boneLen = static_cast<unsigned int>(std::strlen(boneStr));
     bool numeric = true;
     for (unsigned int i = 0; i < boneLen; ++i)
@@ -354,8 +355,7 @@ MDagPath RigidBodyCmd::resolveBone(const MString& bone, const MDagPath& groupPat
 // Create mode
 // ===========================================================================
 
-MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNode,
-                               int& outIndex)
+MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex)
 {
     // ── Parse flags (safe defaults, mirroring the former Python command) ──
     int index = -1;
@@ -507,7 +507,8 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
     {
         MFnDependencyNode jointFn(jointPath.node());
         MStatus jointPlugStat;
-        jointWorldPlug = jointFn.findPlug("worldMatrix", true, &jointPlugStat).elementByLogicalIndex(0);
+        jointWorldPlug =
+            jointFn.findPlug("worldMatrix", true, &jointPlugStat).elementByLogicalIndex(0);
     }
 
     // ── Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness) ──
@@ -573,9 +574,9 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
                          fn.findPlug(PhysicsNode::aGroupInverseWorldMatrix, true, &plugStat));
         if (jointPath.isValid())
         {
-            connectOrReplace(
-                jointWorldPlug,
-                fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat).elementByLogicalIndex(k));
+            connectOrReplace(jointWorldPlug,
+                             fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
+                                 .elementByLogicalIndex(k));
             MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
             MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
             setMatrixValue(
@@ -588,9 +589,9 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
             MMatrix bodyWorld = matrixFromTR(localT, localR) * groupWorld;
             MMatrix identity;
             identity.setToIdentity();
-            setMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat).elementByLogicalIndex(k),
-                bodyWorld);
+            setMatrixValue(fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
+                               .elementByLogicalIndex(k),
+                           bodyWorld);
             setMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
                 identity);
@@ -627,13 +628,12 @@ MStatus RigidBodyCmd::doCreate(const MArgParser& parser, const MObject& solverNo
             MMatrix bodyWorld = matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }
-        setMatrixValue(
-            fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat).elementByLogicalIndex(n),
-            k);
-        setMatrixValue(
-            fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
-                .elementByLogicalIndex(n),
-            identity);
+        setMatrixValue(fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
+                           .elementByLogicalIndex(n),
+                       k);
+        setMatrixValue(fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
+                           .elementByLogicalIndex(n),
+                       identity);
     }
 
     outIndex = n;
