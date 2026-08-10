@@ -83,6 +83,22 @@ class Simulation
 
         /// FOLLOW_BONE bodies are kinematic anchors driven by their joints.
         bool isKinematic() const { return physicsMode == PhysicsMode::eFollowBone; }
+
+        /// Field-wise equality — the Maya node uses it to detect config edits
+        /// (a changed body definition must rebuild the world).
+        bool operator==(const BodyDefinition& o) const
+        {
+            return restPos.x == o.restPos.x && restPos.y == o.restPos.y &&
+                   restPos.z == o.restPos.z && restRot.x == o.restRot.x &&
+                   restRot.y == o.restRot.y && restRot.z == o.restRot.z && mass == o.mass &&
+                   linearDamping == o.linearDamping && angularDamping == o.angularDamping &&
+                   friction == o.friction && restitution == o.restitution &&
+                   colliderType == o.colliderType && radius == o.radius &&
+                   extents.x == o.extents.x && extents.y == o.extents.y &&
+                   extents.z == o.extents.z && length == o.length && mask == o.mask &&
+                   groupId == o.groupId && physicsMode == o.physicsMode && enabled == o.enabled &&
+                   parentBodyIndex == o.parentBodyIndex && resetAnchorIndex == o.resetAnchorIndex;
+        }
     };
 
     /// One PMX joint (a rigid-body constraint between two bodies).
@@ -99,6 +115,23 @@ class Simulation
         Double3 angularMax;
         Double3 linearSpring;
         Double3 angularSpring;
+
+        /// Field-wise equality — the Maya node uses it to detect config edits.
+        bool operator==(const JointDefinition& o) const
+        {
+            return bodyA == o.bodyA && bodyB == o.bodyB && type == o.type &&
+                   frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
+                   frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
+                   linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
+                   linearMin.z == o.linearMin.z && linearMax.x == o.linearMax.x &&
+                   linearMax.y == o.linearMax.y && linearMax.z == o.linearMax.z &&
+                   angularMin.x == o.angularMin.x && angularMin.y == o.angularMin.y &&
+                   angularMin.z == o.angularMin.z && angularMax.x == o.angularMax.x &&
+                   angularMax.y == o.angularMax.y && angularMax.z == o.angularMax.z &&
+                   linearSpring.x == o.linearSpring.x && linearSpring.y == o.linearSpring.y &&
+                   linearSpring.z == o.linearSpring.z && angularSpring.x == o.angularSpring.x &&
+                   angularSpring.y == o.angularSpring.y && angularSpring.z == o.angularSpring.z;
+        }
     };
 
     /// Full simulation input: gravity + bodies + joints.

@@ -6,11 +6,11 @@ physics node (embedded Bullet via the Maya-free mmd_core engine).
 
 Tests cover:
 - Node registration and creation
-- Attribute surface and key defaults (gravity, configVersion, collision mask)
+- Attribute surface and key defaults (gravity, collision mask)
 - Empty-node evaluation (no bodies = valid no-op, no errors)
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
-- configVersion forcing an in-place rebuild at the current pose
+- A config edit forcing an in-place rebuild at the current pose
 - groupWorldMatrix^-1 (derived internally) mapping anchors from world into
   group space
 """
@@ -142,7 +142,6 @@ def test_attribute_surface_and_defaults():
     top_level = [
         "time",
         "gravity",
-        "configVersion",
         "anchorWorldMatrix",
         "groupWorldMatrix",
         "bodyWriteBackOffset",
@@ -207,11 +206,6 @@ def test_attribute_surface_and_defaults():
     # Defaults
     grav = cmds.getAttr(f"{node}.gravity")[0]
     assert_eq(round(grav[1], 4), -9.8, "gravity default y (MMD uses exactly -9.8)")
-    assert_eq(
-        cmds.getAttr(f"{node}.configVersion"),
-        0,
-        "configVersion default (0 = never force a rebuild)",
-    )
 
     # Collision mask defaults to "collides with every group" (True each).
     assert_eq(
@@ -355,8 +349,8 @@ def test_kinematic_anchor_drives_welded_body():
     return True
 
 
-def test_config_version_forces_rebuild():
-    """Bumping configVersion rebuilds the Bullet world at the current pose."""
+def test_config_edit_forces_rebuild():
+    """Editing a body config input rebuilds the Bullet world at the current pose."""
     setup_test_environment()
     node = _create_node()
     _connect_time(node)
@@ -395,15 +389,16 @@ def test_config_version_forces_rebuild():
         f"body should have fallen by frame 12 (y={fallen:.3f})",
     )
 
-    # At the SAME time, bump configVersion — the rebuild must re-read the body
-    # data and reset the dynamic body to its current skeleton pose (y=1).
-    cmds.setAttr(f"{node}.configVersion", 1)
+    # At the SAME time, edit a body config input (mass) — the node detects the
+    # change, rebuilds, and resets the dynamic body to its current skeleton
+    # pose (y=1).
+    cmds.setAttr(f"{p1}.bodyMass", 2.0)
     reset_y = _read_output(node, 1)[1]
     assert_true(
         reset_y > 0.9,
-        f"configVersion bump should reset the body to rest (y={reset_y:.3f})",
+        f"config edit should reset the body to rest (y={reset_y:.3f})",
     )
-    print(f"✓ configVersion rebuild reset body to y={reset_y:.3f}")
+    print(f"✓ config edit rebuild reset body to y={reset_y:.3f}")
     return True
 
 
@@ -474,7 +469,7 @@ _TESTS = [
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),
     ("Dynamic Body Falls Under Gravity", test_dynamic_body_falls_under_gravity),
     ("Kinematic Anchor Drives Welded Body", test_kinematic_anchor_drives_welded_body),
-    ("Config Version Forces Rebuild", test_config_version_forces_rebuild),
+    ("Config Edit Forces Rebuild", test_config_edit_forces_rebuild),
     (
         "Group Inverse Maps Anchors To Local",
         test_group_inverse_world_matrix_applies_to_anchors,

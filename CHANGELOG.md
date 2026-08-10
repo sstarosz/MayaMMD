@@ -114,9 +114,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `groupInverseWorldMatrix` matrix (the physics group's world inverse),
     applied once to every kinematic anchor.
   - The `fps` attribute (which only ever served as a rebuild trigger — dt is
-    derived from the scene's time unit via `MTime`) is replaced by a hidden
-    `configVersion` long as the clean forced-rebuild trigger.
+    derived from the scene's time unit via `MTime`) is gone.
   - Scenes saved with the old schema need a re-import.
+
+### Changed
+
+- **`pmxPhysicsNode` simplified — no config hashing, no `configVersion`**
+  (breaking schema change — re-import required).  The node no longer hashes
+  its config inputs to detect edits:
+  - The hidden `configVersion` long (a manual force-rebuild trigger that
+    nothing in production ever set) is removed.
+  - The FNV-1a config-signature hashing (`computeConfigSignature`) is replaced
+    by re-reading the body/joint/gravity attributes every evaluation and
+    comparing them against what the Bullet world was built with (new field-wise
+    `operator==` on the core `BodyDefinition`/`JointDefinition`).
+  - Behaviour is unchanged: any body/joint/gravity value edit, or a changed
+    anchor/write-back array count, rebuilds the world in place at the current
+    skeleton pose; the anchor/write-back matrix VALUES stay per-frame reads.
+    The `SimulationTransition` state machine is folded into a plain if/else
+    in `compute()`, and dead Bullet/Maya includes are dropped.  Scenes that
+    set `configVersion` need a re-import.
 
 ### Fixed
 
