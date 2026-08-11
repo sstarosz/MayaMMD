@@ -143,25 +143,6 @@ btTransform mayaMatrixToBtTransform(const MMatrix& m)
     return doubleMatrixToBtTransform(mm);
 }
 
-// MMatrix has no constructor from the core Matrix4 (only from a C array) — the
-// C array is required by the Maya API boundary, so the bounds checks on the
-// two lines below (loop-indexed subscript + array-to-pointer decay) do not
-// apply to this bridge.
-MMatrix matrix4ToMMatrix(const Matrix4& m)
-{
-    double tmp[4][4] = {};
-    for (int r = 0; r < 4; ++r)
-    {
-        for (int c = 0; c < 4; ++c)
-        {
-            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index)
-            tmp[r][c] = m(r, c);
-        }
-    }
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    return MMatrix(tmp);
-}
-
 // Read a k3Double child attribute into a core Double3.  The Maya API returns a
 // `const double*` to three elements; we write into the named members — never
 // past them (the old .data() + out[0..2] pattern was out-of-bounds access).
@@ -389,7 +370,8 @@ MStatus PhysicsNode::initialize()
     }
     // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
     // engine's radius / box half-extents / capsule length by collider type
-    // (mmd::core::applyShapeSize) wherever a body is read.
+    // (mmd::core::applyShapeSize) in readBodyData; the draw fallback reads it
+    // verbatim.
     aBodyShapeSize = nAttr.create("bodyShapeSize", "bss", MFnNumericData::k3Double, 1.0, &stat);
     MMD_CHECK_MSTATUS(stat);
 
@@ -780,10 +762,7 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
         }
         Simulation::Pose pose;
         const btTransform t = mayaMatrixToBtTransform(w);
-        const btVector3& o = t.getOrigin();
-        const btQuaternion& q = t.getRotation();
-        pose.pos = Double3(o.x(), o.y(), o.z());
-        pose.quat = Double4(q.x(), q.y(), q.z(), q.w());
+        storePose(pose.pos, pose.quat, t);
         if (mSim.setKinematicPose(anchorIndex, pose))
             anchorsMoved = true;
         ++anchorIndex;
@@ -807,7 +786,7 @@ void PhysicsNode::getCacheSetup(const MEvaluationNode& evalNode,
 bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 {
     // Direct write-back: each dynamic body's JOINT-LOCAL pose is
-    //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
+    //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1   (row-vector)
     // all in WORLD space (the Bullet world frame): K = jointRestWorld *
     // bodyRestWorld^-1 (baked by pmxRigidBody -create), B_parent = the parent
     // body's solved Bullet transform, and M_parent = parentJointRestWorld *
@@ -817,6 +796,13 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
     // a node-driven parent joint would create.  Bodies without a parent body
     // (bodyParentBodyIndex = -1) get no write-back (Python leaves those joints
     // at their animated pose).
+    //
+    // Bullet/btTransform is COLUMN-vector, so the row-vector formula transposes
+    // to the equivalent composition, evaluated directly on btTransforms:
+    //   boneLocal = M_parent^-1 * B_parent^-1 * bodyLocal * K
+    // At rest this telescopes to jointRest * parentJointRest^-1 (the joint's
+    // exact rest-local pose) — same result as the MMatrix chain it replaces,
+    // minus the Matrix4/MMatrix round-trip bookkeeping.
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
@@ -829,16 +815,12 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
         const Simulation::BodyDefinition& bd = mBodies[i];
         if (bd.isKinematic() || !bd.enabled)
             continue;
-        // Start from the solved world-space body pose (Maya row-vector matrix).
-        const Simulation::Pose wp = mSim.bodyPose(i);
-        Matrix4 outRow;
-        btTransformToRowMatrix(poseToTransform(wp.pos, wp.quat), outRow);
 
-        //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
-        // with K = bodyWriteBackOffset[i] and M_parent = K[parentBodyIndex]
-        // (the parent body's K).  All matrices are world-space: jointLocal =
-        // jointWorld * parentJointWorld^-1 with jointWorld = K * bodyWorld
-        // and parentJointWorld = M_parent * B_parent.
+        // Start from the solved world-space body pose, then apply the
+        // write-back chain (boneLocal = M_parent^-1 * B_parent^-1 * bodyLocal * K).
+        const Simulation::Pose wp = mSim.bodyPose(i);
+        btTransform boneLocal = poseToTransform(wp.pos, wp.quat);
+
         const int parentIdx = bd.parentBodyIndex;
         if (parentIdx >= 0 && (size_t) parentIdx < mBodies.size() && mBodies[parentIdx].enabled &&
             offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
@@ -847,30 +829,17 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
             // The condition above left the handle at parentIdx — re-jump
             // before each read so k = K[i] and mp = K[parentIdx].
             offsetHandle.jumpToArrayElement((unsigned int) i);
-            MMatrix k = offsetHandle.inputValue().asMatrix();
+            const btTransform k = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
             offsetHandle.jumpToArrayElement((unsigned int) parentIdx);
-            MMatrix mp = offsetHandle.inputValue().asMatrix();
+            const btTransform mp = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
             const Simulation::Pose pp = mSim.bodyPose(parentIdx);
-            Matrix4 bpRow;
-            btTransformToRowMatrix(poseToTransform(pp.pos, pp.quat), bpRow);
-            MMatrix bParent(matrix4ToMMatrix(bpRow));
-            MMatrix bodyLocal(matrix4ToMMatrix(outRow));
-            MMatrix result = k * bodyLocal * bParent.inverse() * mp.inverse();
-            for (int r = 0; r < 4; ++r)
-            {
-                for (int c = 0; c < 4; ++c)
-                {
-                    outRow(r, c) = result(r, c);
-                }
-            }
+            const btTransform bp = poseToTransform(pp.pos, pp.quat);
+            boneLocal = mp.inverse() * bp.inverse() * boneLocal * k;
         }
 
-        // No parent body -> no write-back; outRow stays the raw world pose.
-        const double ox = outRow(3, 0); // row-vector translation
-        const double oy = outRow(3, 1);
-        const double oz = outRow(3, 2);
+        // No parent body -> no write-back; boneLocal stays the raw world pose.
+        const btVector3& o = boneLocal.getOrigin();
         Double3 rot;
-        const btTransform boneLocal = doubleMatrixToBtTransform(outRow);
         const btQuaternion& bq = boneLocal.getRotation();
         quatToEulerXYZDegrees(Double4(bq.x(), bq.y(), bq.z(), bq.w()), rot);
 
@@ -878,9 +847,9 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
         if (bd.physicsMode != Simulation::PhysicsMode::ePhysicsBone)
         {
             MDataHandle tEl = tBuilder.addElement((unsigned int) i);
-            tEl.child(aOutTranslateX).setMDistance(MDistance(ox));
-            tEl.child(aOutTranslateY).setMDistance(MDistance(oy));
-            tEl.child(aOutTranslateZ).setMDistance(MDistance(oz));
+            tEl.child(aOutTranslateX).setMDistance(MDistance(o.x()));
+            tEl.child(aOutTranslateY).setMDistance(MDistance(o.y()));
+            tEl.child(aOutTranslateZ).setMDistance(MDistance(o.z()));
         }
 
         MDataHandle rEl = rBuilder.addElement((unsigned int) i);

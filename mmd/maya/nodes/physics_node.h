@@ -147,8 +147,8 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aBodyColliderType; // enum — PMX shape (kColliderBox/Sphere/Capsule)
     // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
     // engine's radius / box half-extents / capsule length by collider type
-    // (mmd::core::applyShapeSize) in readBodyData and the attribute-fallback
-    // reader.
+    // (mmd::core::applyShapeSize) in readBodyData; the draw fallback reads it
+    // verbatim.
     static MObject aBodyShapeSize;       // float3 — PMX shape_size verbatim
     static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, world space)
     static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
