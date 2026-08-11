@@ -11,8 +11,8 @@ Tests cover (the "add a body and configure it on addition" contract):
   damping, friction, restitution, group, mask, shape, physics mode, rest pose,
   PMX shape_size verbatim).
 - FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by
-  the joint; the group inverse and body<->bone offset are DERIVED by the
-  node from groupWorldMatrix / bodyWriteBackOffset).
+  the joint; the body<->bone offset is DERIVED by the node from
+  bodyWriteBackOffset).
 - PHYSICS / PHYSICS_BONE -> DATA ONLY (no anchor, no write-back connections).
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
@@ -135,8 +135,8 @@ def test_append_body_data():
         approx_equal_tuple(cmds.getAttr(f"{base}.bodyShapeSize")[0], (1.0, 2.0, 3.0)),
         f"bodyShapeSize != size {cmds.getAttr(f'{base}.bodyShapeSize')}",
     )
-    # Rest pose in group space: group is at the origin, so the MMD position
-    # (Z-flip of 0 == 0) lands directly in group space.
+    # Rest pose stored in world space: the group is at the origin, so the MMD
+    # position (Z-flip of 0 == 0) lands directly in world space.
     assert_true(
         approx_equal_tuple(
             cmds.getAttr(f"{base}.bodyRestTranslate")[0], (0.5, 0.0, 0.0)
@@ -170,9 +170,8 @@ def test_follow_bone_binds_anchor():
         any(joint_a in src for src in srcs),
         f"anchorWorldMatrix[0] not fed by joint ({srcs})",
     )
-    # The group inverse and the body<->bone offset are DERIVED by the node
-    # (from groupWorldMatrix and bodyWriteBackOffset) — the command no longer
-    # writes anchorOffset / groupInverseWorldMatrix inputs.
+    # The body<->bone offset is DERIVED by the node (from bodyWriteBackOffset)
+    # — the command no longer writes an anchorOffset input.
     print("✓ FOLLOW_BONE body bound to joint via kinematic anchor")
     return True
 
@@ -534,7 +533,7 @@ def test_shape_size_verbatim_per_collider():
 
 
 def test_rest_pose_conversion():
-    """MMD rest pose is converted to group space (Z-flip + handedness flip)."""
+    """MMD rest pose is stored in world space (Z-flip + handedness flip)."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
     # position z=2 flips to -2; rotation x=90deg (MMD radians) flips to -90.
@@ -558,7 +557,7 @@ def test_rest_pose_conversion():
         approx_equal_tuple(rest_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
         f"bodyRestRotate handedness flip wrong {rest_rot}",
     )
-    print("✓ MMD rest pose converted to group space (Z-flip + handedness)")
+    print("✓ MMD rest pose stored in world space (Z-flip + handedness)")
     return True
 
 

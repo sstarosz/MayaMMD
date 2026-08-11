@@ -428,9 +428,8 @@ def _swing_root(maya_pmx_data, frame: int, degrees: float = 20.0) -> None:
 def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
     """SIMULATION IS ENABLED: time-driven solver + Phase-3 write-back wiring.
 
-    The solver is connected to ``time1.outTime``, the physics group's world
-    matrix feeds ``groupWorldMatrix``, dynamic bodies carry their write-back
-    parent body index and scrub-back reset anchor, and the node's
+    The solver is connected to ``time1.outTime``, dynamic bodies carry their
+    write-back parent body index and scrub-back reset anchor, and the node's
     ``outTranslate``/``outRotate`` connect STRAIGHT into the related joints
     (rotation-only for PHYSICS_BONE).  Bodies whose parent bone has no rigid
     body are left UNDRIVEN (the DG ``parentInverseMatrix`` fallback is gone).
@@ -446,12 +445,6 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
     assert_true(
         cmds.isConnected("time1.outTime", f"{solver}.time"),
         "node.time is not connected (simulation not time-driven)",
-    )
-    # Group world matrix (the node derives the group inverse for the
-    # kinematic anchors).
-    assert_true(
-        bool(cmds.listConnections(f"{solver}.groupWorldMatrix", source=True) or []),
-        "groupWorldMatrix not connected",
     )
 
     bone_of_body: dict = {}

@@ -16,9 +16,9 @@ wires everything in one pass.  The headless stepping helper
 (:func:`step_physics`) remains for batch use.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
-Bullet world from ``mmd/core``.  It is parented under the physics group at
-the origin, so the Bullet world runs in the group's local space — the same
-layout the full body population later fills in.
+Bullet world from ``mmd/core``.  The Bullet world runs in WORLD space, so
+the solver's own location (and the physics group's transform) never matters —
+the user is free to move the skeleton without breaking the simulation.
 
 Called from ``build_pmx_scene`` so every imported model gets its node with
 bodies.  The scene is the source of truth: the solver node name is stamped
@@ -106,8 +106,8 @@ def _create_physics_solver(
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
     Simulation) and draws its own guide visualization through a C++ draw
-    override (planned, redesigned).  It is parented under the physics group at
-    the origin, so the Bullet world runs in the group's local space.
+    override (planned, redesigned).  The Bullet world runs in WORLD space, so
+    the solver's own location never matters.
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver
     every frame (the same path as a parentConstraint, so it works under
@@ -324,7 +324,6 @@ def _compute_reset_anchor_map(
 
 def _wire_dynamic_write_back(
     node: str,
-    group: str,
     pmx_data: PmxModel,
     joint_names: dict[int, str],
     kinematic_order: list[int],
@@ -350,15 +349,6 @@ def _wire_dynamic_write_back(
     """
     follow_bone = PhysicsMode.FOLLOW_BONE.value
     physics_bone = PhysicsMode.PHYSICS_BONE.value
-
-    # The node derives the physics group's INVERSE from groupWorldMatrix for
-    # the kinematic anchors; the write-back primary path cancels groupWorld.
-    try:
-        cmds.connectAttr(
-            f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix", force=True
-        )
-    except Exception as e:
-        log.warning("Could not connect groupWorldMatrix: %s", e)
 
     # PMX bone index -> rigid-body index (only bodies with a related joint can
     # be referenced as a write-back parent).
@@ -488,8 +478,9 @@ def create_physics_from_pmx_data(
         ``None`` if the node could not be created.
     """
     group = _create_physics_group(name_registry, root_transform_obj)
-    # The solver is a locator shape parented under the physics group — its
-    # object space is the group's local space, which is the Bullet world frame.
+    # The solver is a locator shape parented under the physics group.  The
+    # Bullet world runs in WORLD space, so the group's transform is irrelevant
+    # to the simulation (it is just an organizational container).
     try:
         node = _create_physics_solver(name_registry, parent_group=group)
     except Exception as e:  # pragma: no cover - Maya-side failure path
@@ -522,5 +513,5 @@ def create_physics_from_pmx_data(
         for rb_idx, b in enumerate(pmx_data.rigid_bodies)
         if b.physics_mode.value == PhysicsMode.FOLLOW_BONE.value
     ]
-    _wire_dynamic_write_back(node, group, pmx_data, joint_names, kinematic_order)
+    _wire_dynamic_write_back(node, pmx_data, joint_names, kinematic_order)
     return node

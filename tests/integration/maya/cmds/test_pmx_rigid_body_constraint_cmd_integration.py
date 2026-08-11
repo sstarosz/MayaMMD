@@ -235,13 +235,13 @@ def test_asymmetric_angular_limits_real_model():
     return True
 
 
-def test_frame_in_group_space():
-    """The joint frame is stored in the physics group's LOCAL space.
+def test_frame_in_world_space():
+    """The joint frame is stored in WORLD space, independent of the physics group.
 
-    Mirrors pmxRigidBody: the Bullet world runs in group space, so a joint at
-    world (1,2,3) under a group translated to (10,0,0) must be stored at
-    group-space (-9,2,-3) — NOT the raw world position.  (Without the group
-    conversion the stored value would be (1,2,-3).)
+    The Bullet world runs in world space, so a joint at world (1,2,3) under a
+    group translated to (10,0,0) is stored at the raw world position (1,2,-3)
+    — NOT shifted by the group.  (Before, the frame was stored group-space and
+    the solver's location mattered.)
     """
     group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
@@ -257,11 +257,11 @@ def test_frame_in_group_space():
     base = f"{solver}.joints[0]"
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{base}.jointFrameTranslate")[0], (-9.0, 2.0, -3.0)
+            cmds.getAttr(f"{base}.jointFrameTranslate")[0], (1.0, 2.0, -3.0)
         ),
-        f"jointFrameTranslate not in group space {cmds.getAttr(f'{base}.jointFrameTranslate')}",
+        f"jointFrameTranslate not in world space {cmds.getAttr(f'{base}.jointFrameTranslate')}",
     )
-    print("✓ joint frame stored in the physics group's local space")
+    print("✓ joint frame stored in world space (group transform ignored)")
     return True
 
 
@@ -476,7 +476,7 @@ _TESTS = [
         "Asymmetric angular limits (real model)",
         test_asymmetric_angular_limits_real_model,
     ),
-    ("Frame stored in group space", test_frame_in_group_space),
+    ("Frame stored in world space", test_frame_in_world_space),
     ("Self-constraint rejected", test_self_constraint_rejected),
     ("Auto-increment joint indices", test_auto_increment_indices),
     ("Explicit index validated", test_explicit_index_validation),

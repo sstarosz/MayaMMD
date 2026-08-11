@@ -16,11 +16,11 @@
 
 #include <cmath>
 
+using mmd::core::applyShapeSize;
 using mmd::core::Double3;
 using mmd::core::Double4;
-using mmd::core::Simulation;
-using mmd::core::applyShapeSize;
 using mmd::core::shapeSizeFromBodyDefinition;
+using mmd::core::Simulation;
 using namespace mmd::core::physics_math;
 
 namespace

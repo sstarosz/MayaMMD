@@ -117,16 +117,16 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aGravity;
 
     // Kinematic anchors — one per FOLLOW_BONE body, in kinematic order.  The
-    // anchor world is the related joint's world matrix; the node maps it into
-    // the physics group's local space via groupWorldMatrix^-1 and applies the
-    // body<->joint rest offset (K^-1, derived from bodyWriteBackOffset).
+    // anchor world is the related joint's world matrix; the node applies the
+    // body<->joint rest offset (K^-1, derived from bodyWriteBackOffset) to
+    // place the collider on its bone.  The Bullet world runs in WORLD space,
+    // so the solver's own location never matters.
     static MObject aAnchorWorldMatrix;
 
     // Write-back inputs — the node outputs each dynamic body's JOINT-LOCAL
     // pose (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1, with
     // K = jointRestWorld * bodyRestWorld^-1 and M_parent = K[parentBodyIndex]),
     // so Python connects outTranslate/outRotate straight into the joints.
-    static MObject aGroupWorldMatrix;    // physics group's world matrix (single)
     static MObject aBodyWriteBackOffset; // matrix array, body-indexed: K
     // Per-body compound array: aBodies[i] — children are declared to mirror
     // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
@@ -150,7 +150,7 @@ class PhysicsNode : public MPxLocatorNode
     // (mmd::core::applyShapeSize) in readBodyData and the attribute-fallback
     // reader.
     static MObject aBodyShapeSize;       // float3 — PMX shape_size verbatim
-    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, world space)
     static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
     static MObject aBodyMass;            // double — PMX mass
     static MObject aBodyLinearDamping;   // double — PMX move_attenuation

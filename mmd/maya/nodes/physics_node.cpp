@@ -71,7 +71,6 @@ const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for 
 MObject PhysicsNode::aTime;
 MObject PhysicsNode::aGravity;
 MObject PhysicsNode::aAnchorWorldMatrix;
-MObject PhysicsNode::aGroupWorldMatrix;
 MObject PhysicsNode::aBodyWriteBackOffset;
 
 MObject PhysicsNode::aBodies;
@@ -313,21 +312,9 @@ MStatus PhysicsNode::initialize()
     mAttr.setKeyable(false);
 
     // --- write-back inputs ---
-    // The physics group's world matrix (single).  The node derives the group
-    // inverse internally (it is the exact inverse, so a separate
-    // groupInverseWorldMatrix input would be redundant) — used to put the
-    // kinematic anchors in the group's local space.
-    mAttr.setKeyable(false);
-
-    // Phase 3 direct write-back: the physics group's world matrix (single) and
-    // the per-body baked write-back offset.  These are TOP-LEVEL matrix
-    // arrays (compound matrix children are awkward), so the node reads them
-    // by body index in writeOutputs.
-    aGroupWorldMatrix = mAttr.create("groupWorldMatrix", "gwm", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setKeyable(false);
-
+    // The per-body baked write-back offset (K).  This is a TOP-LEVEL matrix
+    // array (compound matrix children are awkward), so the node reads it by
+    // body index in writeOutputs.
     aBodyWriteBackOffset =
         mAttr.create("bodyWriteBackOffset", "bwo", MFnMatrixAttribute::kDouble, &stat);
     MMD_CHECK_MSTATUS(stat);
@@ -627,8 +614,6 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorWorldMatrix);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aGroupWorldMatrix);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyWriteBackOffset);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodies);
@@ -665,10 +650,6 @@ MStatus PhysicsNode::initialize()
     stat = attributeAffects(aAnchorWorldMatrix, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorldMatrix, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aGroupWorldMatrix, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aGroupWorldMatrix, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyWriteBackOffset, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
@@ -776,23 +757,13 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
     if (!mSim.initialized())
         return false;
     // anchorWorldMatrix[i] maps 1:1 to the kinematic bodies in body order.
-    // local = world * groupInverse (the group inverse is derived from
-    // groupWorldMatrix; unconnected = identity = world space), then the
-    // body<->joint rest offset (K^-1) moves the collider onto its bone.
+    // The Bullet world runs in WORLD space: the anchor world IS the body's
+    // world pose, and the body<->joint rest offset (K^-1) moves the collider
+    // onto its bone.
     bool anchorsMoved = false;
     MArrayDataHandle anchors = dataBlock.inputArrayValue(aAnchorWorldMatrix);
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
     const unsigned int anchorCount = anchors.elementCount();
-    MMatrix groupInverse;
-    MPlug groupWorldPlug(thisMObject(), aGroupWorldMatrix);
-    if (groupWorldPlug.isConnected())
-    {
-        groupInverse = dataBlock.inputValue(aGroupWorldMatrix).asMatrix().inverse();
-    }
-    else
-    {
-        groupInverse.setToIdentity();
-    }
     int anchorIndex = 0;
     for (size_t i = 0; i < mBodies.size() && anchorIndex < (int) anchorCount; ++i)
     {
@@ -801,7 +772,6 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
             continue;
         anchors.jumpToArrayElement(anchorIndex);
         MMatrix w = anchors.inputValue().asMatrix();
-        w *= groupInverse;
         // K = bodyWriteBackOffset[i] = jointRestWorld * bodyRestWorld^-1
         // (baked by the command), so the kinematic offset is K^-1.
         if (offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
@@ -838,14 +808,15 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 {
     // Direct write-back: each dynamic body's JOINT-LOCAL pose is
     //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
-    // K = jointRestWorld * bodyRestWorld^-1 (baked by pmxRigidBody -create),
-    // B_parent = the parent body's solved Bullet transform, and M_parent =
-    // parentJointRestWorld * parentBodyRestWorld^-1 — the SAME constant as
-    // K[parentBodyIndex], so no separate parent-offset array exists.  Deriving
-    // the parent inverse from the parent BODY (never the DG joint matrix)
-    // avoids the DG feedback cycle a node-driven parent joint would create.
-    // Bodies without a parent body (bodyParentBodyIndex = -1) get no write-back
-    // (Python leaves those joints at their animated pose).
+    // all in WORLD space (the Bullet world frame): K = jointRestWorld *
+    // bodyRestWorld^-1 (baked by pmxRigidBody -create), B_parent = the parent
+    // body's solved Bullet transform, and M_parent = parentJointRestWorld *
+    // parentBodyRestWorld^-1 — the SAME constant as K[parentBodyIndex], so no
+    // separate parent-offset array exists.  Deriving the parent inverse from
+    // the parent BODY (never the DG joint matrix) avoids the DG feedback cycle
+    // a node-driven parent joint would create.  Bodies without a parent body
+    // (bodyParentBodyIndex = -1) get no write-back (Python leaves those joints
+    // at their animated pose).
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
@@ -858,16 +829,16 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
         const Simulation::BodyDefinition& bd = mBodies[i];
         if (bd.isKinematic() || !bd.enabled)
             continue;
-        // Start from the solved group-space body pose (Maya row-vector matrix).
+        // Start from the solved world-space body pose (Maya row-vector matrix).
         const Simulation::Pose wp = mSim.bodyPose(i);
         Matrix4 outRow;
         btTransformToRowMatrix(poseToTransform(wp.pos, wp.quat), outRow);
 
         //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
         // with K = bodyWriteBackOffset[i] and M_parent = K[parentBodyIndex]
-        // (the parent body's K).  Because parentJointWorld =
-        // M_parent * B_parent * groupWorld, the groupWorld term cancels and
-        // boneLocal is exact at rest.
+        // (the parent body's K).  All matrices are world-space: jointLocal =
+        // jointWorld * parentJointWorld^-1 with jointWorld = K * bodyWorld
+        // and parentJointWorld = M_parent * B_parent.
         const int parentIdx = bd.parentBodyIndex;
         if (parentIdx >= 0 && (size_t) parentIdx < mBodies.size() && mBodies[parentIdx].enabled &&
             offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
@@ -894,7 +865,7 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
             }
         }
 
-        // No parent body -> no write-back; outRow stays the raw group pose.
+        // No parent body -> no write-back; outRow stays the raw world pose.
         const double ox = outRow(3, 0); // row-vector translation
         const double oy = outRow(3, 1);
         const double oz = outRow(3, 2);

@@ -13,7 +13,7 @@
  * LIMITS that the old writer was missing:
  *   frame translate = (px, py, -pz)            (Z-flip)
  *   frame rotate    = (-rx, -ry, +rz) degrees  (MMD radians -> Maya degrees)
- *   frame stored in GROUP space (world * groupWorld^-1 — same as pmxRigidBody)
+ *   frame stored in WORLD space (same as pmxRigidBody)
  *   linearMin/Max   = Z component negated + min/max swapped
  *   angularMin/Max  = X/Y negated + min/max swapped, Z unchanged (radians)
  *   springs         = verbatim (magnitudes, invariant under the reflection)
@@ -37,19 +37,14 @@
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
-#include <maya/MDagPath.h>
-#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
-#include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
-#include <maya/MTransformationMatrix.h>
-#include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
@@ -278,31 +273,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         return MS::kFailure;
     }
 
-    // ── Group-space frame ──
-    // The Bullet world runs in the physics group's local space (bodies store
-    // group-space rest poses), so the joint frame must too — mirror the
-    // pmxRigidBody group-space conversion (world * groupWorld^-1).  At import
-    // the group is identity so this is a no-op; it keeps frames attached to
-    // the bodies if the user ever transforms the physics group.
-    MDagPath nodePath;
-    if (MDagPath::getAPathTo(solverNode, nodePath) != MS::kSuccess)
-    {
-        MGlobal::displayError("pmxRigidBodyConstraint: could not resolve solver dag path");
-        return MS::kFailure;
-    }
-    MDagPath groupPath = nodePath;
-    groupPath.pop(); // |group|shape ⇒ |group
-    const MMatrix groupWorld = groupPath.inclusiveMatrix();
-
-    // Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness).
+    // ── World-space frame ──
+    // The Bullet world runs in world space (bodies store world-space rest
+    // poses), so the joint frame must too — the PMX frame is stored as-is.
+    // Rest pose in world space (MMD ⇒ Maya: Z-flip + handedness).
     const Double3 worldT(pos.x, pos.y, -pos.z);
     const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
-    const MMatrix local = mmd::maya::matrixFromTR(worldT, worldR) * groupWorld.inverse();
-    MTransformationMatrix mt(local);
-    const MVector lt = mt.getTranslation(MSpace::kTransform);
-    const MEulerRotation le = mt.eulerRotation();
-    const Double3 localT(lt.x, lt.y, lt.z);
-    const Double3 localR(rad2deg(le.x), rad2deg(le.y), rad2deg(le.z));
 
     // ── Limits through the MMD→Maya reflection F = diag(1, 1, -1) ──
     // Linear: X/Y unchanged; local Z reverses so its interval negates AND
@@ -323,8 +299,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // jointType is an enum attribute — write through setShort (like the
     // bodyGroupId enum).
     elem.child(PhysicsNode::aJointType).setShort(static_cast<short>(type));
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate), localT);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate), localR);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate), worldT);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate), worldR);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMin), lmin);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMax), lmax);
     mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointAngularMin), amin);

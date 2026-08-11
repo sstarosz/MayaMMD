@@ -11,8 +11,8 @@ Tests cover:
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
 - A config edit forcing an in-place rebuild at the current pose
-- groupWorldMatrix^-1 (derived internally) mapping anchors from world into
-  group space
+- The Bullet world running in world space (the solver's own location is
+  irrelevant)
 """
 
 # ── Maya standalone initialised by the test runner ───────────────────────
@@ -143,7 +143,6 @@ def test_attribute_surface_and_defaults():
         "time",
         "gravity",
         "anchorWorldMatrix",
-        "groupWorldMatrix",
         "bodyWriteBackOffset",
         "bodies",
         "joints",
@@ -402,28 +401,22 @@ def test_config_edit_forces_rebuild():
     return True
 
 
-def test_group_inverse_world_matrix_applies_to_anchors():
-    """groupWorldMatrix^-1 maps every anchor's world matrix into group space.
+def test_solver_location_does_not_affect_simulation():
+    """The Bullet world runs in WORLD space — the solver's own location is irrelevant.
 
-    The node derives the group inverse internally from the single
-    ``groupWorldMatrix`` input (the two are exact inverses) — there is no
-    separate groupInverseWorldMatrix input.
+    The node reads only its input attributes, so where the solver node sits in
+    the DAG (here under a transform at y=10) never affects the solved poses:
+    the welded body follows the world-space anchor (y=3) to y=4 regardless.
     """
     setup_test_environment()
-    node = _create_node()
+    # Park the solver under a transform that is NOT at the origin.
+    holder = cmds.createNode("transform", name="SolverHolder")
+    cmds.setAttr(f"{holder}.translateY", 10)
+    node = cmds.createNode(_NODE_TYPE, name="testPhysicsNode", parent=holder)
     _connect_time(node)
     _set_welded_chain(node)
 
-    # A physics group transform at y=3; its world matrix is CONNECTED to the
-    # node's single groupWorldMatrix input (mirrors how the Python builder
-    # wires group.worldMatrix[0]), and the node derives the inverse
-    # (T(0,-3,0)).  The anchor's GROUP-LOCAL pose is then local = world *
-    # groupInverse = the origin, so the welded body settles 1 unit above the
-    # LOCAL origin (y=1) — not y=4, which is where it would sit if the group
-    # inverse were ignored.
-    group = cmds.createNode("transform", name="PhysicsGroupTest")
-    cmds.setAttr(f"{group}.translateY", 3)
-    cmds.connectAttr(f"{group}.worldMatrix[0]", f"{node}.groupWorldMatrix")
+    # World-space anchor at y=3 (there is no groupWorldMatrix input anymore).
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,
@@ -452,10 +445,11 @@ def test_group_inverse_world_matrix_applies_to_anchors():
         last_y = _read_output(node, 1)[1]
 
     assert_true(
-        0.5 < last_y < 1.5,
-        f"welded body should sit at local y=1 (world 3 * inverse -3); got {last_y:.3f}",
+        last_y > 3.5,
+        f"welded body should follow the WORLD anchor regardless of solver "
+        f"location (y={last_y:.3f})",
     )
-    print(f"✓ group inverse mapped anchor world->local (body y={last_y:.3f})")
+    print(f"✓ solver location ignored; welded body followed world anchor to y={last_y:.3f}")
     return True
 
 
@@ -471,7 +465,7 @@ _TESTS = [
     ("Kinematic Anchor Drives Welded Body", test_kinematic_anchor_drives_welded_body),
     ("Config Edit Forces Rebuild", test_config_edit_forces_rebuild),
     (
-        "Group Inverse Maps Anchors To Local",
-        test_group_inverse_world_matrix_applies_to_anchors,
+        "Solver Location Irrelevant (World Space)",
+        test_solver_location_does_not_affect_simulation,
     ),
 ]

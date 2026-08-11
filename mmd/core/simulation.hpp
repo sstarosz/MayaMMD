@@ -58,7 +58,7 @@ class Simulation
     /// scrub-back reset.
     struct BodyDefinition
     {
-        Double3 restPos; // PMX rest position (group space)
+        Double3 restPos; // PMX rest position (world space)
         Double3 restRot; // degrees
         double mass = 1.0;
         double linearDamping = 0.0;

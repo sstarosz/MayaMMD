@@ -10,9 +10,8 @@
  * there is no Python wiring anymore).  Create writes the body DATA, binds
  * FOLLOW_BONE bodies to their related joint through the kinematic-anchor
  * input, and bakes the write-back K offset (``bodyWriteBackOffset``) for
- * every body; the Python builder connects the solver (time + group world
- * matrix) and wires outTranslate/outRotate into the joints after every body
- * and joint exist.
+ * every body; the Python builder connects the solver (time) and wires
+ * outTranslate/outRotate into the joints after every body and joint exist.
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -24,7 +23,6 @@
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
 #include <maya/MDagPath.h>
-#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
@@ -35,8 +33,6 @@
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
-#include <maya/MTransformationMatrix.h>
-#include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
@@ -363,8 +359,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         return MS::kFailure;
     }
     MDagPath groupPath = nodePath;
-    groupPath.pop(); // |group|shape ⇒ |group
-    const MMatrix groupWorld = groupPath.inclusiveMatrix();
+    groupPath.pop(); // |group|shape ⇒ |group (used to resolve -bone under the model root)
 
     // Related joint (anchor / write-back target).
     const MDagPath jointPath = resolveBone(bone, groupPath);
@@ -377,20 +372,16 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             jointFn.findPlug("worldMatrix", true, &jointPlugStat).elementByLogicalIndex(0);
     }
 
-    // ── Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness) ──
+    // ── Rest pose in WORLD space (MMD ⇒ Maya: Z-flip + handedness) ──
+    // The Bullet world runs in world space (the node no longer depends on the
+    // physics group's location), so the PMX rest pose is stored as-is.
     const Double3 worldT(pos.x, pos.y, -pos.z);
     const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
-    const MMatrix local = mmd::maya::matrixFromTR(worldT, worldR) * groupWorld.inverse();
-    MTransformationMatrix mt(local);
-    const MVector lt = mt.getTranslation(MSpace::kTransform);
-    const MEulerRotation le = mt.eulerRotation();
-    const Double3 localT(lt.x, lt.y, lt.z);
-    const Double3 localR(rad2deg(le.x), rad2deg(le.y), rad2deg(le.z));
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), localT);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), localR);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), worldT);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), worldR);
     elem.child(PhysicsNode::aBodyMass).setDouble(mass);
     elem.child(PhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
     elem.child(PhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
@@ -432,11 +423,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                     .asShort() == static_cast<short>(Simulation::PhysicsMode::eFollowBone))
                 ++k;
         }
-        // The anchor world is the joint's world matrix (the node converts it
-        // to group space and applies the body<->joint offset as K^-1 — both
-        // derived internally from groupWorldMatrix and bodyWriteBackOffset,
-        // so there is no anchorOffset / groupInverseWorldMatrix input to
-        // populate).
+        // The anchor world is the joint's world matrix (the node applies the
+        // body<->joint offset as K^-1 from bodyWriteBackOffset — derived
+        // internally, so there is no anchorOffset input to populate).  The
+        // Bullet world runs in world space, so the anchor is stored as-is.
         if (jointPath.isValid())
         {
             mmd::maya::connectOrReplace(
@@ -446,9 +436,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         else
         {
             // No related joint: a static collider pinned at its rest pose.
-            // Pin the body's DIRECT world rest pose (world * groupInverse
-            // gives the group-space rest in the node) — not the round-tripped
-            // group-space decomposition, which drops group scale.
+            // Pin the body's DIRECT world rest pose — not a round-tripped
+            // decomposition, which would drop group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
             mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
@@ -473,14 +462,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         if (jointPath.isValid())
         {
             // K = jointRestWorld * bodyRestWorld^-1 with the body's DIRECT
-            // world rest pose (MMD Z-flip + handedness), exactly like the old
-            // Python bake.  Do NOT round-trip through the group-space
-            // decomposition (matrixFromTR(localT, localR) * groupWorld): when
-            // the physics group carries scale, MTransformationMatrix drops the
-            // scale during euler decomposition, so the round-tripped "world"
-            // is scaled wrongly and every write-back-driven bone lands off its
-            // rest pose (the collider guides stay correct — they render the
-            // scale back through the DAG — which is the exact breakage seen).
+            // world rest pose (MMD Z-flip + handedness).  Do NOT round-trip
+            // through a matrix decomposition — euler decomposition drops any
+            // scale, which would scale K wrongly and land every
+            // write-back-driven bone off its rest pose.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
             k = worldMatrix(jointPath) * bodyWorld.inverse();
         }

@@ -32,8 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import time. For every body it writes `bodyShapeSize`, `bodyPhysicsMode`,
   `bodyGroupId`/`bodyMask`, mass/damping/friction/restitution, and the
   kinematic anchor data (`bodyWriteBackOffset`, `bodyResetAnchorIndex`,
-  `bodyParentBodyIndex`); it also connects the
-  physics group's `worldMatrix[0]` to the solver's `groupWorldMatrix`. The
+  `bodyParentBodyIndex`); it stores the PMX rest pose and the write-back K
+  offset in WORLD space (the Bullet world no longer depends on the physics
+  group's location). The
   PMX importer now calls it for each rigid body (matching PMX
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
   bodies on the physics node immediately. Backed by 36 Maya integration
@@ -45,9 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jointBodyA`/`jointBodyB` (validated against the current body count and
   against each other — a body cannot constrain itself), the PMX `jointType`
   (0..5, validated, and exposed as an **enum dropdown** — Spring6Dof/SixDof/
-  P2P/ConeTwist/Slider/Hinge), and the joint frame stored in the physics group's local
-  space (Z-flip + MMD radians → Maya degrees handedness conversion, `world *
-  groupWorld⁻¹` — matching `pmxRigidBody`). The linear/angular **limits are
+  P2P/ConeTwist/Slider/Hinge), and the joint frame stored in world space
+  (Z-flip + MMD radians → Maya degrees handedness conversion — matching
+  `pmxRigidBody`). The linear/angular **limits are
   converted through the same MMD→Maya reflection** (the Z-flip
   F = diag(1,1,−1)): linear Z negates + min/max swap, angular X/Y negate +
   min/max swap, angular Z and the spring constants pass through (magnitudes).
@@ -60,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the imported solver is fully wired and time-driven:
   - `time1.outTime` drives the `pmxPhysicsNode`'s `time` input (the
     evaluation manager steps the Bullet world every frame; the node declares
-    itself non-cacheable), and the physics group's `worldMatrix[0]` feeds
-    `groupWorldMatrix`.
+    itself non-cacheable).  The Bullet world runs in **world space** — the
+    solver's own location (and the physics group's transform) never matters,
+    so the skeleton can be moved freely without breaking the simulation.
   - After every body and joint exists, each dynamic body's write-back wiring
     is resolved: `bodyParentBodyIndex` (the parent bone's rigid body, so the
     node derives the parent inverse from the PARENT BODY's solved Bullet
@@ -96,8 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `K[body]^-1` (identity for joint-less static colliders, exactly as
     before).
   - `groupInverseWorldMatrix` is removed: it was the exact inverse of
-    `groupWorldMatrix` (already a single connected input) — the node derives
-    it internally.
+    `groupWorldMatrix` (which itself is now gone — the Bullet world runs in
+    world space, so no group transform is needed) — the node derives
+    everything internally.
   Removes the two attributes, the `pmxRigidBody` anchor-offset writes and the
   group-inverse connection.  Behaviourally identical (verified: 248/285
   joints move, write-back dR=40.684 — unchanged before/after).
@@ -134,6 +137,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     The `SimulationTransition` state machine is folded into a plain if/else
     in `compute()`, and dead Bullet/Maya includes are dropped.  Scenes that
     set `configVersion` need a re-import.
+- **`pmxPhysicsNode` simulation now runs in WORLD space — the
+  `groupWorldMatrix` input is gone** (breaking schema change — re-import
+  required).  Previously the Bullet world ran in the physics group's local
+  space and the node mapped the kinematic anchors (and write-back) through
+  `groupWorldMatrix⁻¹`; moving the skeleton without the solver/group
+  misaligned the simulation.  Now:
+  - The `groupWorldMatrix` matrix attribute (and its `group.worldMatrix[0]`
+    connection in the Python builder) is removed.
+  - Kinematic anchors are used directly in world space (the `K⁻¹`
+    body<->bone offset still applies), and the write-back formula
+    `boneLocal = K · bodyLocal · B_parent⁻¹ · M_parent⁻¹` is now purely
+    world-space (the old groupWorld cancellation is gone by construction).
+  - `pmxRigidBody` stores `bodyRestTranslate`/`bodyRestRotate` and
+    `pmxRigidBodyConstraint` stores `jointFrameTranslate`/`jointFrameRotate`
+    in world space (no `world · groupWorld⁻¹`), so the solver's own location —
+    and the physics group's transform — never affects the simulation.  The
+    user is free to move the skeleton only.
 
 ### Fixed
 
