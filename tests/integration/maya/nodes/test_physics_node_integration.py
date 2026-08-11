@@ -449,7 +449,9 @@ def test_solver_location_does_not_affect_simulation():
         f"welded body should follow the WORLD anchor regardless of solver "
         f"location (y={last_y:.3f})",
     )
-    print(f"✓ solver location ignored; welded body followed world anchor to y={last_y:.3f}")
+    print(
+        f"✓ solver location ignored; welded body followed world anchor to y={last_y:.3f}"
+    )
     return True
 
 
