@@ -15,7 +15,7 @@
  * Maya command convention: create / edit / query (default = create, with
  * -e/-edit and -q/-query enabled in the syntax).
  *
- * v1.0 — CREATE MODE ONLY (create is the default — no -create flag):
+ * CREATE MODE ONLY (create is the default — no -create flag):
  *
  *     pmxRigidBody <solver | modelRoot>
  *         -index <int>              optional target index (must be the next

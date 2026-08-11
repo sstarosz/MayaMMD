@@ -9,9 +9,9 @@
  * is an implementation detail (the Bullet-facing math lives in
  * bullet_bridge.hpp).
  * The engine can be unit-tested WITHOUT the Maya SDK and WITHOUT Bullet
- * headers (see tests/unit_tests/core/test_simulation.cpp).  A thin Maya node
- * (a later PR) adapts it: it reads attributes, converts Maya<->Bullet
- * transforms and owns the timeline/state machine.
+ * headers (see tests/unit_tests/core/test_simulation.cpp).  The Maya node
+ * (mmd/maya/nodes/physics_node) adapts it: it reads attributes, converts
+ * Maya<->Bullet transforms and owns the timeline/state machine.
  *
  * This class knows nothing about Maya: it consumes a plain Definition
  * (gravity + body/joint data), receives kinematic anchor poses as pos+quat,

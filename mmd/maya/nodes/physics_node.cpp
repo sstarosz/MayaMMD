@@ -414,7 +414,7 @@ MStatus PhysicsNode::initialize()
     // Rigid-body index of the related joint's PARENT joint's body (the
     // write-back derives the parent inverse from that body's solved Bullet
     // transform); -1 = parent bone has no rigid body (no write-back for that
-    // body — the old DG parentInverse fallback is gone).
+    // body).
     aBodyParentBodyIndex =
         nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
     MMD_CHECK_MSTATUS(stat);

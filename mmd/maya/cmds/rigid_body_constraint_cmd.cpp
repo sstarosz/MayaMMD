@@ -8,9 +8,8 @@
  * ``joints`` array at the next free index, replacing the former Python
  * ``_set_joint_attributes``.
  *
- * Data conversions mirror the old Python writer's frame handling (Z-flip +
- * MMD radians -> Maya degrees handedness flip) and add the reflection to the
- * LIMITS that the old writer was missing:
+ * Data conversions (Z-flip + MMD radians -> Maya degrees handedness flip)
+ * and the reflection applied to the LIMITS:
  *   frame translate = (px, py, -pz)            (Z-flip)
  *   frame rotate    = (-rx, -ry, +rz) degrees  (MMD radians -> Maya degrees)
  *   frame stored in WORLD space (same as pmxRigidBody)
