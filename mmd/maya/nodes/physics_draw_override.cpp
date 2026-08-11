@@ -140,6 +140,20 @@ MPoint bodyPoint(const PhysicsNode::DrawBody& b, const float local[3], const MMa
     return MPoint(object[0], object[1], object[2]);
 }
 
+// Body local axis (e.g. +Y for capsules, +X/+Y for boxes) as an OBJECT-space
+// direction: rotate the axis by the body quaternion (gives the WORLD-space
+// axis), then transform the direction world -> object via worldInverse.  An
+// MVector is a direction (w = 0), so the translation column is ignored — only
+// rotation/scale apply, exactly what an orientation axis needs.
+MVector bodyAxis(const PhysicsNode::DrawBody& b, const float local[3], const MMatrix& worldInverse)
+{
+    // NOLINTBEGIN(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    float world[3];
+    rotatePoint(b.quat, local, world);
+    // NOLINTEND(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    return MVector(world[0], world[1], world[2]) * worldInverse;
+}
+
 // Engine primitive params from the PMX shape_size VERBATIM (the draw contract
 // reads shapeSize directly; the box extents are full, so halve them).
 mmd::core::collider_geometry::PrimitiveParams primitiveFor(const PhysicsNode::DrawBody& b)
@@ -364,17 +378,10 @@ void PhysicsDrawOverride::addUIDrawables(const MDagPath& objPath, MUIDrawManager
             const mmd::core::collider_geometry::PrimitiveParams p = primitiveFor(b);
             if (solid)
             {
-                // Orientation axes from the body quaternion (in object space,
-                // the world-inverse drops the rotation too).
-                // NOLINTBEGIN(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-                const double q[4] = {b.quat[0], b.quat[1], b.quat[2], b.quat[3]};
-                float up[3];
-                float right[3];
-                rotatePoint(q, &kYAxis[0], up);
-                rotatePoint(q, &kXAxis[0], right);
-                // NOLINTEND(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-                const MVector upV(up[0], up[1], up[2]);
-                const MVector rightV(right[0], right[1], right[2]);
+                // Orientation axes from the body quaternion, transformed into
+                // object space (the body pose is world space).
+                const MVector upV = bodyAxis(b, &kYAxis[0], data->worldInverse);
+                const MVector rightV = bodyAxis(b, &kXAxis[0], data->worldInverse);
                 const MPoint center = bodyPoint(b, &kZeroLocal[0], data->worldInverse);
                 drawManager.box(center, upV, rightV, p.halfExtents.x * 2.0,
                                 p.halfExtents.y * 2.0, p.halfExtents.z * 2.0, true);
@@ -391,9 +398,13 @@ void PhysicsDrawOverride::addUIDrawables(const MDagPath& objPath, MUIDrawManager
             const mmd::core::collider_geometry::PrimitiveParams p = primitiveFor(b);
             if (solid)
             {
-                // Cylinder body + two hemisphere caps (drawn as spheres).
+                // Cylinder body + two hemisphere caps (drawn as spheres).  The
+                // cylinder MUST run along the body's rotated +Y axis (not the
+                // world Y) or tilted capsules render as a vertical cylinder
+                // with the caps detached at the rotated ends.
                 const MPoint center = bodyPoint(b, &kZeroLocal[0], data->worldInverse);
-                drawManager.cylinder(center, MVector(0, 1, 0), p.radius, p.length, 12, true);
+                const MVector upV = bodyAxis(b, &kYAxis[0], data->worldInverse);
+                drawManager.cylinder(center, upV, p.radius, p.length, 12, true);
                 const float half = static_cast<float>(p.length) * 0.5F;
                 const float top[3] = {0.0F, half, 0.0F};
                 const float bot[3] = {0.0F, -half, 0.0F};
