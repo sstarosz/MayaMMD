@@ -416,7 +416,7 @@ MStatus PhysicsNode::initialize()
     // transform); -1 = parent bone has no rigid body (no write-back for that
     // body).
     aBodyParentBodyIndex =
-        nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kShort, -1, &stat);
+        nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kLong, -1, &stat);
     MMD_CHECK_MSTATUS(stat);
     aBodyResetAnchorIndex =
         nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
@@ -675,7 +675,7 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
         b.physicsMode =
             static_cast<Simulation::PhysicsMode>(bodyHandle.child(aBodyPhysicsMode).asShort());
-        b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asShort();
+        b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asInt();
         b.resetAnchorIndex = bodyHandle.child(aBodyResetAnchorIndex).asInt();
         b.enabled = bodyHandle.child(aBodyEnabled).asBool();
         out.push_back(b);

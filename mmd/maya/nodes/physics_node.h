@@ -158,7 +158,7 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aBodyRestitution;     // double — PMX repulsion
     static MObject aBodyFriction;        // double — PMX friction_force
     static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (PhysicsMode)
-    static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
+    static MObject aBodyParentBodyIndex; // long (wiring) — write-back parent body index; -1 = none
     static MObject
         aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
 
