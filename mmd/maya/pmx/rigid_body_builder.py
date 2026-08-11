@@ -1,16 +1,14 @@
 """
 rigid_body_builder.py — rigid bodies for PMX models.
 
-Creates the native ``pmxPhysicsNode`` (embedded Bullet) for a PMX model.
-
-MILESTONE (this PR): the ``{model}_Physics`` group, one ``pmxPhysicsNode``
-per model, gravity, and the ``bodies`` + ``joints`` compound arrays
-POPULATED through the native ``pmxRigidBody`` and ``pmxRigidBodyConstraint``
-commands — one entry per PMX rigid body (data + bone binding for FOLLOW_BONE
-bodies via the kinematic-anchor input) and one per PMX joint (rigid-body
-constraint data).  SIMULATION IS ENABLED: the solver is driven by
-``time1.outTime`` and the solved pose is written STRAIGHT into the related
-joints (Phase 3 direct write-back: ``boneLocal = K · bodyLocal ·
+Creates the native ``pmxPhysicsNode`` (embedded Bullet) for a PMX model:
+the ``{model}_Physics`` group, one solver per model, gravity, and the
+``bodies`` + ``joints`` compound arrays populated through the native
+``pmxRigidBody`` and ``pmxRigidBodyConstraint`` commands — one entry per PMX
+rigid body (data + bone binding for FOLLOW_BONE bodies via the
+kinematic-anchor input) and one per PMX joint (rigid-body constraint data).
+The solver is driven by ``time1.outTime`` and the solved pose is written
+STRAIGHT into the related joints (``boneLocal = K · bodyLocal ·
 B_parent⁻¹ · M_parent⁻¹``) — there is no separate finalize step; import
 wires everything in one pass.  The headless stepping helper
 (:func:`step_physics`) remains for batch use.
@@ -78,8 +76,8 @@ _DEFAULT_GRAVITY_Y = -9.8
 
 # ---------------------------------------------------------------------------
 # Build functions — pure Maya-object creation (no class).  The scene is the
-# source of truth; reconstruct handles later with the model_utils discovery
-# helpers (wrapped by ModelContext.physics* getters).
+# source of truth; discovery finds the solver through the ``pmxPhysicsNode``
+# root attribute stamped by the caller.
 # ---------------------------------------------------------------------------
 
 
@@ -105,9 +103,9 @@ def _create_physics_solver(
     """Create the ``pmxPhysicsNode`` (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
-    Simulation) and draws its own guide visualization through a C++ draw
-    override (planned, redesigned).  The Bullet world runs in WORLD space, so
-    the solver's own location never matters.
+    Simulation) and will draw its own guide visualization through a C++ draw
+    override (planned).  The Bullet world runs in WORLD space, so the
+    solver's own location never matters.
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver
     every frame (the same path as a parentConstraint, so it works under
@@ -264,8 +262,8 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 direct write-back — the node writes the solved JOINT-LOCAL pose
-# straight into the related joints (no guide transforms, no -finalize step).
+# Direct write-back — the node writes the solved JOINT-LOCAL pose straight
+# into the related joints (no guide transforms, no -finalize step).
 #   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
 #   K        = jointRestWorld * bodyRestWorld^-1              (bodyWriteBackOffset)
 #   M_parent = K[parentBodyIndex]                             (the same constant as the
@@ -274,8 +272,7 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
 # K is baked by the native pmxRigidBody -create command (it knows the related
 # joint and the body rest); this module only resolves the parent body index,
 # the scrub-back reset anchors and the output connections.  Bodies whose
-# parent bone has no rigid body are left undriven (the old DG fallback is
-# gone).
+# parent bone has no rigid body are left undriven.
 # ---------------------------------------------------------------------------
 
 
@@ -328,7 +325,7 @@ def _wire_dynamic_write_back(
     joint_names: dict[int, str],
     kinematic_order: list[int],
 ) -> None:
-    """Drive the related JOINTS from the node's solved pose (Phase 3).
+    """Drive the related JOINTS from the node's solved pose.
 
     Called AFTER every body and joint exists (no -finalize step).  The body
     data and the write-back K offsets (``bodyWriteBackOffset`` =
@@ -337,10 +334,9 @@ def _wire_dynamic_write_back(
 
     * ``bodies[i].bodyParentBodyIndex`` — the parent bone's rigid body, so the
       node derives the parent joint's world from the PARENT BODY's solved
-      Bullet transform (M_parent = K[parentBodyIndex]) with no DG dependency on
-      node-driven parent joints (that was the feedback cycle that exploded the
-      sim).  Bodies whose parent bone has no rigid body are left UNDRIVEN (the
-      old DG ``bodyParentInverseMatrix`` fallback is gone);
+      Bullet transform (M_parent = K[parentBodyIndex]) with no DG dependency
+      on node-driven parent joints (that was the feedback cycle that exploded
+      the sim).  Bodies whose parent bone has no rigid body are left UNDRIVEN;
     * ``bodies[i].bodyResetAnchorIndex`` for scrub-back rewind (nearest
       kinematic ancestor);
     * ``outTranslate``/``outRotate`` -> joint.translate/rotate — LAST, so the
@@ -359,9 +355,8 @@ def _wire_dynamic_write_back(
 
     # Parent body resolution (needs the WHOLE model: the parent body may be
     # created later in the array).  A body whose parent bone has no rigid body
-    # (parent_rb = -1) is left UNDRIVEN — the old DG
-    # ``bodyParentInverseMatrix`` fallback is gone, so the node cannot write a
-    # joint-local pose for it.
+    # (parent_rb = -1) is left UNDRIVEN — the node cannot write a joint-local
+    # pose for it.
     parent_body: dict[int, int] = {}
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode.value == follow_bone:
@@ -387,8 +382,8 @@ def _wire_dynamic_write_back(
     # Solved pose -> joints LAST (triggers the first evaluation, so every
     # input above is already in place).  Only bodies with a parent body are
     # driven — the node derives the parent inverse from the PARENT BODY's
-    # solved transform, and the old DG fallback for no-parent-body bodies is
-    # gone, so those joints stay at their animated pose.
+    # solved transform, so joints without a parent body stay at their
+    # animated pose.
     for rb_idx, body in enumerate(pmx_data.rigid_bodies):
         if body.physics_mode.value == follow_bone:
             continue
@@ -455,16 +450,15 @@ def create_physics_from_pmx_data(
 ) -> Optional[str]:
     """Create the physics graph for a PMX model (no in-memory handle).
 
-    MILESTONE: creates the ``{model}_Physics`` group and one ``pmxPhysicsNode``
-    solver under it — per model — and POPULATES the ``bodies`` array through
-    the native ``pmxRigidBody`` command (one body per PMX rigid body, in PMX
+    Creates the ``{model}_Physics`` group and one ``pmxPhysicsNode`` solver
+    under it — per model — and POPULATES the ``bodies`` array through the
+    native ``pmxRigidBody`` command (one body per PMX rigid body, in PMX
     order) and the ``joints`` array through the native
     ``pmxRigidBodyConstraint`` command (one joint per PMX rigid-body
-    constraint, in PMX order).  SIMULATION IS ENABLED: the solver is driven
-    by ``time1.outTime`` and the solved pose is written STRAIGHT into the
-    related joints (Phase 3 direct write-back: ``boneLocal = K · bodyLocal ·
-    B_parent⁻¹ · M_parent⁻¹``) — there is no separate finalize step; import
-    wires everything in one pass.
+    constraint, in PMX order).  The solver is driven by ``time1.outTime``
+    and the solved pose is written STRAIGHT into the related joints
+    (``boneLocal = K · bodyLocal · B_parent⁻¹ · M_parent⁻¹``) — there is no
+    separate finalize step; import wires everything in one pass.
 
     Args:
         pmx_data:            Parsed PMX model (rigid bodies + joints).
@@ -506,7 +500,7 @@ def create_physics_from_pmx_data(
     # Constraints reference bodies by index, so they come AFTER every body.
     _populate_rigid_body_constraints(node, pmx_data)
 
-    # Phase-3 write-back — AFTER every body and joint exists, so the first
+    # Write-back — AFTER every body and joint exists, so the first
     # evaluation (triggered by the output connections) sees complete data.
     kinematic_order = [
         rb_idx

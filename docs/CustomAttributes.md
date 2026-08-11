@@ -115,9 +115,9 @@ Only present when the corresponding PMX flag is set:
 
 These attributes make the model self-describing for fast root discovery and UI display.
 
-| Long name        | Type   | Description                                                                 |
-| ---------------- | ------ | --------------------------------------------------------------------------- |
-| `pmxModelName`   | string | Model display name (local name, falling back to universal name, then ASCII) |
+| Long name        | Type   | Description                                                                  |
+| ---------------- | ------ | ---------------------------------------------------------------------------- |
+| `pmxModelName`   | string | Model display name (local name, falling back to universal name, then ASCII)  |
 | `pmxPhysicsNode` | string | Solver node name of the model's `pmxPhysicsNode` (only when one was created) |
 
 ---
@@ -149,17 +149,6 @@ analogous to how `pmxNameLocal`/`pmxNameUniversal` on joints reconstructs `bone_
 
 ---
 
-## Rigid Body Group (informational)
-
-**Stored on:** The rigid body visual guide group (`{model}_RigidBodies`).  
-**Added by:** `pmx_scene_builder.py:create_rigid_body_guides_from_pmx_data()`
-
-| Long name       | Type   | Description                                           |
-| --------------- | ------ | ----------------------------------------------------- |
-| `rigidBodyNote` | string | Informational note only — physics not yet implemented |
-
----
-
 ## Discovery Utilities
 
 The following functions in `pmx_model_utils.py` read these attributes to reconstruct
@@ -188,6 +177,6 @@ model data from the scene:
 | BlendShape node name | ✅ Yes         | Mesh deformation history scan (listHistory, type=`blendShape`) |
 | BoneMorph node name  | ✅ Yes         | Type scan + `outputRotate` connection tracing to root          |
 | IK handle list       | ✅ Yes         | `listRelatives(root, type="ikHandle")`                         |
-| Physics node name    | ✅ Yes         | `pmxPhysicsNode` on root                                         |
+| Physics node name    | ✅ Yes         | `pmxPhysicsNode` on root                                       |
 | Rest pose values     | ✅ Yes         | `pmxRest*` on joints, `pmxIkRest*` on IK handles               |
 | Bone flags           | ✅ Yes         | `pmx*` bool attributes on joints                               |

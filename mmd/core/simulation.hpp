@@ -16,8 +16,8 @@
  * This class knows nothing about Maya: it consumes a plain Definition
  * (gravity + body/joint data), receives kinematic anchor poses as pos+quat,
  * steps the world and returns solved poses as pos+quat.  All transforms are
- * in the physics group's LOCAL space (the Bullet world frame); the adapter
- * owns every Maya matrix conversion.
+ * in WORLD space (the Bullet world frame); the adapter owns every Maya
+ * matrix conversion.
  */
 
 #pragma once
@@ -142,7 +142,7 @@ class Simulation
         std::vector<JointDefinition> joints;
     };
 
-    /// A group-space pose (quat is a unit quaternion {x, y, z, w}).
+    /// A world-space pose (quat is a unit quaternion {x, y, z, w}).
     struct Pose
     {
         Double3 pos;
@@ -171,7 +171,7 @@ class Simulation
     void clear();
 
     // ── Kinematic anchors ─────────────────────────────────────────────────
-    /// Set the group-local pose of kinematic anchor `anchorIndex` (kinematic
+    /// Set the world-space pose of kinematic anchor `anchorIndex` (kinematic
     /// order = FOLLOW_BONE bodies in body order).  Returns true when the pose
     /// MOVED since the previous call — the adapter steps the sim in that case
     /// so a bone dragged at a fixed time is followed immediately.
@@ -185,7 +185,7 @@ class Simulation
     /// zeroing velocities.  Called when time is scrubbed backwards.
     void resetDynamicBodies();
 
-    /// Solved world (group-space) pose of `bodyIndex` — body-indexed, matching
+    /// Solved world-space pose of `bodyIndex` — body-indexed, matching
     /// Definition::bodies.  Falls back to the body's REST pose when the body
     /// is disabled/missing or the world is not initialized.
     [[nodiscard]] Pose bodyPose(size_t bodyIndex) const;

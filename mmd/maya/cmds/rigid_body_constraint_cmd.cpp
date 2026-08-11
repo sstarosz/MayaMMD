@@ -34,26 +34,22 @@
  */
 
 #include "rigid_body_constraint_cmd.hpp"
+#include "pmx_physics_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
-#include <maya/MFn.h>
-#include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
-#include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
-#include "physics_math.hpp"
 
 #include <string>
 
 using mmd::core::Double3;
-using mmd::core::physics_math::rad2deg;
 
 namespace
 {
@@ -79,60 +75,6 @@ constexpr const char* kAngularSpringFlag = "as";
 
 // Highest PMX joint type value (JointType::HINGE).
 constexpr int kMaxJointType = 5;
-
-// Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
-bool resolveSolver(const MString& target, MObject& outNode)
-{
-    try
-    {
-        MSelectionList sel;
-        if (sel.add(target) != MS::kSuccess || sel.length() == 0)
-            return false;
-        MObject obj;
-        if (sel.getDependNode(0, obj) != MS::kSuccess)
-            return false;
-        if (!obj.hasFn(MFn::kDependencyNode))
-            return false;
-
-        MFnDependencyNode fn(obj);
-        if (fn.typeName() == PhysicsNode::kNodeName)
-        {
-            outNode = obj;
-            return true;
-        }
-        // Model root: resolve the pmxPhysicsNode string attribute.
-        MStatus stat;
-        MPlug p = fn.findPlug("pmxPhysicsNode", true, &stat);
-        if (!p.isNull())
-        {
-            const MString solverName = p.asString();
-            if (solverName.length() > 0)
-            {
-                MSelectionList sel2;
-                if (sel2.add(solverName) == MS::kSuccess && sel2.length() > 0)
-                {
-                    MObject obj2;
-                    if (sel2.getDependNode(0, obj2) == MS::kSuccess &&
-                        obj2.hasFn(MFn::kDependencyNode))
-                    {
-                        MFnDependencyNode fn2(obj2);
-                        if (fn2.typeName() == PhysicsNode::kNodeName)
-                        {
-                            outNode = obj2;
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Resolution failure is reported through the bool return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return false;
-}
 
 // ===========================================================================
 // Create mode
@@ -277,8 +219,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // The Bullet world runs in world space (bodies store world-space rest
     // poses), so the joint frame must too — the PMX frame is stored as-is.
     // Rest pose in world space (MMD ⇒ Maya: Z-flip + handedness).
-    const Double3 worldT(pos.x, pos.y, -pos.z);
-    const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
+    const Double3 worldT = mmd::maya::mmdToMayaTranslate(pos);
+    const Double3 worldR = mmd::maya::mmdToMayaRotateDeg(rot);
 
     // ── Limits through the MMD→Maya reflection F = diag(1, 1, -1) ──
     // Linear: X/Y unchanged; local Z reverses so its interval negates AND
@@ -388,7 +330,7 @@ MStatus RigidBodyConstraintCmd::doIt(const MArgList& args)
     }
 
     MObject solverNode;
-    if (!resolveSolver(target, solverNode))
+    if (!mmd::maya::resolveSolver(target, solverNode))
     {
         displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
         return MS::kFailure;

@@ -7,10 +7,10 @@
  * state lives in the private Impl (PIMPL), so simulation.hpp stays
  * Bullet-free; the public Simulation methods are thin delegates.
  *
- * The simulation runs in the physics group's LOCAL space; the node supplies
- * and consumes plain poses (pos+quat).  All matrix/unit conversion is the
- * node's job — the pure math helpers come from physics_math.hpp and the
- * Bullet conversions from bullet_bridge.hpp.
+ * The simulation runs in WORLD space (the Bullet world frame); the node
+ * supplies and consumes plain poses (pos+quat).  All matrix/unit conversion
+ * is the node's job — the pure math helpers come from physics_math.hpp and
+ * the Bullet conversions from bullet_bridge.hpp.
  */
 
 #include "simulation.hpp"
@@ -273,7 +273,7 @@ void Simulation::SimulationImpl::createBodies()
                                     btCollisionObject::CF_KINEMATIC_OBJECT);
             body->setActivationState(DISABLE_DEACTIVATION);
             body->setGravity(btVector3(0, 0, 0));
-            // Record the anchor's REST pose (group-local) for scrub-back.
+            // Record the anchor's REST pose (world space) for scrub-back.
             mAnchorRest.emplace_back();
             storePose(mAnchorRest.back().pos, mAnchorRest.back().quat, start);
             // mAnchorCurrent must be the SAME size as mAnchorRest — it is

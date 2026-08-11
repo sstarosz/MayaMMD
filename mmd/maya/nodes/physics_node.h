@@ -66,8 +66,8 @@ class PhysicsNode : public MPxLocatorNode
 
     // ------------------------------------------------------------------
     // Draw support — per-body primitive data for the guide visualization.
-    // A viewport draw override (planned, redesigned in a later PR) pulls this
-    // from the node's CURRENT solver state: solved world poses if the Bullet
+    // A viewport draw override (planned) pulls this from the node's CURRENT
+    // solver state: solved world poses if the Bullet
     // world is built, rest poses otherwise.  The node is an MPxLocatorNode so
     // a default locator is drawn until the override lands.
     // ------------------------------------------------------------------
