@@ -172,12 +172,15 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     #   - mmd/maya/nodes/ccd_ik_solver_node.h/cpp  → C++ CCD IK solver node
     #   - mmd/maya/nodes/physics_node.h/cpp        → C++ rigid-body physics node
     #     (embedded Bullet; links mmd_core + Bullet — see below)
+    #   - mmd/maya/nodes/physics_draw_override.h/cpp → VP2 guide visualization
+    #     for the physics node (wireframe/solid colliders, per-body picking)
     # =====================================================================
     add_library(MayaMMD SHARED
         mmd/MayaMMD.cpp
         mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/physics_draw_override.cpp
         mmd/maya/nodes/physics_node.cpp
     )
     target_include_directories(MayaMMD PRIVATE

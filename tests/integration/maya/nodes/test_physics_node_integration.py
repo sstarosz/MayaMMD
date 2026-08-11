@@ -142,6 +142,9 @@ def test_attribute_surface_and_defaults():
     top_level = [
         "time",
         "gravity",
+        "drawMode",
+        "drawOpacity",
+        "uiSelectedBodyIndex",
         "anchorWorldMatrix",
         "bodyWriteBackOffset",
         "bodies",
@@ -206,6 +209,36 @@ def test_attribute_surface_and_defaults():
     grav = cmds.getAttr(f"{node}.gravity")[0]
     assert_eq(round(grav[1], 4), -9.8, "gravity default y (MMD uses exactly -9.8)")
 
+    # Draw attributes: wireframe mode, full opacity, no selected body.
+    assert_eq(int(cmds.getAttr(f"{node}.drawMode")), 1, "drawMode default != Wireframe")
+    assert_eq(
+        round(float(cmds.getAttr(f"{node}.drawOpacity")), 4),
+        1.0,
+        "drawOpacity default != 1.0",
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{node}.uiSelectedBodyIndex")),
+        -1,
+        "uiSelectedBodyIndex default != -1",
+    )
+
+    # drawMode is an enum exposing all four styles.
+    fields = cmds.attributeQuery("drawMode", node=node, listEnum=True)
+    assert_true(
+        fields
+        and "Off" in fields[0]
+        and "Wireframe" in fields[0]
+        and "Solid" in fields[0]
+        and "Wireframe and Solid" in fields[0],
+        f"drawMode enum fields missing {fields}",
+    )
+
+    # uiSelectedBodyIndex is NOT storable (transient viewport-pick state).
+    assert_true(
+        not cmds.attributeQuery("uiSelectedBodyIndex", node=node, storable=True),
+        "uiSelectedBodyIndex should not be storable",
+    )
+
     # Collision mask defaults to "collides with every group" (True each).
     assert_eq(
         cmds.getAttr(f"{node}.bodies[0].bodyMaskGroup0"),
@@ -220,6 +253,44 @@ def test_attribute_surface_and_defaults():
     )
 
     print("✓ attribute surface complete with correct defaults")
+    return True
+
+
+def test_draw_attrs_do_not_disturb_simulation():
+    """Editing the view-only draw attrs never rebuilds or disturbs the sim."""
+    setup_test_environment()
+    node = _create_node()
+    _set_dynamic_body(node, 0, rest_y=5.0)
+    _connect_time(node)
+
+    # Set the draw style up front.
+    cmds.setAttr(f"{node}.drawMode", 3)  # wireframe + solid
+    cmds.setAttr(f"{node}.drawOpacity", 0.5)
+    cmds.setAttr(f"{node}.uiSelectedBodyIndex", 0)
+
+    # The world is built on the FIRST evaluation, so movement needs a second
+    # (later) evaluation — step several frames.
+    cmds.currentTime(1)
+    prev_y = _read_output(node, 0)[1]
+    fell = False
+    for frame in range(2, 21):
+        cmds.currentTime(frame)
+        y = _read_output(node, 0)[1]
+        if y < prev_y:
+            fell = True
+        prev_y = y
+    assert_true(
+        fell,
+        f"draw-attr edit should not disturb the sim (body never moved, y={prev_y:.3f})",
+    )
+
+    # The transient pick state is writable and round-trips (userSelect writes it).
+    cmds.setAttr(f"{node}.uiSelectedBodyIndex", 2)
+    assert_eq(
+        int(cmds.getAttr(f"{node}.uiSelectedBodyIndex")), 2, "uiSelectedBodyIndex round-trip"
+    )
+
+    print("✓ draw attrs present, defaults sane, edits don't disturb the sim")
     return True
 
 
@@ -462,6 +533,7 @@ def test_solver_location_does_not_affect_simulation():
 _TESTS = [
     ("Node Registration & Creation", test_node_registration_and_creation),
     ("Attribute Surface & Defaults", test_attribute_surface_and_defaults),
+    ("Draw Attrs Don't Disturb Sim", test_draw_attrs_do_not_disturb_simulation),
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),
     ("Dynamic Body Falls Under Gravity", test_dynamic_body_falls_under_gravity),
     ("Kinematic Anchor Drives Welded Body", test_kinematic_anchor_drives_welded_body),

@@ -70,6 +70,9 @@ const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for 
 // ===========================================================================
 MObject PhysicsNode::aTime;
 MObject PhysicsNode::aGravity;
+MObject PhysicsNode::aDrawMode;
+MObject PhysicsNode::aDrawOpacity;
+MObject PhysicsNode::aUiSelectedBodyIndex;
 MObject PhysicsNode::aAnchorWorldMatrix;
 MObject PhysicsNode::aBodyWriteBackOffset;
 
@@ -282,6 +285,40 @@ MStatus PhysicsNode::initialize()
     nAttr.setDefault(0.0, -9.8, 0.0); // MMD's physics engine uses exactly -9.8
     nAttr.setStorable(true);
     nAttr.setKeyable(false);
+
+    // --- view-only draw attributes (never part of the config comparison) ---
+    // drawMode: enum of PhysicsNode::DrawMode (off/wireframe/solid/both).
+    {
+        MFnEnumAttribute eAttr;
+        aDrawMode = eAttr.create("drawMode", "drm", kDrawWireframe, &stat);
+        MMD_CHECK_MSTATUS(stat);
+        eAttr.addField("Off", kDrawOff);
+        eAttr.addField("Wireframe", kDrawWireframe);
+        eAttr.addField("Solid", kDrawSolid);
+        eAttr.addField("Wireframe and Solid", kDrawWireframeAndSolid);
+        eAttr.setStorable(true);
+        eAttr.setKeyable(true);
+    }
+
+    aDrawOpacity = nAttr.create("drawOpacity", "drop", MFnNumericData::kFloat, 1.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setMin(0.0);
+    nAttr.setMax(1.0);
+    nAttr.setStorable(true);
+    nAttr.setKeyable(true);
+
+    // uiSelectedBodyIndex — transient viewport-pick state, NOT storable (the
+    // selection does not belong in a saved scene), NOT part of the config
+    // comparison, and it must never dirty the DG.  The draw override's
+    // userSelect() writes it; the AE template reads it.
+    aUiSelectedBodyIndex =
+        nAttr.create("uiSelectedBodyIndex", "usbi", MFnNumericData::kLong, -1, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setStorable(false);
+    nAttr.setHidden(true);
+    nAttr.setKeyable(false);
+    nAttr.setWritable(true);
+    nAttr.setReadable(true);
 
     // --- anchor world matrices ---
     aAnchorWorldMatrix =
@@ -593,6 +630,15 @@ MStatus PhysicsNode::initialize()
     stat = addAttribute(aTime);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
+    MMD_CHECK_MSTATUS(stat);
+    // View-only draw attributes — registered with NO attributeAffects so they
+    // never drive the outputs (they are not part of the config comparison, so
+    // editing them does not rebuild the Bullet world).
+    stat = addAttribute(aDrawMode);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aDrawOpacity);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aUiSelectedBodyIndex);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aAnchorWorldMatrix);
     MMD_CHECK_MSTATUS(stat);

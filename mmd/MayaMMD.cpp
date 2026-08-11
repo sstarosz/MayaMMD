@@ -15,6 +15,7 @@
  * one Plugin Manager entry.
  */
 
+#include <maya/MDrawRegistry.h>
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MObject.h>
@@ -24,8 +25,16 @@
 #include "maya/cmds/rigid_body_cmd.hpp"
 #include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
+#include "maya/nodes/physics_draw_override.h"
 #include "maya/nodes/physics_node.h"
 #include "version.hpp"
+
+// Classification under which the physics node was registered — the draw
+// override must be registered under the SAME string so VP2 associates it with
+// the node.  "drawdb/geometry/pmxPhysicsNode" is the classification, the
+// registrant name is our own draw-override creator (arbitrary but unique).
+static const char* const kPhysicsDrawClassification = "drawdb/geometry/pmxPhysicsNode";
+static const char* const kPhysicsDrawRegistrant = "MayaMMD";
 
 // ===========================================================================
 // Python-side initialization — called from C++ via executePythonCommand
@@ -89,8 +98,8 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     // 1b. Register the native rigid-body physics node (embedded Bullet).
     //     An MPxLocatorNode that owns a Maya-free Bullet world and steps it on
     //     every time change — this is the MMD secondary-movement engine that
-    //     replaces mayaBullet.  (A draw override for the guide visualization
-    //     is planned but intentionally not added yet.)
+    //     replaces mayaBullet.  The draw override for the guide visualization
+    //     is registered right after (1c).
     {
         MString classification(PhysicsNode::kNodeClassify);
         stat =
@@ -100,7 +109,20 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxPhysicsNode registration failed");
 
-    // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
+    // 1c. Register the viewport draw override that renders the node's guide
+    //     visualization (wireframe/solid box/sphere/capsule per body, colored
+    //     by collision group, pickable per body) directly from the node's
+    //     current Bullet state.  Registered under the SAME classification the
+    //     node was registered with (drawdb/geometry/pmxPhysicsNode), or VP2
+    //     never associates the override with the node.
+    {
+        stat = MHWRender::MDrawRegistry::registerDrawOverrideCreator(
+            kPhysicsDrawClassification, kPhysicsDrawRegistrant, PhysicsDrawOverride::creator);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxPhysicsNode draw override registration failed");
+
+    // 1d. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
     //     OpenMaya's lazy MSyntax creation in mayapy 2026.  Create mode only
     //     for now — body data + kinematic anchors + the baked write-back K
@@ -112,7 +134,7 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
 
-    // 1d. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
+    // 1e. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
     //     Same C++ rationale as pmxRigidBody.  Create mode only — writes the
     //     joint DATA; the node holds the full constraint set and the Python
     //     builder wires it into the time-driven solver.
@@ -144,7 +166,9 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     // 1. Deregister Python components first
     run_python_uninitialization();
 
-    // 2. Deregister C++ nodes and commands
+    // 2. Deregister C++ nodes, commands and the draw override
+    MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(kPhysicsDrawClassification,
+                                                            kPhysicsDrawRegistrant);
     plugin.deregisterNode(PhysicsNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
     plugin.deregisterCommand(RigidBodyCmd::kName);
