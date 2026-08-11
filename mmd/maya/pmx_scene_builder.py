@@ -1,20 +1,17 @@
 import logging
-import math
 import os
 import traceback
-from typing import Optional
 
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
 import maya.cmds as cmds
-import maya.mel as mel
 
 # Import after path is set
-from mmd.core.data_types import PmxModel, ShapeType
+from mmd.core.data_types import PmxModel
 from mmd.maya.maya_data_types import MayaPmxData
-from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones  # noqa: F401
-from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data  # noqa: F401
-from mmd.maya.pmx.rigid_body_builder import create_physics_from_pmx_data  # noqa: F401
+from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones
+from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data
+from mmd.maya.pmx.rigid_body_builder import create_physics_from_pmx_data
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
@@ -426,9 +423,6 @@ def assign_materials_to_mesh_faces(mesh_dag_path, pmx_materials, maya_materials)
         face_start = face_end + 1
 
 
-# create_bones_from_pmx_bones moved to mmd.maya.pmx.bone_builder; imported above.
-
-
 def find_used_bones(pmx_data: PmxModel) -> set:
     """
     Finds all bone indices that are actually used by vertices.
@@ -679,121 +673,6 @@ def apply_skin_weights(
         log.debug(traceback.format_exc())
 
 
-def create_rigid_body_guides_from_pmx_data(
-    pmx_data: PmxModel,
-    root_transform_obj,
-    joints: list,
-    name_registry: PMXNamingManager,
-) -> Optional[om.MObject]:
-    """
-    Creates visual guide shapes for PMX rigid bodies.
-    This is a v1.0 feature that shows where physics colliders should be,
-    without implementing full physics simulation.
-
-    Args:
-        pmx_data (PmxModel): PMX model data containing rigid bodies.
-        root_transform_obj (MObject): Root transform object.
-        joints (list): List of created joint MObjects.
-        name_registry (PMXNamingManager): Naming manager for unique names.
-
-    Returns:
-        Optional[MObject]: The rigid body guide group object, or None if no rigid bodies.
-    """
-    # TODO: In v1.1, implement actual physics simulation using Maya's Bullet plugin or a custom solution.
-    log.info("Creating rigid body visual guides (physics simulation coming in v1.1)")
-
-    if not pmx_data.rigid_bodies:
-        log.debug("No rigid bodies found in PMX data")
-        return None
-
-    log.debug(
-        "Creating rigid body visual guides for %d rigid bodies",
-        len(pmx_data.rigid_bodies),
-    )
-
-    # Create group for rigid body guides
-    rb_group_transform_fn = om.MFnTransform()
-    rb_group_obj = rb_group_transform_fn.create(root_transform_obj)
-    rb_group_name = name_registry.get_rigidbody_group_name()
-    rb_group_transform_fn.setName(rb_group_name)
-
-    for rb_idx, rigid_body in enumerate(pmx_data.rigid_bodies):
-        try:
-            # Determine shape name
-            rb_name = name_registry.get_rigidbody_name(rb_idx)
-            # Create shape based on type
-            shape_node = None
-            shape_type = rigid_body.shape
-            size = rigid_body.shape_size
-
-            if shape_type == ShapeType.SPHERE:
-                # Size.x is the radius
-                shape_node = cmds.polySphere(
-                    radius=size.x, subdivisionsX=12, subdivisionsY=12, name=rb_name
-                )[0]
-
-            elif shape_type == ShapeType.BOX:
-                # Size components are half-extents (half width, half height, half depth)
-                shape_node = cmds.polyCube(
-                    width=size.x * 2, height=size.y * 2, depth=size.z * 2, name=rb_name
-                )[0]
-
-            elif shape_type == ShapeType.CAPSULE:
-                # Size.x is radius, Size.y is total height (including hemispheres)
-                # Use MEL command directly - Python cmds.polyCylinder has a bug with roundCap
-                mel_cmd = (
-                    f"polyCylinder -r {size.x} -h {size.y} "
-                    f"-sx 12 -sh 1 -sc 12 -rcp true "
-                    f'-n "{rb_name}";'
-                )
-                result = mel.eval(mel_cmd)
-                shape_node = result[0] if isinstance(result, list) else result
-
-            if shape_node:
-                # Set world position FIRST (flip Z coordinate for Maya's coordinate system)
-                pos = rigid_body.shape_position
-                cmds.setAttr(f"{shape_node}.translateX", pos.x)
-                cmds.setAttr(f"{shape_node}.translateY", pos.y)
-                cmds.setAttr(f"{shape_node}.translateZ", -pos.z)
-
-                # Set world rotation (convert from radians to degrees)
-                # Use rotation values directly without flipping
-                rot = rigid_body.shape_rotation
-
-                cmds.setAttr(f"{shape_node}.rotateX", math.degrees(-rot.x))
-                cmds.setAttr(f"{shape_node}.rotateY", math.degrees(-rot.y))
-                cmds.setAttr(f"{shape_node}.rotateZ", math.degrees(rot.z))
-
-                # Parent to guide group (will be reparented to bone if valid)
-                cmds.parent(shape_node, rb_group_name)
-
-        except Exception as e:
-            log.warning("Failed to create rigid body guide for index %d: %s", rb_idx, e)
-            log.debug(traceback.format_exc())
-
-    # Add informative note to the group
-    try:
-        cmds.addAttr(
-            rb_group_name,
-            longName="rigidBodyNote",
-            dataType="string",
-        )
-        cmds.setAttr(
-            f"{rb_group_name}.rigidBodyNote",
-            "Visual guides only. Physics simulation coming in v1.1",
-            type="string",
-        )
-    except Exception as e:
-        log.debug("Could not add note attribute: %s", e)
-
-    log.info(
-        "Created %d rigid body visual guides. Physics simulation will be supported in a future version.",
-        len(pmx_data.rigid_bodies),
-    )
-
-    return rb_group_obj
-
-
 def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     """
     Builds the PMX scene in Maya from the given PMX data.
@@ -894,7 +773,6 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
         name_registry=name_registry,
         root_transform_obj=root_obj,
     )
-    # TODO: Validate if we need new extra attribute for physics node or if we can use something else
     if solver_node:
         if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
             cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")

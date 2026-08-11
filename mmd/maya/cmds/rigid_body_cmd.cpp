@@ -6,11 +6,12 @@
  * Native C++ implementation of the ``pmxRigidBody`` command (create mode — the
  * default).
  *
- * ``-create`` is the single body-modification path (the PMX import loops it;
- * there is no Python wiring anymore).  SIMULATION IS DISABLED: create writes
- * the body DATA and binds FOLLOW_BONE bodies to their related joint through
- * the kinematic-anchor input; dynamic bodies are data-only (no write-back,
- * no stepping).
+ * ``-create`` is the single body-modification path (the PMX import loops it).
+ * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
+ * joint through the kinematic-anchor input, and bakes the write-back K
+ * offset (``bodyWriteBackOffset``) for every body; the Python builder
+ * (mmd/maya/pmx/rigid_body_builder.py) connects the solver (time) and wires
+ * outTranslate/outRotate into the joints after every body and joint exist.
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -18,11 +19,11 @@
  */
 
 #include "rigid_body_cmd.hpp"
+#include "pmx_physics_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
 #include <maya/MDagPath.h>
-#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGlobal.h>
@@ -33,12 +34,9 @@
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
-#include <maya/MTransformationMatrix.h>
-#include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
-#include "physics_math.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -46,7 +44,6 @@
 
 using mmd::core::Double3;
 using mmd::core::Simulation;
-using mmd::core::physics_math::rad2deg;
 
 namespace
 {
@@ -79,12 +76,6 @@ constexpr double clamp01(double v)
     if (v > 1.0)
         return 1.0;
     return v;
-}
-
-// A DAG node's world (inclusive) matrix.
-MMatrix worldMatrix(const MDagPath& path)
-{
-    return path.inclusiveMatrix();
 }
 
 // A joint's stored PMX bone index (pmxBoneIndex), or -1.
@@ -157,60 +148,6 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
             return p;
     }
     return out;
-}
-
-// Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
-bool resolveSolver(const MString& target, MObject& outNode)
-{
-    try
-    {
-        MSelectionList sel;
-        if (sel.add(target) != MS::kSuccess || sel.length() == 0)
-            return false;
-        MObject obj;
-        if (sel.getDependNode(0, obj) != MS::kSuccess)
-            return false;
-        if (!obj.hasFn(MFn::kDependencyNode))
-            return false;
-
-        MFnDependencyNode fn(obj);
-        if (fn.typeName() == PhysicsNode::kNodeName)
-        {
-            outNode = obj;
-            return true;
-        }
-        // Model root: resolve the pmxPhysicsNode string attribute.
-        MStatus stat;
-        MPlug p = fn.findPlug("pmxPhysicsNode", true, &stat);
-        if (!p.isNull())
-        {
-            const MString solverName = p.asString();
-            if (solverName.length() > 0)
-            {
-                MSelectionList sel2;
-                if (sel2.add(solverName) == MS::kSuccess && sel2.length() > 0)
-                {
-                    MObject obj2;
-                    if (sel2.getDependNode(0, obj2) == MS::kSuccess &&
-                        obj2.hasFn(MFn::kDependencyNode))
-                    {
-                        MFnDependencyNode fn2(obj2);
-                        if (fn2.typeName() == PhysicsNode::kNodeName)
-                        {
-                            outNode = obj2;
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Resolution failure is reported through the bool return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return false;
 }
 
 // ===========================================================================
@@ -361,12 +298,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         return MS::kFailure;
     }
     MDagPath groupPath = nodePath;
-    groupPath.pop(); // |group|shape ⇒ |group
-    const MMatrix groupWorld = groupPath.inclusiveMatrix();
-    MFnDependencyNode groupFn(groupPath.node());
-    MStatus groupPlugStat;
-    MPlug groupWorldInversePlug =
-        groupFn.findPlug("worldInverseMatrix", true, &groupPlugStat).elementByLogicalIndex(0);
+    groupPath.pop(); // |group|shape ⇒ |group (used to resolve -bone under the model root)
 
     // Related joint (anchor / write-back target).
     const MDagPath jointPath = resolveBone(bone, groupPath);
@@ -379,20 +311,16 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             jointFn.findPlug("worldMatrix", true, &jointPlugStat).elementByLogicalIndex(0);
     }
 
-    // ── Rest pose in group space (MMD ⇒ Maya: Z-flip + handedness) ──
-    const Double3 worldT(pos.x, pos.y, -pos.z);
-    const Double3 worldR(-rad2deg(rot.x), -rad2deg(rot.y), rad2deg(rot.z));
-    const MMatrix local = mmd::maya::matrixFromTR(worldT, worldR) * groupWorld.inverse();
-    MTransformationMatrix mt(local);
-    const MVector lt = mt.getTranslation(MSpace::kTransform);
-    const MEulerRotation le = mt.eulerRotation();
-    const Double3 localT(lt.x, lt.y, lt.z);
-    const Double3 localR(rad2deg(le.x), rad2deg(le.y), rad2deg(le.z));
+    // ── Rest pose in WORLD space (MMD ⇒ Maya: Z-flip + handedness) ──
+    // The Bullet world runs in world space (the node no longer depends on the
+    // physics group's location), so the PMX rest pose is stored as-is.
+    const Double3 worldT = mmd::maya::mmdToMayaTranslate(pos);
+    const Double3 worldR = mmd::maya::mmdToMayaRotateDeg(rot);
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), localT);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), localR);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), worldT);
+    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), worldR);
     elem.child(PhysicsNode::aBodyMass).setDouble(mass);
     elem.child(PhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
     elem.child(PhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
@@ -434,47 +362,26 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                     .asShort() == static_cast<short>(Simulation::PhysicsMode::eFollowBone))
                 ++k;
         }
-        // The physics group's world inverse is a SINGLE input shared by every
-        // anchor (the node computes local = world * groupInverseWorldMatrix),
-        // so connect it once (connectOrReplace is idempotent for the same
-        // source — later bodies re-connect the same group inverse).
-        mmd::maya::connectOrReplace(
-            groupWorldInversePlug,
-            fn.findPlug(PhysicsNode::aGroupInverseWorldMatrix, true, &plugStat));
+        // The anchor world is the joint's world matrix (the node applies the
+        // body<->joint offset as K^-1 from bodyWriteBackOffset — derived
+        // internally, so there is no anchorOffset input to populate).  The
+        // Bullet world runs in world space, so the anchor is stored as-is.
         if (jointPath.isValid())
         {
             mmd::maya::connectOrReplace(
                 jointWorldPlug, fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
                                     .elementByLogicalIndex(k));
-            // offset = bodyRestWorld * jointRestWorld^-1 with the body's
-            // DIRECT world rest pose (MMD Z-flip + handedness) — exactly like
-            // the write-back K bake below.  Do NOT round-trip through the
-            // group-space decomposition (matrixFromTR(localT, localR) *
-            // groupWorld): when the physics group carries scale, the euler
-            // decomposition drops it, so the anchor would sit off its rest
-            // pose (same breakage the K path documents).
-            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            const MMatrix offset = bodyWorld * worldMatrix(jointPath).inverse();
-            mmd::maya::setPlugMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
-                offset);
         }
         else
         {
             // No related joint: a static collider pinned at its rest pose.
-            // Pin the body's DIRECT world rest pose (world * groupInverse
-            // gives the group-space rest in the node) — not the round-tripped
-            // group-space decomposition, which drops group scale.
+            // Pin the body's DIRECT world rest pose — not a round-tripped
+            // decomposition, which would drop group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            MMatrix identity;
-            identity.setToIdentity();
             mmd::maya::setPlugMatrixValue(
                 fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
                     .elementByLogicalIndex(k),
                 bodyWorld);
-            mmd::maya::setPlugMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorOffset, true, &plugStat).elementByLogicalIndex(k),
-                identity);
         }
     }
 
@@ -485,37 +392,26 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // derives the parent joint's world from K[parentBodyIndex]
     // (M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the SAME
     // constant as the parent body's K, for kinematic AND dynamic parents), so
-    // no separate parent-offset array is needed.  bodyParentInverseMatrix
-    // starts as identity; Python connects the DG fallback later, ONLY for
-    // bodies whose parent bone has no rigid body (that parent is never
-    // node-driven, so it cannot feed back).
+    // no separate parent-offset array is needed.  (The old
+    // bodyParentInverseMatrix DG fallback is gone — bodies whose parent bone
+    // has no rigid body are not written back.)
     {
         MMatrix k;
         k.setToIdentity();
-        MMatrix identity;
-        identity.setToIdentity();
         if (jointPath.isValid())
         {
             // K = jointRestWorld * bodyRestWorld^-1 with the body's DIRECT
-            // world rest pose (MMD Z-flip + handedness), exactly like the old
-            // Python bake.  Do NOT round-trip through the group-space
-            // decomposition (matrixFromTR(localT, localR) * groupWorld): when
-            // the physics group carries scale, MTransformationMatrix drops the
-            // scale during euler decomposition, so the round-tripped "world"
-            // is scaled wrongly and every write-back-driven bone lands off its
-            // rest pose (the collider guides stay correct — they render the
-            // scale back through the DAG — which is the exact breakage seen).
+            // world rest pose (MMD Z-flip + handedness).  Do NOT round-trip
+            // through a matrix decomposition — euler decomposition drops any
+            // scale, which would scale K wrongly and land every
+            // write-back-driven bone off its rest pose.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            k = worldMatrix(jointPath) * bodyWorld.inverse();
+            k = jointPath.inclusiveMatrix() * bodyWorld.inverse();
         }
         mmd::maya::setPlugMatrixValue(
             fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
                 .elementByLogicalIndex(n),
             k);
-        mmd::maya::setPlugMatrixValue(
-            fn.findPlug(PhysicsNode::aBodyParentInverseMatrix, true, &plugStat)
-                .elementByLogicalIndex(n),
-            identity);
     }
 
     outIndex = n;
@@ -598,7 +494,7 @@ MStatus RigidBodyCmd::doIt(const MArgList& args)
     }
 
     MObject solverNode;
-    if (!resolveSolver(target, solverNode))
+    if (!mmd::maya::resolveSolver(target, solverNode))
     {
         displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
         return MS::kFailure;

@@ -6,12 +6,13 @@ physics node (embedded Bullet via the Maya-free mmd_core engine).
 
 Tests cover:
 - Node registration and creation
-- Attribute surface and key defaults (gravity, configVersion, collision mask)
+- Attribute surface and key defaults (gravity, collision mask)
 - Empty-node evaluation (no bodies = valid no-op, no errors)
 - End-to-end simulation: a single dynamic body falls under gravity
 - Kinematic anchor driving a rigidly-welded dynamic body
-- configVersion forcing an in-place rebuild at the current pose
-- groupInverseWorldMatrix mapping anchors from world into group space
+- A config edit forcing an in-place rebuild at the current pose
+- The Bullet world running in world space (the solver's own location is
+  irrelevant)
 """
 
 # ── Maya standalone initialised by the test runner ───────────────────────
@@ -74,11 +75,11 @@ def _set_dynamic_body(node: str, index: int, rest_y: float) -> None:
 
 
 def _read_output(node: str, index: int) -> tuple[float, float, float]:
-    """Force evaluation and read outTranslate[index].outTranslateValue."""
+    """Force evaluation and read outTranslate[index] (unit-typed compound)."""
     cmds.dgeval(f"{node}.outTranslate")
-    # Maya returns double3 values as a list containing one tuple, e.g.
+    # Maya returns compound values as a list containing one tuple, e.g.
     # [(x, y, z)] — unwrap before indexing.
-    return tuple(cmds.getAttr(f"{node}.outTranslate[{index}].outTranslateValue")[0])
+    return tuple(cmds.getAttr(f"{node}.outTranslate[{index}]")[0])
 
 
 def _set_welded_chain(node: str) -> None:
@@ -141,13 +142,8 @@ def test_attribute_surface_and_defaults():
     top_level = [
         "time",
         "gravity",
-        "configVersion",
         "anchorWorldMatrix",
-        "groupInverseWorldMatrix",
-        "anchorOffset",
-        "groupWorldMatrix",
         "bodyWriteBackOffset",
-        "bodyParentInverseMatrix",
         "bodies",
         "joints",
         "outTranslate",
@@ -209,11 +205,6 @@ def test_attribute_surface_and_defaults():
     # Defaults
     grav = cmds.getAttr(f"{node}.gravity")[0]
     assert_eq(round(grav[1], 4), -9.8, "gravity default y (MMD uses exactly -9.8)")
-    assert_eq(
-        cmds.getAttr(f"{node}.configVersion"),
-        0,
-        "configVersion default (0 = never force a rebuild)",
-    )
 
     # Collision mask defaults to "collides with every group" (True each).
     assert_eq(
@@ -319,9 +310,8 @@ def test_kinematic_anchor_drives_welded_body():
     cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
 
     # Anchor world matrix: translate the kinematic anchor to y=3 (group at
-    # the origin, so the single group-inverse = identity and no anchor offset
-    # is needed).
-    cmds.setAttr(f"{node}.groupInverseWorldMatrix", *_IDENTITY_MATRIX, type="matrix")
+    # the origin, so the derived group-inverse = identity and the derived
+    # offset (K^-1 = bodyWriteBackOffset[0]^-1) = identity).
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,
@@ -358,8 +348,8 @@ def test_kinematic_anchor_drives_welded_body():
     return True
 
 
-def test_config_version_forces_rebuild():
-    """Bumping configVersion rebuilds the Bullet world at the current pose."""
+def test_config_edit_forces_rebuild():
+    """Editing a body config input rebuilds the Bullet world at the current pose."""
     setup_test_environment()
     node = _create_node()
     _connect_time(node)
@@ -398,34 +388,35 @@ def test_config_version_forces_rebuild():
         f"body should have fallen by frame 12 (y={fallen:.3f})",
     )
 
-    # At the SAME time, bump configVersion — the rebuild must re-read the body
-    # data and reset the dynamic body to its current skeleton pose (y=1).
-    cmds.setAttr(f"{node}.configVersion", 1)
+    # At the SAME time, edit a body config input (mass) — the node detects the
+    # change, rebuilds, and resets the dynamic body to its current skeleton
+    # pose (y=1).
+    cmds.setAttr(f"{p1}.bodyMass", 2.0)
     reset_y = _read_output(node, 1)[1]
     assert_true(
         reset_y > 0.9,
-        f"configVersion bump should reset the body to rest (y={reset_y:.3f})",
+        f"config edit should reset the body to rest (y={reset_y:.3f})",
     )
-    print(f"✓ configVersion rebuild reset body to y={reset_y:.3f}")
+    print(f"✓ config edit rebuild reset body to y={reset_y:.3f}")
     return True
 
 
-def test_group_inverse_world_matrix_applies_to_anchors():
-    """groupInverseWorldMatrix maps every anchor's world matrix into group space."""
+def test_solver_location_does_not_affect_simulation():
+    """The Bullet world runs in WORLD space — the solver's own location is irrelevant.
+
+    The node reads only its input attributes, so where the solver node sits in
+    the DAG (here under a transform at y=10) never affects the solved poses:
+    the welded body follows the world-space anchor (y=3) to y=4 regardless.
+    """
     setup_test_environment()
-    node = _create_node()
+    # Park the solver under a transform that is NOT at the origin.
+    holder = cmds.createNode("transform", name="SolverHolder")
+    cmds.setAttr(f"{holder}.translateY", 10)
+    node = cmds.createNode(_NODE_TYPE, name="testPhysicsNode", parent=holder)
     _connect_time(node)
     _set_welded_chain(node)
 
-    # A physics group transform at y=3; its world inverse (T(0,-3,0)) is
-    # CONNECTED to the node's single group-inverse input (mirrors how the
-    # Python builder wires group.worldInverseMatrix).  The anchor's
-    # GROUP-LOCAL pose is then local = world * groupInverse = the origin, so
-    # the welded body settles 1 unit above the LOCAL origin (y=1) — not y=4,
-    # which is where it would sit if the group inverse were ignored.
-    group = cmds.createNode("transform", name="PhysicsGroupTest")
-    cmds.setAttr(f"{group}.translateY", 3)
-    cmds.connectAttr(f"{group}.worldInverseMatrix", f"{node}.groupInverseWorldMatrix")
+    # World-space anchor at y=3 (there is no groupWorldMatrix input anymore).
     cmds.setAttr(
         f"{node}.anchorWorldMatrix[0]",
         1,
@@ -454,10 +445,13 @@ def test_group_inverse_world_matrix_applies_to_anchors():
         last_y = _read_output(node, 1)[1]
 
     assert_true(
-        0.5 < last_y < 1.5,
-        f"welded body should sit at local y=1 (world 3 * inverse -3); got {last_y:.3f}",
+        last_y > 3.5,
+        f"welded body should follow the WORLD anchor regardless of solver "
+        f"location (y={last_y:.3f})",
     )
-    print(f"✓ group inverse mapped anchor world->local (body y={last_y:.3f})")
+    print(
+        f"✓ solver location ignored; welded body followed world anchor to y={last_y:.3f}"
+    )
     return True
 
 
@@ -471,9 +465,9 @@ _TESTS = [
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),
     ("Dynamic Body Falls Under Gravity", test_dynamic_body_falls_under_gravity),
     ("Kinematic Anchor Drives Welded Body", test_kinematic_anchor_drives_welded_body),
-    ("Config Version Forces Rebuild", test_config_version_forces_rebuild),
+    ("Config Edit Forces Rebuild", test_config_edit_forces_rebuild),
     (
-        "Group Inverse Maps Anchors To Local",
-        test_group_inverse_world_matrix_applies_to_anchors,
+        "Solver Location Irrelevant (World Space)",
+        test_solver_location_does_not_affect_simulation,
     ),
 ]

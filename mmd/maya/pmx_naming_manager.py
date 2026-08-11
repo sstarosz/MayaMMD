@@ -63,7 +63,6 @@ TAIL_JOINT_SUFFIX = "_TailJnt"
 # | Mesh transform        | DAG  | ``{model}_Mesh``                                |
 # | Mesh shape            | DAG  | ``{model}_Mesh_Shape``                          |
 # | Geo group             | DAG  | ``{model}_Geo``                                 |
-# | RigidBodies group     | DAG  | ``{model}_RigidBodies``                         |
 # | rotScale              | DG   | ``{model}_{bone_name}_RotScale``                |
 # | ccdSolver             | DG   | ``{model}_{bone_name}_CcdSolver``               |
 # | BoneMorph node        | DG   | ``{model}_BoneMorph``                           |
@@ -72,7 +71,6 @@ TAIL_JOINT_SUFFIX = "_TailJnt"
 # | Shading group         | DG   | ``{model}_{material_name}_SG``                  |
 # | Texture               | DG   | ``{model}_{texture_name}_Tex``                  |
 # | Place2dTexture        | DG   | ``{model}_{texture_name}_Place2D``              |
-# | RigidBody             | DG   | ``{model}_{rigidbody_name}``                    |
 # | Blendshape target     | attr | ``{morph_name}`` (attribute, not a node)         |
 # +-----------------------+------+-------------------------------------------------+
 #
@@ -117,10 +115,6 @@ class PMXNamingManager:
         self._blendshape_name_map: dict[
             int, str
         ] = {}  # blendshape_index -> blendshape_name
-
-        self._rigidbody_name_map: dict[
-            int, str
-        ] = {}  # rigidbody_index -> rigidbody_name
 
         self._joint_name_map: dict[int, str] = {}  # joint_index -> joint_name #
 
@@ -244,13 +238,10 @@ class PMXNamingManager:
         # Step 4: Pre-process blendshape names
         self._preprocess_blendshape_names()
 
-        # Step 5: Pre-process rigid body
-        self._preprocess_rigidbody_names()
-
-        # Step 6: Pre-process bone names
+        # Step 5: Pre-process bone names
         self._preprocess_bone_names()
 
-        # Step 7: Pre-process joint names
+        # Step 6: Pre-process joint names
         self._preprocess_joint_names()
 
         # Step 8: Pre-process inheritCtrl names for inheritance rotation
@@ -386,37 +377,6 @@ class PMXNamingManager:
 
             # Assign morph name to map
             self._blendshape_name_map[idx] = unique_morph_name
-
-    def _preprocess_rigidbody_names(self):
-        """Pre-process rigid body names to handle duplicates and special characters."""
-        unique_names = set()
-        count_of_unique = defaultdict(int)
-
-        for idx, rb in enumerate(self.pmx_data.rigid_bodies):
-            # Get the base name for this rigid body
-            if rb.name_local and self._is_ascii_safe(rb.name_local):
-                base_name = self._sanitize_name(rb.name_local)
-            elif rb.name_universal and self._is_ascii_safe(rb.name_universal):
-                base_name = self._sanitize_name(rb.name_universal)
-            else:
-                base_name = f"RigidBody_{idx}"
-
-            # Find a unique name
-            occurrence_index = count_of_unique[base_name]
-            unique_rb_name = (
-                base_name
-                if occurrence_index == 0
-                else f"{base_name}_{occurrence_index}"
-            )
-            while unique_rb_name in unique_names:
-                occurrence_index += 1
-                unique_rb_name = f"{base_name}_{occurrence_index}"
-
-            unique_names.add(unique_rb_name)
-            count_of_unique[base_name] = occurrence_index + 1
-
-            # Assign rigid body name to map
-            self._rigidbody_name_map[idx] = unique_rb_name
 
     def _preprocess_joint_names(self):
         """Pre-process joint names to handle duplicates and special characters."""
@@ -758,32 +718,6 @@ class PMXNamingManager:
             desired_name = "BoneMorph"
 
         return self.make_unique(desired_name)
-
-    # ------------------#
-    # ---RigidBodies----#
-    # ------------------#
-    def get_rigidbody_group_name(self) -> str:
-        """Get unique rigid body group name."""
-        if self.model_name_local:
-            desired_name = f"{self.model_name_local}_RigidBodies"
-        elif self.model_name_universal:
-            desired_name = f"{self.model_name_universal}_RigidBodies"
-        else:
-            desired_name = "RigidBodies"
-
-        return self.make_unique(desired_name)
-
-    def get_rigidbody_name(self, rb_index: int) -> str:
-        """Get unique rigid body name."""
-        if rb_index in self._rigidbody_name_map:
-            rb_name = self._rigidbody_name_map[rb_index]
-            model_name = self.get_model_name()
-            return self.make_unique(f"{model_name}_{rb_name}")
-
-        # Fallback for unexpected indices
-        model_name = self.get_model_name()
-        base_name = f"RigidBody_{rb_index}"
-        return self.make_unique(f"{model_name}_{base_name}")
 
     # ----------------------#
     # ---Physics (native)---#

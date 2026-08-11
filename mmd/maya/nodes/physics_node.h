@@ -5,33 +5,18 @@
  *
  * PhysicsNode — native rigid-body physics node for MMD secondary movement.
  *
- * WHY THIS EXISTS (replaces the mayaBullet dynamic layer):
- *   mayaBullet's bulletSolverShape is a STATEFUL node.  Cached Playback's
- *   evaluation cache treats node outputs as pure functions of their inputs and
- *   does not re-evaluate / step stateful nodes, so mayaBullet dynamic bodies
- *   froze at rest under Cached Playback (and the write-back constraints then
- *   locked the skeleton — "lost mesh binding").
+ * WHY A NATIVE NODE: the Bullet world lives inside this node and advances in
+ * compute() whenever `time1.outTime` changes — the same evaluation path as a
+ * parentConstraint, so it runs (and is re-stepped) under Cached Playback.  The
+ * mayaBullet solver it replaces is a stateful node the evaluation cache does
+ * not re-step, which froze dynamic bodies at rest.
  *
- *   This node is a normal MPxNode: it owns a Bullet (btDiscreteDynamicsWorld)
- *   world internally, is driven by `time1.outTime`, and is evaluated by the
- *   evaluation manager on every time step exactly like a parentConstraint —
- *   the mechanism that is proven to work under Cached Playback.  No scriptJob,
- *   no external solver plugin, no stateful third-party node.
- *
- * DATA FLOW
- *   - Inputs:  `time`, `gravity`, an array of ANCHOR world matrices (the
- *     FOLLOW_BONE guides / animated bones that kinematically drive the
- *     chains), a per-body compound array (rest pose, mass, damping, collider,
- *     group/mask, kinematic flag), and a per-joint compound array (type,
- *     frame, limits, spring constants).
- *   - Compute: updates kinematic (anchor) bodies from the anchor matrices,
- *     steps the Bullet world, and writes each dynamic body's solved LOCAL
- *     translate/rotate to the outputs.
- *   - Outputs: `outTranslate[i]` / `outRotate[i]` (float3, Maya degrees) which
- *     Python connects to the dynamic guide transforms (guide → parentConstraint
- *     → bone, exactly like the previous write-back).
- *
- * Registered natively by MayaMMD.mll's initializePlugin.
+ * The node is an adapter over the Maya-free mmd::core::Simulation engine: it
+ * reads the scene attributes into a Simulation::Definition, rebuilds the world
+ * when those inputs change (or time is scrubbed backwards), steps it when time
+ * advances or a kinematic anchor moves, and writes each dynamic body's solved
+ * local pose to outTranslate[i]/outRotate[i] (which Python connects directly
+ * into the related joints).  Registered by MayaMMD.mll.
  */
 
 #pragma once
@@ -45,7 +30,7 @@
 #include <maya/MTypeId.h>
 
 #include <array>
-#include <cstdint>
+#include <cstddef>
 #include <vector>
 
 #include "simulation.hpp"
@@ -81,8 +66,8 @@ class PhysicsNode : public MPxLocatorNode
 
     // ------------------------------------------------------------------
     // Draw support — per-body primitive data for the guide visualization.
-    // A viewport draw override (planned, redesigned in a later PR) pulls this
-    // from the node's CURRENT solver state: solved world poses if the Bullet
+    // A viewport draw override (planned) pulls this from the node's CURRENT
+    // solver state: solved world poses if the Bullet
     // world is built, rest poses otherwise.  The node is an MPxLocatorNode so
     // a default locator is drawn until the override lands.
     // ------------------------------------------------------------------
@@ -130,46 +115,19 @@ class PhysicsNode : public MPxLocatorNode
     // ------------------------------------------------------------------
     static MObject aTime;
     static MObject aGravity;
-    // Hidden forced-rebuild trigger.  dt is derived from the scene's time unit
-    // via MTime, so the old `fps` attribute (which only ever served as the
-    // rebuild trigger) is gone.  Bumping configVersion changes the config
-    // signature, so compute() rebuilds the Bullet world even when no other
-    // input changed (e.g. after the Python side re-bakes the anchor/write-back
-    // offsets).  The default is 0 — an untouched scene never forces a rebuild.
-    static MObject aConfigVersion;
 
-    // Anchor world matrices (kinematic drivers) — one per kinematic body, in
-    // kinematic (FOLLOW_BONE body) order.  The node computes each anchor's
-    // LOCAL matrix as world * groupInverseWorldMatrix so the Bullet world runs
-    // in the physics group's local space (mirrors mayaBullet's
-    // inWorldMatrix/inParentInverseMatrix).  Phase 3: the anchor world is the
-    // JOINT's world matrix, the group inverse is the PHYSICS GROUP's world
-    // inverse, and `anchorOffset` is a baked world-frame offset
-    // (bodyRestWorld * jointRestWorld^-1) so the collider tracks the joint
-    // with the PMX body<->bone offset preserved.
+    // Kinematic anchors — one per FOLLOW_BONE body, in kinematic order.  The
+    // anchor world is the related joint's world matrix; the node applies the
+    // body<->joint rest offset (K^-1, derived from bodyWriteBackOffset) to
+    // place the collider on its bone.  The Bullet world runs in WORLD space,
+    // so the solver's own location never matters.
     static MObject aAnchorWorldMatrix;
-    static MObject aGroupInverseWorldMatrix; // physics group's world inverse (single)
-    static MObject aAnchorOffset;            // matrix array, kinematic-order indexed (Phase 3)
 
-    // Phase 3 direct write-back inputs — the node outputs the JOINT-LOCAL
-    // pose directly (boneLocal = K * bodyLocal * groupWorld * parentInverse),
-    // so Python connects outTranslate/outRotate straight into the joints and
-    // the guide transforms + write-back constraints are gone.
-    static MObject aGroupWorldMatrix; // physics group's world matrix (single)
-    static MObject
-        aBodyWriteBackOffset; // matrix array, body-indexed: K = jointRestWorld * bodyRestWorld^-1
-    static MObject
-        aBodyParentInverseMatrix; // matrix array, body-indexed: related joint's parentInverseMatrix
-                                  // (DG fallback, no-body parent only)
-    // Phase 3 cycle fix: the parent inverse for the write-back is derived from
-    // the PARENT BODY's solved Bullet transform instead of the DG
-    // (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1).  This removes
-    // the dependency on `joint.parentInverseMatrix` — which for a body whose
-    // parent JOINT is also node-driven created a DG feedback cycle that
-    // exploded the simulation.  M_parent = parentJointRestWorld *
-    // parentBodyRestWorld^-1 is the SAME constant as K[parentBodyIndex]
-    // (bodyWriteBackOffset of the parent body, for kinematic and dynamic
-    // parents) — so no separate parent-offset array exists.
+    // Write-back inputs — the node outputs each dynamic body's JOINT-LOCAL
+    // pose (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1, with
+    // K = jointRestWorld * bodyRestWorld^-1 and M_parent = K[parentBodyIndex]),
+    // so Python connects outTranslate/outRotate straight into the joints.
+    static MObject aBodyWriteBackOffset; // matrix array, body-indexed: K
     // Per-body compound array: aBodies[i] — children are declared to mirror
     // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
     // attribute) sits first.
@@ -189,10 +147,10 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aBodyColliderType; // enum — PMX shape (kColliderBox/Sphere/Capsule)
     // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
     // engine's radius / box half-extents / capsule length by collider type
-    // (mmd::core::applyShapeSize) in readBodyData, computeConfigSignature and
-    // the attribute-fallback reader.
+    // (mmd::core::applyShapeSize) in readBodyData; the draw fallback reads it
+    // verbatim.
     static MObject aBodyShapeSize;       // float3 — PMX shape_size verbatim
-    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, group space)
+    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, world space)
     static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
     static MObject aBodyMass;            // double — PMX mass
     static MObject aBodyLinearDamping;   // double — PMX move_attenuation
@@ -200,7 +158,7 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aBodyRestitution;     // double — PMX repulsion
     static MObject aBodyFriction;        // double — PMX friction_force
     static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (PhysicsMode)
-    static MObject aBodyParentBodyIndex; // short (wiring) — write-back parent body index; -1 = none
+    static MObject aBodyParentBodyIndex; // long (wiring) — write-back parent body index; -1 = none
     static MObject
         aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
 
@@ -220,67 +178,62 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aJointLinearSpring;   // float3
     static MObject aJointAngularSpring;  // float3
 
-    // Outputs: solved local translate/rotate per body (float3 array).
+    // Outputs: solved local translate/rotate per body (compound arrays).
+    // The children are UNIT-TYPED (MFnUnitAttribute kDistance / kAngle) —
+    // exactly like transform.translate/rotate — so the write-back
+    // connections to joint.translate / joint.rotate are DIRECT.  A unitless
+    // k3Double forced Maya to auto-insert a unitConversion between the float3
+    // and the joint's angle/linear attributes.
     static MObject aOutTranslate;
-    static MObject aOutTranslateValue; // float3 child of aOutTranslate
+    static MObject aOutTranslateX; // kDistance child
+    static MObject aOutTranslateY; // kDistance child
+    static MObject aOutTranslateZ; // kDistance child
     static MObject aOutRotate;
-    static MObject aOutRotateValue; // float3 child of aOutRotate
+    static MObject aOutRotateX; // kAngle child
+    static MObject aOutRotateY; // kAngle child
+    static MObject aOutRotateZ; // kAngle child
 
   private:
-    // Maya-free Bullet engine (simulation.hpp) + the PMX body/joint data
-    // read from the attributes.  The engine owns ALL Bullet state and the
-    // scrub-back reset; this node is an adapter — it reads attributes,
-    // converts Maya matrices <-> engine poses, and manages the timeline/state
-    // (config signature, last time).
+    // Maya-free Bullet engine + the config it was built with (see
+    // configChanged).  The engine owns all Bullet state; this node adapts
+    // attributes <-> engine poses and manages the timeline.
     mmd::core::Simulation mSim;
     std::vector<mmd::core::Simulation::BodyDefinition> mBodies;
     std::vector<mmd::core::Simulation::JointDefinition> mJoints;
 
     double mLastTime = -1.0;
     MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
-    // Phase 4: FNV-1a hash of the config inputs (gravity/configVersion/
-    // bodies/joints/anchor counts) captured at build time.  When compute() sees
-    // a different signature the world is rebuilt in place — a body/joint/
-    // gravity/configVersion edit takes effect immediately, without a rewind.
-    uint64_t mConfigSignature = 0;
-
-    // Timeline/state machine — compute() classifies each evaluation into one of
-    // these transitions and acts on it (see compute()): the sim is built once,
-    // rebuilt when a config input changes or time is scrubbed backwards, and
-    // stepped when time advances or a kinematic anchor moves.
-    enum class SimulationTransition
-    {
-        Initialize,           // world not built yet — build from scratch
-        ConfigurationChanged, // a config input changed — rebuild at the current pose
-        Rewind,               // time scrubbed backwards — rebuild at the current pose
-        Advance,              // time advanced — step by the frame span
-        PoseChanged,          // time unchanged but an anchor moved — step one tick
-        NoChange,             // nothing to do
-    };
+    // The config the world was last built with — compute() re-reads the inputs
+    // every evaluation and rebuilds in place when they differ (a body/joint/
+    // gravity edit, or a changed anchor/write-back count, takes effect
+    // immediately).  The anchor/write-back matrix VALUES are per-frame and are
+    // read fresh every evaluation, so only their counts are cached here.
+    mmd::core::Double3 mGravity = mmd::core::Double3();
+    std::size_t mAnchorCount = 0;
+    std::size_t mWriteBackOffsetCount = 0;
 
     // Helpers
-    bool readBodyData(MDataBlock& dataBlock);
-    bool readJointData(MDataBlock& dataBlock);
-    bool buildWorld(MDataBlock& dataBlock);
-    // Phase 4: hash of all config inputs (the values that define the Bullet
-    // world).  The anchor matrix VALUES are excluded — they change every frame
-    // — only the anchor COUNTS are part of the signature.
-    static uint64_t computeConfigSignature(MDataBlock& dataBlock);
+    static std::vector<mmd::core::Simulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
+    static std::vector<mmd::core::Simulation::JointDefinition> readJointData(MDataBlock& dataBlock);
+    static mmd::core::Double3 readGravity(MDataBlock& dataBlock);
+    static std::size_t arrayElementCount(MDataBlock& dataBlock, const MObject& attr);
+    bool buildWorld(const mmd::core::Double3& gravity,
+                    const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
+                    const std::vector<mmd::core::Simulation::JointDefinition>& joints);
+    // True when the fresh inputs differ from what the world was built with.
+    bool configChanged(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
+                       const std::vector<mmd::core::Simulation::JointDefinition>& joints,
+                       const mmd::core::Double3& gravity, std::size_t anchorCount,
+                       std::size_t wbOffsetCount) const;
+    // Remember the config the world was just built with.
+    void storeConfig(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
+                     const std::vector<mmd::core::Simulation::JointDefinition>& joints,
+                     const mmd::core::Double3& gravity, std::size_t anchorCount,
+                     std::size_t wbOffsetCount);
     void destroyWorld();
     // Refresh the kinematic anchor transforms from their inputs; returns true
-    // if any anchor MOVED since the previous frame (used to step the sim when
-    // a bone is dragged at a fixed time, without waiting for time to advance).
+    // if any anchor moved since the previous evaluation (a dragged bone at a
+    // fixed time steps the sim immediately).
     bool updateKinematicAnchors(MDataBlock& dataBlock);
-    // Teleport dynamic bodies to their related bone's CURRENT pose (used when
-    // time is scrubbed backwards) — the opposite of rebuilding at rest.
-    void resetDynamicBodies(MDataBlock& dataBlock);
     bool writeOutputs(MDataBlock& dataBlock);
-
-    // Timeline/state helpers (see compute()).
-    SimulationTransition classifyTransition(uint64_t configSignature, const MTime& nowTime,
-                                            double now, bool anchorsMoved) const;
-    bool initializeSimulation(MDataBlock& dataBlock, uint64_t configSignature,
-                              const MTime& nowTime);
-    bool rebuildSimulationAtCurrentPose(MDataBlock& dataBlock, uint64_t configSignature,
-                                        const MTime& nowTime);
 };

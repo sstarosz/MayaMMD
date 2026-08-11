@@ -89,9 +89,8 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     // 1b. Register the native rigid-body physics node (embedded Bullet).
     //     An MPxLocatorNode that owns a Maya-free Bullet world and steps it on
     //     every time change — this is the MMD secondary-movement engine that
-    //     replaces mayaBullet.  (The body/joint data and the solved-pose
-    //     write-back are populated by later PRs; a draw override for the guide
-    //     visualization is also planned but intentionally not added yet.)
+    //     replaces mayaBullet.  (A draw override for the guide visualization
+    //     is planned but intentionally not added yet.)
     {
         MString classification(PhysicsNode::kNodeClassify);
         stat =
@@ -104,8 +103,8 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
     //     OpenMaya's lazy MSyntax creation in mayapy 2026.  Create mode only
-    //     for now — SIMULATION IS DISABLED (body data + kinematic anchors;
-    //     no write-back wiring or solver stepping yet).
+    //     for now — body data + kinematic anchors + the baked write-back K
+    //     offset; the Python builder wires the solver and the outputs.
     {
         stat = plugin.registerCommand(RigidBodyCmd::kName, RigidBodyCmd::creator,
                                       RigidBodyCmd::syntaxCreator);
@@ -114,9 +113,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
         MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
 
     // 1d. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
-    //     Same C++ rationale as pmxRigidBody.  Create mode only — SIMULATION
-    //     IS DISABLED (writes the joint DATA; the node holds the full
-    //     constraint set but nothing steps yet).
+    //     Same C++ rationale as pmxRigidBody.  Create mode only — writes the
+    //     joint DATA; the node holds the full constraint set and the Python
+    //     builder wires it into the time-driven solver.
     {
         stat =
             plugin.registerCommand(RigidBodyConstraintCmd::kName, RigidBodyConstraintCmd::creator,

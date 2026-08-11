@@ -55,10 +55,9 @@ inline void setPlugDouble3(MPlug plug, const mmd::core::Double3& v)
 }
 
 // 4x4 row-vector matrix from translate + XYZ euler DEGREES.  Shared by the
-// pmxRigidBody / pmxRigidBodyConstraint commands for the world/group-space
-// rest-pose conversions (deliberately does NOT re-read a scale component —
-// the callers build the matrix from PMX T/R and then multiply by a
-// groupWorld⁻¹, which is the scale-correct direction).
+// pmxRigidBody / pmxRigidBodyConstraint commands for the world-space rest /
+// frame conversions (deliberately does NOT re-read a scale component — the
+// callers build the matrix from PMX T/R only).
 inline MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double3& r)
 {
     MTransformationMatrix mt;
@@ -72,7 +71,7 @@ inline MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double
 
 // Connect src → dst, first disconnecting any other source already driving dst.
 // Idempotent: if dst is already driven by the SAME source, nothing is changed
-// and kSuccess is returned (the group-inverse input is re-connected by every
+// and kSuccess is returned (the anchor-world input is re-connected by every
 // kinematic body create — this makes the repeated call a cheap no-op).
 inline MStatus connectOrReplace(const MPlug& src, const MPlug& dst)
 {

@@ -14,7 +14,7 @@
  *
  * Maya command convention: create / edit / query (default = create).
  *
- * v1.0 — CREATE MODE ONLY (create is the default — no -create flag):
+ * CREATE MODE ONLY (create is the default — no -create flag):
  *
  *     pmxRigidBodyConstraint <solver | modelRoot>
  *         -index <int>              optional target index (must be the next
@@ -46,9 +46,9 @@
  *                                   magnitude, invariant under the
  *                                   reflection)
  *
- * SIMULATION IS DISABLED: create writes the joint DATA so the node holds the
- * full constraint set; no solver stepping happens here (the ``time`` input
- * is connected by the Python builder once bodies AND joints exist).
+ * Create writes the joint DATA so the node holds the full constraint set;
+ * no solver stepping happens here (the ``time`` input is connected by the
+ * Python builder once bodies AND joints exist).
  * Edit/query/remove and batch create are later steps.
  */
 

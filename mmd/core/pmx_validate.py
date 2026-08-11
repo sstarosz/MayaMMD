@@ -169,12 +169,6 @@ def validate_pmx_model(pmx_model: PmxModel) -> ValidationResult:
     # Morph validation
     _validate_morphs(pmx_model, result)
 
-    # Rigid body validation
-    _validate_rigidbodies(pmx_model, result)
-
-    # Joint validation
-    _validate_joints(pmx_model, result)
-
     # Performance checks
     _validate_performance(pmx_model, result)
 
@@ -467,28 +461,6 @@ def _validate_morphs(pmx_model: PmxModel, result: ValidationResult):
                     ],
                 )
             )
-
-
-def _validate_rigidbodies(pmx_model: PmxModel, result: ValidationResult):
-    result.add_issue(
-        ValidationIssue(
-            severity=IssueSeverity.INFO,
-            category=IssueCategory.NOT_SUPPORTED,
-            message="Rigid bodies and physics are not supported in plugin v1.0",
-            details="All rigid body and joint data will be ignored during import.",
-        )
-    )
-
-
-def _validate_joints(pmx_model: PmxModel, result: ValidationResult):
-    result.add_issue(
-        ValidationIssue(
-            severity=IssueSeverity.INFO,
-            category=IssueCategory.NOT_SUPPORTED,
-            message="Joints and physics are not supported in plugin v1.0",
-            details="All rigid body and joint data will be ignored during import.",
-        )
-    )
 
 
 def _validate_performance(pmx_model: PmxModel, result: ValidationResult):

@@ -9,15 +9,15 @@
  * is an implementation detail (the Bullet-facing math lives in
  * bullet_bridge.hpp).
  * The engine can be unit-tested WITHOUT the Maya SDK and WITHOUT Bullet
- * headers (see tests/unit_tests/core/test_simulation.cpp).  A thin Maya node
- * (a later PR) adapts it: it reads attributes, converts Maya<->Bullet
- * transforms and owns the timeline/state machine.
+ * headers (see tests/unit_tests/core/test_simulation.cpp).  The Maya node
+ * (mmd/maya/nodes/physics_node) adapts it: it reads attributes, converts
+ * Maya<->Bullet transforms and owns the timeline/state machine.
  *
  * This class knows nothing about Maya: it consumes a plain Definition
  * (gravity + body/joint data), receives kinematic anchor poses as pos+quat,
  * steps the world and returns solved poses as pos+quat.  All transforms are
- * in the physics group's LOCAL space (the Bullet world frame); the adapter
- * owns every Maya matrix conversion.
+ * in WORLD space (the Bullet world frame); the adapter owns every Maya
+ * matrix conversion.
  */
 
 #pragma once
@@ -58,7 +58,7 @@ class Simulation
     /// scrub-back reset.
     struct BodyDefinition
     {
-        Double3 restPos; // PMX rest position (group space)
+        Double3 restPos; // PMX rest position (world space)
         Double3 restRot; // degrees
         double mass = 1.0;
         double linearDamping = 0.0;
@@ -83,6 +83,22 @@ class Simulation
 
         /// FOLLOW_BONE bodies are kinematic anchors driven by their joints.
         bool isKinematic() const { return physicsMode == PhysicsMode::eFollowBone; }
+
+        /// Field-wise equality — the Maya node uses it to detect config edits
+        /// (a changed body definition must rebuild the world).
+        bool operator==(const BodyDefinition& o) const
+        {
+            return restPos.x == o.restPos.x && restPos.y == o.restPos.y &&
+                   restPos.z == o.restPos.z && restRot.x == o.restRot.x &&
+                   restRot.y == o.restRot.y && restRot.z == o.restRot.z && mass == o.mass &&
+                   linearDamping == o.linearDamping && angularDamping == o.angularDamping &&
+                   friction == o.friction && restitution == o.restitution &&
+                   colliderType == o.colliderType && radius == o.radius &&
+                   extents.x == o.extents.x && extents.y == o.extents.y &&
+                   extents.z == o.extents.z && length == o.length && mask == o.mask &&
+                   groupId == o.groupId && physicsMode == o.physicsMode && enabled == o.enabled &&
+                   parentBodyIndex == o.parentBodyIndex && resetAnchorIndex == o.resetAnchorIndex;
+        }
     };
 
     /// One PMX joint (a rigid-body constraint between two bodies).
@@ -99,6 +115,23 @@ class Simulation
         Double3 angularMax;
         Double3 linearSpring;
         Double3 angularSpring;
+
+        /// Field-wise equality — the Maya node uses it to detect config edits.
+        bool operator==(const JointDefinition& o) const
+        {
+            return bodyA == o.bodyA && bodyB == o.bodyB && type == o.type &&
+                   frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
+                   frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
+                   linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
+                   linearMin.z == o.linearMin.z && linearMax.x == o.linearMax.x &&
+                   linearMax.y == o.linearMax.y && linearMax.z == o.linearMax.z &&
+                   angularMin.x == o.angularMin.x && angularMin.y == o.angularMin.y &&
+                   angularMin.z == o.angularMin.z && angularMax.x == o.angularMax.x &&
+                   angularMax.y == o.angularMax.y && angularMax.z == o.angularMax.z &&
+                   linearSpring.x == o.linearSpring.x && linearSpring.y == o.linearSpring.y &&
+                   linearSpring.z == o.linearSpring.z && angularSpring.x == o.angularSpring.x &&
+                   angularSpring.y == o.angularSpring.y && angularSpring.z == o.angularSpring.z;
+        }
     };
 
     /// Full simulation input: gravity + bodies + joints.
@@ -109,7 +142,7 @@ class Simulation
         std::vector<JointDefinition> joints;
     };
 
-    /// A group-space pose (quat is a unit quaternion {x, y, z, w}).
+    /// A world-space pose (quat is a unit quaternion {x, y, z, w}).
     struct Pose
     {
         Double3 pos;
@@ -138,7 +171,7 @@ class Simulation
     void clear();
 
     // ── Kinematic anchors ─────────────────────────────────────────────────
-    /// Set the group-local pose of kinematic anchor `anchorIndex` (kinematic
+    /// Set the world-space pose of kinematic anchor `anchorIndex` (kinematic
     /// order = FOLLOW_BONE bodies in body order).  Returns true when the pose
     /// MOVED since the previous call — the adapter steps the sim in that case
     /// so a bone dragged at a fixed time is followed immediately.
@@ -152,7 +185,7 @@ class Simulation
     /// zeroing velocities.  Called when time is scrubbed backwards.
     void resetDynamicBodies();
 
-    /// Solved world (group-space) pose of `bodyIndex` — body-indexed, matching
+    /// Solved world-space pose of `bodyIndex` — body-indexed, matching
     /// Definition::bodies.  Falls back to the body's REST pose when the body
     /// is disabled/missing or the world is not initialized.
     [[nodiscard]] Pose bodyPose(size_t bodyIndex) const;

@@ -10,9 +10,9 @@ Tests cover (the "add a body and configure it on addition" contract):
 - Auto-append body index (0, 1, 2 ...) and stored body DATA (names, mass,
   damping, friction, restitution, group, mask, shape, physics mode, rest pose,
   PMX shape_size verbatim).
-- FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by the
-  joint, the single groupInverseWorldMatrix fed by the group, baked
-  anchorOffset).
+- FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by
+  the joint; the body<->bone offset is DERIVED by the node from
+  bodyWriteBackOffset).
 - PHYSICS / PHYSICS_BONE -> DATA ONLY (no anchor, no write-back connections).
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
@@ -135,8 +135,8 @@ def test_append_body_data():
         approx_equal_tuple(cmds.getAttr(f"{base}.bodyShapeSize")[0], (1.0, 2.0, 3.0)),
         f"bodyShapeSize != size {cmds.getAttr(f'{base}.bodyShapeSize')}",
     )
-    # Rest pose in group space: group is at the origin, so the MMD position
-    # (Z-flip of 0 == 0) lands directly in group space.
+    # Rest pose stored in world space: the group is at the origin, so the MMD
+    # position (Z-flip of 0 == 0) lands directly in world space.
     assert_true(
         approx_equal_tuple(
             cmds.getAttr(f"{base}.bodyRestTranslate")[0], (0.5, 0.0, 0.0)
@@ -149,7 +149,7 @@ def test_append_body_data():
 
 def test_follow_bone_binds_anchor():
     """FOLLOW_BONE + bone: the kinematic anchor is fed by the related joint."""
-    group, solver, joint_a, _jb = _make_physics_scene()
+    _group, solver, joint_a, _jb = _make_physics_scene()
 
     idx = cmds.pmxRigidBody(
         solver,
@@ -170,18 +170,8 @@ def test_follow_bone_binds_anchor():
         any(joint_a in src for src in srcs),
         f"anchorWorldMatrix[0] not fed by joint ({srcs})",
     )
-    # The SINGLE group inverse is fed by the physics group's worldInverseMatrix.
-    gsrcs = cmds.listConnections(f"{solver}.groupInverseWorldMatrix", source=True) or []
-    assert_true(
-        any(group in src for src in gsrcs),
-        f"groupInverseWorldMatrix not fed by group ({gsrcs})",
-    )
-    # Baked body<->bone offset present (16 floats).
-    offset = cmds.getAttr(f"{solver}.anchorOffset[0]")
-    assert_true(
-        offset is not None and len(offset) == 16,
-        f"anchorOffset[0] not baked ({offset})",
-    )
+    # The body<->bone offset is DERIVED by the node (from bodyWriteBackOffset)
+    # — the command no longer writes an anchorOffset input.
     print("✓ FOLLOW_BONE body bound to joint via kinematic anchor")
     return True
 
@@ -457,12 +447,7 @@ def test_wiring_field_defaults():
     assert_eq(int(cmds.getAttr(f"{base}.bodyParentBodyIndex")), -1, "parentBody != -1")
     # Enabled by default.
     assert_eq(bool(cmds.getAttr(f"{base}.bodyEnabled")), True, "bodyEnabled != True")
-    # The DG-fallback parent inverse starts as identity.
-    pinv = cmds.getAttr(f"{solver}.bodyParentInverseMatrix[0]")
-    assert_true(pinv is not None and len(pinv) == 16, "bodyParentInverseMatrix not set")
-    print(
-        "✓ wiring fields default inert (resetAnchor -1, parent -1, enabled, identity)"
-    )
+    print("✓ wiring fields default inert (resetAnchor -1, parent -1, enabled)")
     return True
 
 
@@ -548,7 +533,7 @@ def test_shape_size_verbatim_per_collider():
 
 
 def test_rest_pose_conversion():
-    """MMD rest pose is converted to group space (Z-flip + handedness flip)."""
+    """MMD rest pose is stored in world space (Z-flip + handedness flip)."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
     # position z=2 flips to -2; rotation x=90deg (MMD radians) flips to -90.
@@ -572,7 +557,7 @@ def test_rest_pose_conversion():
         approx_equal_tuple(rest_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
         f"bodyRestRotate handedness flip wrong {rest_rot}",
     )
-    print("✓ MMD rest pose converted to group space (Z-flip + handedness)")
+    print("✓ MMD rest pose stored in world space (Z-flip + handedness)")
     return True
 
 
@@ -600,12 +585,6 @@ def test_kinematic_anchor_ordering():
     assert_true(
         any(joint_b in src for src in srcs1),
         f"anchor[1] not fed by joint_b ({srcs1})",
-    )
-    # Both anchors share the single group inverse (connected once).
-    gsrcs = cmds.listConnections(f"{solver}.groupInverseWorldMatrix", source=True) or []
-    assert_true(
-        any(group in src for src in gsrcs),
-        f"groupInverseWorldMatrix not fed by group ({gsrcs})",
     )
     print("✓ kinematic anchors indexed in FOLLOW_BONE body order")
     return True
