@@ -28,7 +28,6 @@
 #include <maya/MDistance.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnData.h>
-#include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnMessageAttribute.h>
@@ -159,25 +158,6 @@ void readDouble3(MDataHandle& hd, const MObject& attr, Double3& out)
     out.x = v[0];
     out.y = v[1];
     out.z = v[2];
-}
-
-// A joint's stored PMX bone index (pmxBoneIndex), or -1.
-int jointPmxBoneIndex(const MDagPath& jointPath)
-{
-    try
-    {
-        MFnDependencyNode fn(jointPath.node());
-        MStatus stat;
-        MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
-        if (!plug.isNull())
-            return plug.asInt();
-    }
-    // No joint / no index attribute: reported through the -1 return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return -1;
 }
 
 // Map the node's persisted attribute enum (kColliderBox=1..kColliderCapsule=3)
@@ -421,7 +401,7 @@ MStatus PhysicsNode::initialize()
     // PMX physics mode — enum: followBone / physics / physicsBone (field
     // values match Simulation::PhysicsMode).  Field names mirror the
     // enumerators.  The node writes the joint-local pose for mode 1/2 (mode 2
-    // = rotation only — Python connects only outRotate for those bodies).
+    // = rotation only — the command wires only outRotate for those bodies).
     {
         MFnEnumAttribute eAttr;
         aBodyPhysicsMode = eAttr.create(
@@ -712,10 +692,10 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         if (sources.length() > 0 &&
             MDagPath::getAPathTo(sources[0].node(), jointPaths[i]) == MS::kSuccess)
         {
-            b.relatedBoneIndex = jointPmxBoneIndex(jointPaths[i]);
+            b.relatedBoneIndex = mmd::maya::jointPmxBoneIndex(jointPaths[i]);
             MDagPath parentPath = jointPaths[i];
             if (parentPath.pop() == MS::kSuccess)
-                b.parentBoneIndex = jointPmxBoneIndex(parentPath);
+                b.parentBoneIndex = mmd::maya::jointPmxBoneIndex(parentPath);
         }
         out.push_back(b);
     }
@@ -747,7 +727,7 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
             std::size_t steps = 0;
             while (steps++ <= 256)
             {
-                const int bone = jointPmxBoneIndex(jp);
+                const int bone = mmd::maya::jointPmxBoneIndex(jp);
                 const auto it = boneToAnchor.find(bone);
                 if (it != boneToAnchor.end())
                 {
@@ -897,9 +877,10 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
     MArrayDataBuilder tBuilder(&dataBlock, aOutTranslate, (unsigned int) mBodies.size());
     MArrayDataBuilder rBuilder(&dataBlock, aOutRotate, (unsigned int) mBodies.size());
 
-    // Pass 1 — solved bone world per bone.  First body on a bone wins
-    // (matching the importer's bone_of_body.setdefault).  Bodies without K
-    // (no command-baked offset) or without a related bone are skipped.
+    // Pass 1 — solved bone world per bone.  First body on a bone wins (bodies
+    // are created in PMX order, so the lowest body index on a bone drives it).
+    // Bodies without K (no command-baked offset) or without a related bone are
+    // skipped.
     std::map<int, btTransform> solvedBoneWorld;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {

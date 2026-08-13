@@ -79,31 +79,6 @@ constexpr double clamp01(double v)
     return v;
 }
 
-// A joint's stored PMX attribute (pmxBoneIndex / pmxParentBoneIndex), or -1.
-int jointPmxAttribute(const MDagPath& jointPath, const char* attrName)
-{
-    try
-    {
-        MFnDependencyNode fn(jointPath.node());
-        MStatus stat;
-        MPlug plug = fn.findPlug(attrName, true, &stat);
-        if (!plug.isNull())
-            return plug.asInt();
-    }
-    // No joint / no index attribute: reported through the -1 return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return -1;
-}
-
-// A joint's stored PMX bone index (pmxBoneIndex), or -1.
-int jointPmxBoneIndex(const MDagPath& jointPath)
-{
-    return jointPmxAttribute(jointPath, "pmxBoneIndex");
-}
-
 // Resolve the -bone argument to a joint dag path (or leave it empty).
 MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 {
@@ -140,7 +115,7 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
         {
             MDagPath jp;
             it.getPath(jp);
-            if (jointPmxBoneIndex(jp) == idx)
+            if (mmd::maya::jointPmxBoneIndex(jp) == idx)
                 return jp;
         }
         return out;
@@ -163,7 +138,7 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 
 MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex)
 {
-    // ── Parse flags (safe defaults, mirroring the former Python command) ──
+    // ── Parse flags (safe defaults) ──
     int index = -1;
     if (parser.isFlagSet(kIndexFlag))
         index = parser.flagArgumentInt(kIndexFlag, 0);
@@ -365,9 +340,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // FOLLOW_BONE bodies are bound to their related joint through the
     // kinematic-anchor INPUT (joint.worldMatrix -> anchorWorldMatrix + baked
     // body<->bone offset) — this is what makes the collider "live on the
-    // correct bone".  Dynamic bodies are wired for write-back by Python AFTER
-    // the whole model exists (mmd/maya/pmx/rigid_body_builder.py — the output
-    // connections must come last so the first evaluation sees every joint).
+    // correct bone".  Dynamic bodies are wired for write-back here too (see
+    // the Output wiring block below — the command ALWAYS connects them).
     // Bodies display from their rest pose — the draw override falls back to
     // reading the plugs when the world is never built.
     if (kinematic)

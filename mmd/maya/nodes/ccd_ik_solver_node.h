@@ -65,7 +65,6 @@ class CCDIKSolverNode : public MPxIkSolverNode
     };
 
     // Internal helpers
-    static int getJointPmxBoneIndex(const MDagPath& jointPath);
     static std::unordered_map<int, LinkLimit> readLinkLimitsMap(MFnDependencyNode& fnDep);
     static int getSingleAxisIndex(const LinkLimit* limits);
 

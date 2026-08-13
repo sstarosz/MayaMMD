@@ -14,11 +14,11 @@ import maya.api.OpenMayaAnim as oma
 from maya import cmds
 
 from mmd.core.data_types import PmxModel
-from mmd.maya.pmx.rigid_body_builder import step_physics
 from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
     assert_true,
+    step_physics,
 )
 
 _NODE_TYPE = "pmxPhysicsNode"

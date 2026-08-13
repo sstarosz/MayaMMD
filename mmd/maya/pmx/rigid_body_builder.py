@@ -12,8 +12,7 @@ STRAIGHT into the related joints — the node computes a solved bone world per
 bone (``bodyLocal · K``) and divides by the parent bone's solved world via
 the bone hierarchy (resolved internally from each body's ``bodyJoint``
 message + the joint DAG); there is no separate finalize step; import wires
-everything in one pass.  The headless stepping helper
-(:func:`step_physics`) remains for batch use.
+everything in one pass.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
 Bullet world from ``mmd/core``.  The Bullet world runs in WORLD space, so
@@ -32,10 +31,10 @@ This module is part of the mmd.maya.pmx package and runs inside Autodesk Maya
 from __future__ import annotations
 
 import logging
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
+from maya import cmds
 
 from mmd.core.data_types import PhysicsMode, PmxModel, ShapeType
 from mmd.maya.pmx_naming_manager import PMXNamingManager
@@ -78,7 +77,7 @@ _DEFAULT_GRAVITY_Y = -9.8
 
 
 def _create_physics_group(
-    name_registry: PMXNamingManager, root_transform_obj: Optional[om.MObject]
+    name_registry: PMXNamingManager, root_transform_obj: om.MObject | None
 ) -> str:
     """Create the ``{model}_Physics`` transform group under the model root."""
     group_name = name_registry.get_physics_group_name()
@@ -94,7 +93,7 @@ def _create_physics_group(
 
 
 def _create_physics_solver(
-    name_registry: PMXNamingManager, parent_group: Optional[str] = None
+    name_registry: PMXNamingManager, parent_group: str | None = None
 ) -> str:
     """Create the ``pmxPhysicsNode`` (a locator shape) and make it time-driven.
 
@@ -272,35 +271,12 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
 # ---------------------------------------------------------------------------
 
 
-def step_physics(node: Optional[str]) -> None:
-    """Force a fresh solver evaluation at the current time (headless use).
-
-    Only needed for headless/batch use (or to manually advance the sim) — in
-    interactive Maya the node is time-driven and steps on its own.
-
-    The node is an ``MPxLocatorNode``; a bare ``dgeval(node)`` does NOT
-    reliably pull its custom solver outputs (it evaluates the DAG shape, not
-    the ``outTranslate``/``outRotate`` plugs).  Demanding an output plug
-    explicitly forces ``compute()`` to run.
-    """
-    if not node:
-        return
-    try:
-        cmds.dgdirty(node)
-        cmds.dgeval(f"{node}.outTranslate")
-    except Exception:
-        try:
-            cmds.dgeval(node)
-        except Exception as e:
-            log.debug("physics step dgeval failed: %s", e)
-
-
 def create_physics_from_pmx_data(
     pmx_data: PmxModel,
     joints: Sequence[om.MObject],
     name_registry: PMXNamingManager,
-    root_transform_obj: Optional[om.MObject] = None,
-) -> Optional[str]:
+    root_transform_obj: om.MObject | None = None,
+) -> str | None:
     """Create the physics graph for a PMX model (no in-memory handle).
 
     Creates the ``{model}_Physics`` group and one ``pmxPhysicsNode`` solver

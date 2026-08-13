@@ -15,8 +15,8 @@
  * reads the scene attributes into a Simulation::Definition, rebuilds the world
  * when those inputs change (or time is scrubbed backwards), steps it when time
  * advances or a kinematic anchor moves, and writes each dynamic body's solved
- * local pose to outTranslate[i]/outRotate[i] (which Python connects directly
- * into the related joints).  Registered by MayaMMD.mll.
+ * local pose to outTranslate[i]/outRotate[i] (which pmxRigidBody connects
+ * directly into the related joints at create).  Registered by MayaMMD.mll.
  */
 
 #pragma once

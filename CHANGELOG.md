@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PHYSICS_BONE).  The
   PMX importer now calls it for each rigid body (matching PMX
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
-  bodies on the physics node immediately. Backed by 36 Maya integration
+  bodies on the physics node immediately. Backed by 52 Maya integration
   tests (no PMX file required).
 - **Native `pmxRigidBodyConstraint` command (create mode)** — the C++
   command that populates a `pmxPhysicsNode`'s `joints` array with PMX
@@ -84,9 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     body).  Angle values are written in degrees (`MAngle::kDegrees` — the
     default `MAngle` unit is radians, which would have inflated every angle
     by 180/π).
-  - Headless `step_physics` helper for batch use.  Caching is left at the
-    node's default: `getCacheSetup()` already declares the stateful solver
-    non-cacheable, so the explicit `caching=0` override is gone.
+  - Caching is left at the node's default: `getCacheSetup()` already declares
+    the stateful solver non-cacheable, so the explicit `caching=0` override
+    is gone.
   Behavioural import-suite tests prove the sim is alive: 248/285 dynamic
   joints move when the root bone swings, and the write-back drives a skirt
   joint ~40° over 30 frames.

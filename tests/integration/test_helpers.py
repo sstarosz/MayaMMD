@@ -290,6 +290,29 @@ def load_plugin(plugin_name: str = "MayaMMD") -> bool:
         return False
 
 
+def step_physics(node: str | None) -> None:
+    """Force a fresh pmxPhysicsNode solver evaluation at the current time.
+
+    Only needed for headless/batch use (or to manually advance the sim) — in
+    interactive Maya the node is time-driven and steps on its own.
+
+    The node is an ``MPxLocatorNode``; a bare ``dgeval(node)`` does NOT
+    reliably pull its custom solver outputs (it evaluates the DAG shape, not
+    the ``outTranslate``/``outRotate`` plugs).  Demanding an output plug
+    explicitly forces ``compute()`` to run.
+    """
+    if not node:
+        return
+    try:
+        cmds.dgdirty(node)
+        cmds.dgeval(f"{node}.outTranslate")
+    except Exception:
+        try:
+            cmds.dgeval(node)
+        except Exception as e:
+            print(f"physics step dgeval failed: {e}")
+
+
 def suppressed_undo() -> None:
     """Call ``cmds.undo()`` with script-editor output suppressed.
 

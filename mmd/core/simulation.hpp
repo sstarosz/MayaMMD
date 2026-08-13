@@ -53,9 +53,9 @@ class Simulation
         eCapsule = 2,
     };
 
-    /// One PMX rigid body.  `relatedBoneIndex` is write-back wiring owned by
-    /// the adapter (the engine ignores it); `resetAnchorIndex` drives the
-    /// scrub-back reset.
+    /// One PMX rigid body.  `relatedBoneIndex` / `parentBoneIndex` are
+    /// write-back wiring owned by the adapter (the engine ignores them);
+    /// `resetAnchorIndex` drives the scrub-back reset.
     struct BodyDefinition
     {
         Double3 restPos; // PMX rest position (world space)
