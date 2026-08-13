@@ -13,7 +13,10 @@ Tests cover (the "add a body and configure it on addition" contract):
 - FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by
   the joint; the body<->bone offset is DERIVED by the node from
   bodyWriteBackOffset).
-- PHYSICS / PHYSICS_BONE -> DATA ONLY (no anchor, no write-back connections).
+- PHYSICS / PHYSICS_BONE on a bone -> write-back wired AT CREATION: a dynamic
+  body with a related joint gets its outTranslate/outRotate connected straight
+  into the joint (PHYSICS_BONE rotation-only).  A body WITHOUT a joint (static
+  collider) gets no wiring.
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
 - Invalid shape / physicsMode values are rejected.
@@ -176,14 +179,13 @@ def test_follow_bone_binds_anchor():
     return True
 
 
-def test_dynamic_body_data_only():
-    """PHYSICS / PHYSICS_BONE: data only — no anchor, no write-back wiring."""
-    _group, solver, joint_a, _jb = _make_physics_scene()
+def test_no_bone_body_has_no_write_back():
+    """A body without a related joint (static collider) gets no write-back."""
+    _group, solver, _ja, _jb = _make_physics_scene()
 
     idx = cmds.pmxRigidBody(
         solver,
-        name="DynBody",
-        bone=joint_a,
+        name="Static",
         shape="capsule",
         size=(0.3, 2.0, 0.3),
         mass=3.0,
@@ -199,27 +201,15 @@ def test_dynamic_body_data_only():
         "type",
     )
 
-    # Dynamic bodies create NO anchor.
+    # No anchor, and no joint to connect to -> no write-back wiring.
     assert_eq(
         int(cmds.getAttr(f"{solver}.anchorWorldMatrix", size=True) or 0), 0, "no anchor"
     )
-    # No write-back: nothing drives the node outputs.
     driven = (cmds.listConnections(f"{solver}.outRotate", destination=True) or []) + (
         cmds.listConnections(f"{solver}.outTranslate", destination=True) or []
     )
-    assert_true(not driven, f"simulation disabled but outputs drive: {driven}")
-
-    # PHYSICS_BONE mode is stored the same way (data only).
-    idx2 = cmds.pmxRigidBody(
-        solver, name="RotBody", bone=joint_a, mass=1.0, physicsMode="physicsBone"
-    )
-    assert_eq(idx2, 1, "second index != 1")
-    assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[1].bodyPhysicsMode")),
-        MODE_PHYSICS_BONE,
-        "mode 2",
-    )
-    print("✓ dynamic bodies are data-only (no anchor, no write-back)")
+    assert_true(not driven, f"static collider must not drive outputs: {driven}")
+    print("✓ body without a joint (static collider) gets no write-back")
     return True
 
 
@@ -433,21 +423,81 @@ def test_body_mask_group_toggles():
     return True
 
 
-def test_wiring_field_defaults():
-    """Wiring fields default to inert values (-1 / identity / enabled)."""
+def test_related_joint_connected():
+    """pmxRigidBody connects the body's related joint as a MESSAGE."""
     _group, solver, joint_a, _jb = _make_physics_scene()
+
+    # Give the mock joint a PMX bone index so the node can resolve it back.
+    cmds.addAttr(
+        joint_a, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 7)
 
     idx = cmds.pmxRigidBody(solver, name="Wired", bone=joint_a, physicsMode="physics")
     assert_eq(idx, 0, "index != 0")
     base = f"{solver}.bodies[0]"
-    # Not wired by create: parent body / reset anchor are resolved later.
-    assert_eq(
-        int(cmds.getAttr(f"{base}.bodyResetAnchorIndex")), -1, "resetAnchor != -1"
+    # The related joint's message plug is the source of bodies[0].bodyJoint.
+    srcs = cmds.listConnections(f"{base}.bodyJoint", source=True) or []
+    assert_true(
+        bool(srcs) and joint_a in srcs, f"bodyJoint not connected to {joint_a} ({srcs})"
     )
-    assert_eq(int(cmds.getAttr(f"{base}.bodyParentBodyIndex")), -1, "parentBody != -1")
+    # A body without a bone stays unconnected (a static collider, no write-back).
+    idx2 = cmds.pmxRigidBody(solver, name="NoBone", physicsMode="physics")
+    assert_eq(idx2, 1, "index != 1")
+    assert_eq(
+        cmds.listConnections(f"{solver}.bodies[1].bodyJoint", source=True) or [],
+        [],
+        "no-bone bodyJoint must be unconnected",
+    )
     # Enabled by default.
     assert_eq(bool(cmds.getAttr(f"{base}.bodyEnabled")), True, "bodyEnabled != True")
-    print("✓ wiring fields default inert (resetAnchor -1, parent -1, enabled)")
+    print(
+        "✓ bodyJoint message connected to the related joint; absent for no-bone bodies"
+    )
+    return True
+
+
+def test_write_back_connected_when_drivable():
+    """A dynamic body on a bone ALWAYS gets its outputs wired at creation."""
+    _group, solver, joint_a, joint_b = _make_physics_scene()
+    cmds.select(clear=True)
+    joint_c = cmds.joint(name="testJointC", p=[2, 0, 0])
+    # Mock joints get PMX bone indices + a DAG parent chain (b0 root, b1<-b0,
+    # b2<-b1) — the node resolves the hierarchy from the DAG.
+    for j, bone_idx in ((joint_a, 0), (joint_b, 1), (joint_c, 2)):
+        cmds.addAttr(j, longName="pmxBoneIndex", attributeType="long", defaultValue=-1)
+        cmds.setAttr(f"{j}.pmxBoneIndex", bone_idx)
+    cmds.parent(joint_b, joint_a)
+    cmds.parent(joint_c, joint_b)
+
+    # Body 0 on bone 0 (kinematic — never driven).
+    cmds.pmxRigidBody(solver, name="Anch", bone=joint_a, physicsMode="followBone")
+    # Body 1 on bone 1 (dynamic) — wired unconditionally at creation.
+    cmds.pmxRigidBody(solver, name="Dyn", bone=joint_b, physicsMode="physics")
+    # Body 2 on bone 2 (PHYSICS_BONE) — its OWN joint, rotation-only.
+    cmds.pmxRigidBody(solver, name="RotOnly", bone=joint_c, physicsMode="physicsBone")
+
+    rot_dests = cmds.listConnections(f"{solver}.outRotate[1]", destination=True) or []
+    assert_true(
+        bool(rot_dests) and all("unitConversion" not in str(d) for d in rot_dests),
+        "outRotate[1] not connected directly to the joint",
+    )
+    tr_dests = cmds.listConnections(f"{solver}.outTranslate[1]", destination=True) or []
+    assert_true(
+        bool(tr_dests) and all("unitConversion" not in str(d) for d in tr_dests),
+        "outTranslate[1] not connected directly to the joint",
+    )
+    assert_true(
+        not (cmds.listConnections(f"{solver}.outRotate[0]", destination=True) or []),
+        "kinematic body must not be driven",
+    )
+
+    # PHYSICS_BONE is rotation-only (its own joint, so nothing is stolen).
+    rot2 = cmds.listConnections(f"{solver}.outRotate[2]", destination=True) or []
+    tr2 = cmds.listConnections(f"{solver}.outTranslate[2]", destination=True) or []
+    assert_true(bool(rot2), "PHYSICS_BONE must drive rotate")
+    assert_true(not tr2, "PHYSICS_BONE must NOT drive translate")
+    print("✓ dynamic bodies on a bone always wired; kinematic/PHYSICS_BONE respected")
     return True
 
 
@@ -681,7 +731,8 @@ def test_group_clamped():
 _TESTS = [
     ("Append body stores data", test_append_body_data),
     ("FOLLOW_BONE binds anchor", test_follow_bone_binds_anchor),
-    ("Dynamic body data-only", test_dynamic_body_data_only),
+    ("No-bone body has no write-back", test_no_bone_body_has_no_write_back),
+    ("Write-back connected when drivable", test_write_back_connected_when_drivable),
     ("Static collider no bone", test_static_collider_no_bone),
     ("Auto-increment indices", test_auto_increment_indices),
     ("Clamp01 on attenuation", test_clamp01),
@@ -690,7 +741,7 @@ _TESTS = [
     ("Model root resolution", test_model_root_resolution),
     ("Enum fields exposed", test_enum_fields_exposed),
     ("Body mask group toggles", test_body_mask_group_toggles),
-    ("Wiring field defaults", test_wiring_field_defaults),
+    ("Related joint connected", test_related_joint_connected),
     ("Write-back offset baked", test_write_back_offset_baked),
     ("Shape size verbatim per collider", test_shape_size_verbatim_per_collider),
     ("Rest pose conversion", test_rest_pose_conversion),

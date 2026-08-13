@@ -14,11 +14,11 @@ import maya.api.OpenMayaAnim as oma
 from maya import cmds
 
 from mmd.core.data_types import PmxModel
-from mmd.maya.pmx.rigid_body_builder import step_physics
 from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
     assert_true,
+    step_physics,
 )
 
 _NODE_TYPE = "pmxPhysicsNode"
@@ -426,13 +426,14 @@ def _swing_root(maya_pmx_data, frame: int, degrees: float = 20.0) -> None:
 
 
 def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
-    """SIMULATION IS ENABLED: time-driven solver + Phase-3 write-back wiring.
+    """SIMULATION IS ENABLED: time-driven solver + write-back wiring.
 
     The solver is connected to ``time1.outTime``, dynamic bodies carry their
-    write-back parent body index and scrub-back reset anchor, and the node's
-    ``outTranslate``/``outRotate`` connect STRAIGHT into the related joints
-    (rotation-only for PHYSICS_BONE).  Bodies whose parent bone has no rigid
-    body are left UNDRIVEN (the DG ``parentInverseMatrix`` fallback is gone).
+    related joint as a MESSAGE (the node resolves the write-back parent +
+    scrub-back reset anchor from it + the joint DAG), and pmxRigidBody ALWAYS
+    connects ``outTranslate``/``outRotate`` STRAIGHT into the related joints
+    (rotation-only for PHYSICS_BONE).  Bodies without a related joint (static
+    colliders) have nothing to connect.
     """
     _group, solver = _find_physics_group_and_solver(maya_pmx_data)
     assert_true(solver is not None, "No physics solver")
@@ -447,14 +448,7 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
         "node.time is not connected (simulation not time-driven)",
     )
 
-    bone_of_body: dict = {}
-    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
-        if rb.related_bone_index >= 0:
-            bone_of_body.setdefault(rb.related_bone_index, rb_idx)
-
     dynamic = 0
-    parent_body = 0
-    no_parent_body = 0
     out_translate = 0
     for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
         if rb.physics_mode.value == follow_bone or rb.related_bone_index < 0:
@@ -464,80 +458,56 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
         if not jpath:
             continue
         dynamic += 1
-        # Parent body index (M_parent = K[parentBodyIndex]).
-        expected_pbi = -1
-        if 0 <= bone < len(pmx_data.bones) and pmx_data.bones[bone].parentIndex >= 0:
-            expected_pbi = bone_of_body.get(pmx_data.bones[bone].parentIndex, -1)
-        actual_pbi = int(cmds.getAttr(f"{solver}.bodies[{rb_idx}].bodyParentBodyIndex"))
-        assert_eq(actual_pbi, expected_pbi, f"body {rb_idx} bodyParentBodyIndex")
-        if expected_pbi >= 0:
-            parent_body += 1
-            # The node derives the parent inverse from the PARENT BODY's
-            # solved Bullet transform — no DG parent-inverse input exists.
-            # Write-back outputs reach the joint (rotation always; translation
-            # except PHYSICS_BONE which is rotation-only).  The node's outputs
-            # are unit-typed compounds (kAngle/kDistance) connected DIRECTLY
-            # to the joint attrs — the destination must be the joint itself,
-            # never a unitConversion (the bone builder's own IK conversions
-            # are separate).
-            rot_dests = (
-                cmds.listConnections(f"{solver}.outRotate[{rb_idx}]", destination=True)
+        # The body's related joint is connected as a MESSAGE by pmxRigidBody
+        # (bodies[i].bodyJoint -> joint.message) — the node resolves the
+        # write-back parent and the reset anchor from it + the joint DAG, so
+        # no per-body wiring inputs exist.
+        joint_srcs = (
+            cmds.listConnections(f"{solver}.bodies[{rb_idx}].bodyJoint", source=True)
+            or []
+        )
+        # listConnections returns SHORT node names; jpath is a full path.
+        short = jpath.rpartition("|")[2]
+        assert_true(
+            bool(joint_srcs)
+            and any(str(s).rpartition("|")[2] == short for s in joint_srcs),
+            f"body {rb_idx} bodyJoint not connected to {jpath} ({joint_srcs})",
+        )
+        # pmxRigidBody ALWAYS wires a dynamic body on a bone: outRotate (and
+        # outTranslate unless PHYSICS_BONE, which is rotation-only) connect
+        # STRAIGHT into the joint.  The node's outputs are unit-typed
+        # compounds (kAngle/kDistance) connected DIRECTLY — the destination
+        # must be the joint itself, never a unitConversion (the bone builder's
+        # own IK conversions are separate).
+        rot_dests = (
+            cmds.listConnections(f"{solver}.outRotate[{rb_idx}]", destination=True)
+            or []
+        )
+        assert_true(
+            bool(rot_dests) and all("unitConversion" not in str(d) for d in rot_dests),
+            f"outRotate[{rb_idx}] not connected directly to the joint",
+        )
+        if rb.physics_mode.value != physics_bone:
+            tr_dests = (
+                cmds.listConnections(
+                    f"{solver}.outTranslate[{rb_idx}]", destination=True
+                )
                 or []
             )
             assert_true(
-                bool(rot_dests)
-                and all("unitConversion" not in str(d) for d in rot_dests),
-                f"outRotate[{rb_idx}] not connected directly to the joint",
+                bool(tr_dests)
+                and all("unitConversion" not in str(d) for d in tr_dests),
+                f"outTranslate[{rb_idx}] not connected directly to the joint",
             )
-            if rb.physics_mode.value != physics_bone:
-                tr_dests = (
-                    cmds.listConnections(
-                        f"{solver}.outTranslate[{rb_idx}]", destination=True
-                    )
-                    or []
-                )
-                assert_true(
-                    bool(tr_dests)
-                    and all("unitConversion" not in str(d) for d in tr_dests),
-                    f"outTranslate[{rb_idx}] not connected directly to the joint",
-                )
-                out_translate += 1
-            else:
-                tr_srcs = cmds.listConnections(f"{jpath}.translate", source=True) or []
-                assert_true(
-                    not tr_srcs, f"PHYSICS_BONE joint {jpath} translate should be free"
-                )
+            out_translate += 1
         else:
-            # No parent body -> the node cannot write back a joint-local pose
-            # (the old DG bodyParentInverseMatrix fallback is gone), so the
-            # joint must be left free.
-            no_parent_body += 1
+            tr_srcs = cmds.listConnections(f"{jpath}.translate", source=True) or []
             assert_true(
-                not cmds.listConnections(
-                    f"{solver}.outRotate[{rb_idx}]", destination=True
-                ),
-                f"body {rb_idx} outRotate connected without a parent body",
-            )
-            assert_true(
-                not cmds.listConnections(f"{jpath}.rotate", source=True),
-                f"joint {jpath} rotate driven without a parent body",
+                not tr_srcs, f"PHYSICS_BONE joint {jpath} translate should be free"
             )
     assert_true(dynamic > 0, "no dynamic body with a related joint to verify")
 
-    # Scrub-back reset anchors: at least one dynamic body has one.
-    reset_anchors = sum(
-        1
-        for rb_idx, rb in enumerate(pmx_data.rigid_bodies)
-        if rb.physics_mode.value != follow_bone
-        and int(cmds.getAttr(f"{solver}.bodies[{rb_idx}].bodyResetAnchorIndex")) >= 0
-    )
-    assert_true(reset_anchors > 0, "no scrub-back reset anchors were set")
-
-    print(
-        f"PASS: sim wired — {parent_body} driven joints "
-        f"({out_translate} with translate), {no_parent_body} no-parent-body "
-        f"undriven, {reset_anchors} reset anchors"
-    )
+    print(f"PASS: sim wired — {dynamic} driven joints ({out_translate} with translate)")
     return True
 
 

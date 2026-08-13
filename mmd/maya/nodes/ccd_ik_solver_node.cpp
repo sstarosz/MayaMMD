@@ -6,6 +6,8 @@
 
 #include "ccd_ik_solver_node.h"
 
+#include "maya_utils.hpp"
+
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
 #include <maya/MDagPath.h>
@@ -142,7 +144,7 @@ MStatus CCDIKSolverNode::doSolve()
     std::unordered_map<std::string, int> boneIdxCache;
     for (auto& jp : jointPaths)
     {
-        int bi = getJointPmxBoneIndex(jp);
+        int bi = mmd::maya::jointPmxBoneIndex(jp);
         boneIdxCache[jp.partialPathName().asChar()] = bi;
     }
 
@@ -381,20 +383,6 @@ MStatus CCDIKSolverNode::doSolve()
 // ===========================================================================
 // Static helpers
 // ===========================================================================
-int CCDIKSolverNode::getJointPmxBoneIndex(const MDagPath& jointPath)
-{
-    try
-    {
-        MFnDependencyNode fnNode(jointPath.node());
-        MPlug plug = fnNode.findPlug("pmxBoneIndex", true);
-        return plug.asInt();
-    }
-    catch (...)
-    {
-        return -1;
-    }
-}
-
 std::unordered_map<int, CCDIKSolverNode::LinkLimit>
 CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
 {

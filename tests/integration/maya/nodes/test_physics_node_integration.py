@@ -70,8 +70,6 @@ def _set_dynamic_body(node: str, index: int, rest_y: float) -> None:
     cmds.setAttr(f"{p}.bodyRestTranslate", 0.0, rest_y, 0.0, type="double3")
     cmds.setAttr(f"{p}.bodyMass", 1.0)
     cmds.setAttr(f"{p}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
-    cmds.setAttr(f"{p}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p}.bodyResetAnchorIndex", -1)
 
 
 def _read_output(node: str, index: int) -> tuple[float, float, float]:
@@ -88,16 +86,12 @@ def _set_welded_chain(node: str) -> None:
     p0 = _set_body_common(node, 0)
     cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
-    cmds.setAttr(f"{p0}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p0}.bodyResetAnchorIndex", -1)
 
     # Body 1: dynamic, 1 unit above the anchor.
     p1 = _set_body_common(node, 1)
     cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
-    cmds.setAttr(f"{p1}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p1}.bodyResetAnchorIndex", -1)
 
     # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
     j = f"{node}.joints[0]"
@@ -172,8 +166,7 @@ def test_attribute_surface_and_defaults():
         "bodyRestitution",
         "bodyFriction",
         "bodyPhysicsMode",
-        "bodyParentBodyIndex",
-        "bodyResetAnchorIndex",
+        "bodyJoint",
     ]
     for child in body_children:
         assert_true(
@@ -284,16 +277,12 @@ def test_kinematic_anchor_drives_welded_body():
     p0 = _set_body_common(node, 0)
     cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
-    cmds.setAttr(f"{p0}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p0}.bodyResetAnchorIndex", -1)
 
     # Body 1: dynamic, 1 unit above the anchor.
     p1 = _set_body_common(node, 1)
     cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
-    cmds.setAttr(f"{p1}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p1}.bodyResetAnchorIndex", -1)
 
     # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
     j = f"{node}.joints[0]"
@@ -354,22 +343,34 @@ def test_config_edit_forces_rebuild():
     node = _create_node()
     _connect_time(node)
 
-    # Body 0: kinematic anchor (followBone) at the origin.
+    # Two mock joints (the bone builder's DAG is the hierarchy): joint_b is
+    # parented under joint_a, so the node walks body 1's joint DAG to find its
+    # reset anchor (the kinematic anchor on bone 0).
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="cfgAnchorJoint", p=(0, 0, 0))
+    cmds.select(clear=True)
+    joint_b = cmds.joint(name="cfgDynJoint", p=(0, 1, 0))
+    cmds.parent(joint_b, joint_a)
+    for j, bone_idx in ((joint_a, 0), (joint_b, 1)):
+        cmds.addAttr(j, longName="pmxBoneIndex", attributeType="long", defaultValue=-1)
+        cmds.setAttr(f"{j}.pmxBoneIndex", bone_idx)
+
+    # Body 0: kinematic anchor (followBone) at the origin, on bone 0.
     p0 = _set_body_common(node, 0)
     cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
-    cmds.setAttr(f"{p0}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p0}.bodyResetAnchorIndex", -1)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
 
-    # Body 1: dynamic, 1 unit above the anchor, reset anchor = body 0, and it
-    # does NOT collide with the anchor's group so it falls freely.
+    # Body 1: dynamic, 1 unit above the anchor, on bone 1 (DAG parent = bone
+    # 0) — its scrub-back reset anchor (body 0's kinematic anchor) is DERIVED
+    # by the node from the joint DAG (bodyJoint messages); it does NOT collide
+    # with the anchor's group so it falls freely.
     p1 = _set_body_common(node, 1)
     cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
-    cmds.setAttr(f"{p1}.bodyParentBodyIndex", -1)
-    cmds.setAttr(f"{p1}.bodyResetAnchorIndex", 0)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+    cmds.connectAttr(f"{joint_b}.message", f"{p1}.bodyJoint")
 
     # Anchor at the origin (identity) so its current pose is captured for reset.
     cmds.setAttr(f"{node}.anchorWorldMatrix[0]", *_IDENTITY_MATRIX, type="matrix")

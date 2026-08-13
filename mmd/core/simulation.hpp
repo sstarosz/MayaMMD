@@ -53,9 +53,9 @@ class Simulation
         eCapsule = 2,
     };
 
-    /// One PMX rigid body.  `parentBodyIndex` is write-back wiring owned by
-    /// the adapter (the engine ignores it); `resetAnchorIndex` drives the
-    /// scrub-back reset.
+    /// One PMX rigid body.  `relatedBoneIndex` / `parentBoneIndex` are
+    /// write-back wiring owned by the adapter (the engine ignores them);
+    /// `resetAnchorIndex` drives the scrub-back reset.
     struct BodyDefinition
     {
         Double3 restPos; // PMX rest position (world space)
@@ -78,7 +78,11 @@ class Simulation
         short groupId = 0; // raw PMX group id 0..15
         PhysicsMode physicsMode = PhysicsMode::ePhysics;
         bool enabled = true;
-        int parentBodyIndex = -1;  // adapter write-back wiring (ignored by the engine)
+        int relatedBoneIndex = -1; // adapter wiring — PMX bone the body is attached to
+                                   // (the engine ignores it; the adapter resolves it from
+                                   // the body's joint message + the joint DAG)
+        int parentBoneIndex = -1;  // adapter wiring — the bone's DAG parent's bone index
+                                   // (same source; the write-back parent uses it)
         int resetAnchorIndex = -1; // kinematic anchor whose pose drives scrub-back reset
 
         /// FOLLOW_BONE bodies are kinematic anchors driven by their joints.
@@ -97,7 +101,8 @@ class Simulation
                    extents.x == o.extents.x && extents.y == o.extents.y &&
                    extents.z == o.extents.z && length == o.length && mask == o.mask &&
                    groupId == o.groupId && physicsMode == o.physicsMode && enabled == o.enabled &&
-                   parentBodyIndex == o.parentBodyIndex && resetAnchorIndex == o.resetAnchorIndex;
+                   relatedBoneIndex == o.relatedBoneIndex && parentBoneIndex == o.parentBoneIndex &&
+                   resetAnchorIndex == o.resetAnchorIndex;
         }
     };
 

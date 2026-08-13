@@ -31,13 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   populates a `pmxPhysicsNode`'s `bodies` array with PMX rigid-body data at
   import time. For every body it writes `bodyShapeSize`, `bodyPhysicsMode`,
   `bodyGroupId`/`bodyMask`, mass/damping/friction/restitution, and the
-  kinematic anchor data (`bodyWriteBackOffset`, `bodyResetAnchorIndex`,
-  `bodyParentBodyIndex`); it stores the PMX rest pose and the write-back K
-  offset in WORLD space (the Bullet world no longer depends on the physics
-  group's location). The
+  write-back K offset (`bodyWriteBackOffset`); it stores the PMX rest pose
+  in WORLD space (the Bullet world no longer depends on the physics group's
+  location).  It connects the body's related joint as a MESSAGE
+  (`bodies[i].bodyJoint`) and ALWAYS wires a dynamic body's
+  `outTranslate`/`outRotate` STRAIGHT into that joint (rotation-only for
+  PHYSICS_BONE).  The
   PMX importer now calls it for each rigid body (matching PMX
   `body`/`bone`/`group`/`mask` semantics), so imported models show their
-  bodies on the physics node immediately. Backed by 36 Maya integration
+  bodies on the physics node immediately. Backed by 52 Maya integration
   tests (no PMX file required).
 - **Native `pmxRigidBodyConstraint` command (create mode)** — the C++
   command that populates a `pmxPhysicsNode`'s `joints` array with PMX
@@ -64,14 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     itself non-cacheable).  The Bullet world runs in **world space** — the
     solver's own location (and the physics group's transform) never matters,
     so the skeleton can be moved freely without breaking the simulation.
-  - After every body and joint exists, each dynamic body's write-back wiring
-    is resolved: `bodyParentBodyIndex` (the parent bone's rigid body, so the
-    node derives the parent inverse from the PARENT BODY's solved Bullet
-    transform — M_parent = K[parentBodyIndex], no DG feedback cycle) and
-    `bodyResetAnchorIndex` (nearest kinematic ancestor) for scrub-back
-    rewinds.  Dynamic bodies whose parent bone has no rigid body are left
-    UNDRIVEN — the old `joint.parentInverseMatrix → bodyParentInverseMatrix`
-    DG fallback (and the `bodyParentInverseMatrix` attribute) is gone.
+  - After every body and joint exists, each dynamic body's write-back is
+    resolved by the node itself from the `bodies[i].bodyJoint` MESSAGE and
+    the joint DAG — the bone index, the write-back parent, and the
+    scrub-back reset anchor (`bodyResetAnchorIndex` semantics) are derived
+    internally, with NO per-body wiring inputs.  The node computes every
+    solved bone world internally (`bodyLocal * K`) and converts to the
+    joint-local pose via the bone hierarchy, never reading driven joints
+    from the DG (the old feedback cycle is gone).  A dynamic body whose
+    parent bone has no rigid body is still connected — the node falls back
+    to the raw solved world pose for it.
   - `outTranslate`/`outRotate` connect STRAIGHT into the related joints
     (rotation-only for PHYSICS_BONE).  The output children are **unit-typed**
     (`MFnUnitAttribute` `kDistance`/`kAngle`, exactly like
@@ -80,9 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     body).  Angle values are written in degrees (`MAngle::kDegrees` — the
     default `MAngle` unit is radians, which would have inflated every angle
     by 180/π).
-  - Headless `step_physics` helper for batch use.  Caching is left at the
-    node's default: `getCacheSetup()` already declares the stateful solver
-    non-cacheable, so the explicit `caching=0` override is gone.
+  - Caching is left at the node's default: `getCacheSetup()` already declares
+    the stateful solver non-cacheable, so the explicit `caching=0` override
+    is gone.
   Behavioural import-suite tests prove the sim is alive: 248/285 dynamic
   joints move when the root bone swings, and the write-back drives a skirt
   joint ~40° over 30 frames.
@@ -121,6 +125,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Scenes saved with the old schema need a re-import.
 
 ### Changed
+
+- **`pmxPhysicsNode` bone attachment is now a message inside the `bodies`
+  compound** (breaking schema change — re-import required).  The per-body
+  wiring inputs `bodyRelatedBoneIndex` and the top-level `boneParentIndices`
+  array are GONE; the body's related joint is stored as a MESSAGE child
+  `bodies[i].bodyJoint` (mirroring PMX's per-body `related_bone_index`),
+  connected `joint.message → bodies[i].bodyJoint` by `pmxRigidBody` at
+  create.  The node resolves the bone index, the write-back parent and the
+  scrub-back reset anchor from the message + the joint DAG (the DAG IS the
+  bone hierarchy — the bone builder parents each joint under its PMX parent),
+  all internally in `readBodyData` — there are no per-body wiring inputs at
+  all.  `pmxRigidBody` no longer dumps the bone hierarchy.
 
 - **`pmxPhysicsNode` simplified — no config hashing, no `configVersion`**
   (breaking schema change — re-import required).  The node no longer hashes

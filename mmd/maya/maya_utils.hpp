@@ -6,6 +6,8 @@
 #pragma once
 
 #include <maya/MDGModifier.h>
+#include <maya/MDagPath.h>
+#include <maya/MFnDependencyNode.h>
 #include <maya/MFnMatrixData.h>
 #include <maya/MFnNumericData.h>
 #include <maya/MMatrix.h>
@@ -20,6 +22,25 @@
 
 namespace mmd::maya
 {
+// A joint's stored PMX bone index (pmxBoneIndex), or -1.  The bone builder
+// stamps it on every joint, and the DAG IS the PMX bone hierarchy — shared
+// by pmxRigidBody (resolveBone) and pmxPhysicsNode (readBodyData's message +
+// DAG resolution).  Every failure mode is handled explicitly (no exceptions):
+// an invalid path, a non-dependency node, or a missing attribute reports -1.
+inline int jointPmxBoneIndex(const MDagPath& jointPath)
+{
+    if (!jointPath.isValid())
+        return -1;
+    MStatus stat;
+    MFnDependencyNode fn(jointPath.node(), &stat);
+    if (stat != MS::kSuccess)
+        return -1;
+    MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
+    if (plug.isNull())
+        return -1;
+    return plug.asInt();
+}
+
 // Same behaviour as Maya's CHECK_MSTATUS macro — log a pAPIerror (with the
 // caller's file/line) when `status` is not kSuccess — but as a function: the
 // status is taken by const reference, so no `MStatus _maya_status = (status)`
@@ -64,8 +85,9 @@ inline MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double
     mt.setTranslation(MVector(t.x, t.y, t.z), MSpace::kTransform);
     double rot[3] = {mmd::core::physics_math::deg2rad(r.x), mmd::core::physics_math::deg2rad(r.y),
                      mmd::core::physics_math::deg2rad(r.z)};
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    mt.setRotation(rot, MTransformationMatrix::kXYZ);
+    // &rot[0] instead of the bare array: passing `rot` would decay it to a
+    // pointer (cppcoreguidelines-pro-bounds-array-to-pointer-decay).
+    mt.setRotation(&rot[0], MTransformationMatrix::kXYZ);
     return mt.asMatrix();
 }
 

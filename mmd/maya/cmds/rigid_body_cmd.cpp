@@ -8,10 +8,11 @@
  *
  * ``-create`` is the single body-modification path (the PMX import loops it).
  * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
- * joint through the kinematic-anchor input, and bakes the write-back K
- * offset (``bodyWriteBackOffset``) for every body; the Python builder
- * (mmd/maya/pmx/rigid_body_builder.py) connects the solver (time) and wires
- * outTranslate/outRotate into the joints after every body and joint exist.
+ * joint through the kinematic-anchor input, bakes the write-back K offset
+ * (``bodyWriteBackOffset``) for every body, and ALWAYS connects
+ * outTranslate/outRotate STRAIGHT into the related joint for a dynamic body
+ * on a bone (the node computes the joint-local pose internally via the bone
+ * hierarchy).
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -78,25 +79,6 @@ constexpr double clamp01(double v)
     return v;
 }
 
-// A joint's stored PMX bone index (pmxBoneIndex), or -1.
-int jointPmxBoneIndex(const MDagPath& jointPath)
-{
-    try
-    {
-        MFnDependencyNode fn(jointPath.node());
-        MStatus stat;
-        MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
-        if (!plug.isNull())
-            return plug.asInt();
-    }
-    // No joint / no index attribute: reported through the -1 return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
-    }
-    return -1;
-}
-
 // Resolve the -bone argument to a joint dag path (or leave it empty).
 MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 {
@@ -133,7 +115,7 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
         {
             MDagPath jp;
             it.getPath(jp);
-            if (jointPmxBoneIndex(jp) == idx)
+            if (mmd::maya::jointPmxBoneIndex(jp) == idx)
                 return jp;
         }
         return out;
@@ -156,7 +138,7 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 
 MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIndex)
 {
-    // ── Parse flags (safe defaults, mirroring the former Python command) ──
+    // ── Parse flags (safe defaults) ──
     int index = -1;
     if (parser.isFlagSet(kIndexFlag))
         index = parser.flagArgumentInt(kIndexFlag, 0);
@@ -334,10 +316,22 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     for (int g = 0; g < 16; ++g)
         elem.child(PhysicsNode::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
     elem.child(PhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
-    // Wiring fields: the parent body / reset anchor are resolved later (the
-    // parent body may not exist yet); the write-back K offset is baked below.
-    elem.child(PhysicsNode::aBodyResetAnchorIndex).setInt(-1);
-    elem.child(PhysicsNode::aBodyParentBodyIndex).setInt(-1);
+    // Wiring: the body's related joint as a MESSAGE (bodies[i].bodyJoint ->
+    // joint.message).  The solver resolves the bone index, the write-back
+    // parent and the scrub-back reset anchor from it + the joint DAG — there
+    // is no per-body wiring input.  Unconnected = no related joint (a static
+    // collider with no write-back).
+    if (jointPath.isValid())
+    {
+        MStatus jointMsgStat;
+        MFnDependencyNode jointFn(jointPath.node());
+        const MPlug jointMsg = jointFn.findPlug("message", true, &jointMsgStat);
+        if (!jointMsg.isNull())
+        {
+            mmd::maya::connectOrReplace(
+                jointMsg, bodiesPlug.elementByLogicalIndex(n).child(PhysicsNode::aBodyJoint));
+        }
+    }
     elem.child(PhysicsNode::aBodyNameLocal).setString(nameLocal);
     elem.child(PhysicsNode::aBodyNameUniversal).setString(nameUniversal);
     elem.child(PhysicsNode::aBodyEnabled).setBool(true);
@@ -346,9 +340,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // FOLLOW_BONE bodies are bound to their related joint through the
     // kinematic-anchor INPUT (joint.worldMatrix -> anchorWorldMatrix + baked
     // body<->bone offset) — this is what makes the collider "live on the
-    // correct bone".  Dynamic bodies are wired for write-back by Python AFTER
-    // the whole model exists (mmd/maya/pmx/rigid_body_builder.py — the output
-    // connections must come last so the first evaluation sees every joint).
+    // correct bone".  Dynamic bodies are wired for write-back here too (see
+    // the Output wiring block below — the command ALWAYS connects them).
     // Bodies display from their rest pose — the draw override falls back to
     // reading the plugs when the world is never built.
     if (kinematic)
@@ -389,12 +382,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // bodyWriteBackOffset[n] = K = jointRestWorld * bodyRestWorld^-1 for EVERY
     // body (identity when there is no related joint) — the array is dense by
     // construction (every -create sets its element).  The node's write-back
-    // derives the parent joint's world from K[parentBodyIndex]
-    // (M_parent = parentJointRestWorld * parentBodyRestWorld^-1 is the SAME
-    // constant as the parent body's K, for kinematic AND dynamic parents), so
-    // no separate parent-offset array is needed.  (The old
-    // bodyParentInverseMatrix DG fallback is gone — bodies whose parent bone
-    // has no rigid body are not written back.)
+    // computes every solved bone world internally as bodyLocal * K and then
+    // converts to the joint-local pose via the BONE hierarchy (it never reads
+    // driven joints from the DG — that was the feedback cycle that exploded
+    // the sim).  No per-body parent wiring exists.
     {
         MMatrix k;
         k.setToIdentity();
@@ -412,6 +403,43 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
                 .elementByLogicalIndex(n),
             k);
+    }
+
+    // ── Output wiring (write-back connections) ──
+    // The command ALWAYS attempts the write-back connection for a DYNAMIC
+    // body with a related joint: outTranslate/outRotate are connected STRAIGHT
+    // into the joint (unit-typed children — no unitConversion).  PHYSICS_BONE
+    // is rotation-only.  Kinematic (followBone) bodies are anchors, never
+    // driven.  A body whose parent bone has no rigid body is still connected —
+    // the node cannot write a joint-local pose for it and falls back to the
+    // raw solved world pose (rare in well-formed chains, where every bone in a
+    // physics chain has a body).
+    if (!kinematic && jointPath.isValid())
+    {
+        MPlug outT =
+            fn.findPlug(PhysicsNode::aOutTranslate, true, &plugStat).elementByLogicalIndex(n);
+        MPlug outR = fn.findPlug(PhysicsNode::aOutRotate, true, &plugStat).elementByLogicalIndex(n);
+        MFnDependencyNode jointFn(jointPath.node());
+        // Compound-to-compound: connecting the output ELEMENT compound to the
+        // joint's translate/rotate materializes the element and wires the
+        // unit-typed children DIRECTLY (kDistance/kAngle — no auto-inserted
+        // unitConversion), the same connection cmds.connectAttr used to make.
+        // A later body on the same bone replaces the source (last wins; all
+        // bodies on a bone produce the same bone-world pose, so the joint's
+        // value is unaffected).
+        if (physicsModeEnum != Simulation::PhysicsMode::ePhysicsBone)
+        {
+            if (mmd::maya::connectOrReplace(outT, jointFn.findPlug("translate", true, &plugStat)) !=
+                MS::kSuccess)
+            {
+                MGlobal::displayWarning("pmxRigidBody: could not connect translate output");
+            }
+        }
+        if (mmd::maya::connectOrReplace(outR, jointFn.findPlug("rotate", true, &plugStat)) !=
+            MS::kSuccess)
+        {
+            MGlobal::displayWarning("pmxRigidBody: could not connect rotate output");
+        }
     }
 
     outIndex = n;

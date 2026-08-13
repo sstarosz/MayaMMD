@@ -22,6 +22,7 @@
 #include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
+#include <maya/MDagPath.h>
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MDistance.h>
@@ -29,6 +30,7 @@
 #include <maya/MFnData.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
+#include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
 #include <maya/MFnTypedAttribute.h>
@@ -38,12 +40,14 @@
 #include <maya/MNodeCacheDisablingInfoHelper.h>
 #include <maya/MNodeCacheSetupInfo.h>
 #include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 #include <maya/MPoint.h>
 
 #include "bullet_bridge.hpp"
 #include "physics_math.hpp"
 
 #include <algorithm>
+#include <map>
 #include <string>
 
 // Pure math (Euler <-> quaternion, row/column transpose) comes from the
@@ -89,8 +93,7 @@ MObject PhysicsNode::aBodyAngularDamping;
 MObject PhysicsNode::aBodyRestitution;
 MObject PhysicsNode::aBodyFriction;
 MObject PhysicsNode::aBodyPhysicsMode;
-MObject PhysicsNode::aBodyParentBodyIndex;
-MObject PhysicsNode::aBodyResetAnchorIndex;
+MObject PhysicsNode::aBodyJoint;
 
 MObject PhysicsNode::aJoints;
 MObject PhysicsNode::aJointNameLocal;
@@ -266,6 +269,7 @@ MStatus PhysicsNode::initialize()
     MFnNumericAttribute nAttr;
     MFnCompoundAttribute cAttr;
     MFnMatrixAttribute mAttr;
+    MFnMessageAttribute mMsgAttr;
     MFnUnitAttribute uAttr;
     MStatus stat;
 
@@ -397,7 +401,7 @@ MStatus PhysicsNode::initialize()
     // PMX physics mode — enum: followBone / physics / physicsBone (field
     // values match Simulation::PhysicsMode).  Field names mirror the
     // enumerators.  The node writes the joint-local pose for mode 1/2 (mode 2
-    // = rotation only — Python connects only outRotate for those bodies).
+    // = rotation only — the command wires only outRotate for those bodies).
     {
         MFnEnumAttribute eAttr;
         aBodyPhysicsMode = eAttr.create(
@@ -410,21 +414,18 @@ MStatus PhysicsNode::initialize()
         eAttr.setKeyable(false);
     }
 
-    // Derived / wiring fields (no PMX JSON counterpart).
-    // Rigid-body index of the related joint's PARENT joint's body (the
-    // write-back derives the parent inverse from that body's solved Bullet
-    // transform); -1 = parent bone has no rigid body (no write-back for that
-    // body).
-    aBodyParentBodyIndex =
-        nAttr.create("bodyParentBodyIndex", "bpbi", MFnNumericData::kLong, -1, &stat);
+    // The body's related joint — a MESSAGE child (mirrors the PMX per-body
+    // related_bone_index): pmxRigidBody connects it to the joint.  The node
+    // resolves the bone index and the hierarchy from it + the joint DAG.
+    // Unconnected = a static collider (no write-back).
+    aBodyJoint = mMsgAttr.create("bodyJoint", "bjnt", &stat);
     MMD_CHECK_MSTATUS(stat);
-    aBodyResetAnchorIndex =
-        nAttr.create("bodyResetAnchorIndex", "brai", MFnNumericData::kLong, -1, &stat);
-    MMD_CHECK_MSTATUS(stat);
+    mMsgAttr.setStorable(true);
+    mMsgAttr.setKeyable(false);
 
-    for (MObject* a : {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate, &aBodyRestRotate,
-                       &aBodyMass, &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution,
-                       &aBodyFriction, &aBodyParentBodyIndex, &aBodyResetAnchorIndex})
+    for (MObject* a :
+         {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate, &aBodyRestRotate, &aBodyMass,
+          &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution, &aBodyFriction})
     {
         MFnNumericAttribute fn(*a);
         fn.setStorable(true);
@@ -459,8 +460,7 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aBodyRestitution);
     cAttr.addChild(aBodyFriction);
     cAttr.addChild(aBodyPhysicsMode);
-    cAttr.addChild(aBodyParentBodyIndex);
-    cAttr.addChild(aBodyResetAnchorIndex);
+    cAttr.addChild(aBodyJoint);
 
     // --- joint compound ---
     aJointNameLocal =
@@ -650,6 +650,12 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
     const unsigned int bodyCount = bodiesHandle.elementCount();
     out.reserve(bodyCount);
+
+    // Per-body related joint paths, resolved from the bodyJoint MESSAGES
+    // (kept for the reset-anchor ancestor walk below).
+    std::vector<MDagPath> jointPaths(bodyCount);
+    MPlug bodiesPlug(thisMObject(), aBodies);
+
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
         bodiesHandle.jumpToArrayElement(i);
@@ -675,11 +681,75 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
         b.physicsMode =
             static_cast<Simulation::PhysicsMode>(bodyHandle.child(aBodyPhysicsMode).asShort());
-        b.parentBodyIndex = bodyHandle.child(aBodyParentBodyIndex).asInt();
-        b.resetAnchorIndex = bodyHandle.child(aBodyResetAnchorIndex).asInt();
         b.enabled = bodyHandle.child(aBodyEnabled).asBool();
+
+        // Related joint from the bodyJoint MESSAGE (bodies[i].bodyJoint ->
+        // joint.message).  The bone index comes from the joint's pmxBoneIndex;
+        // the parent bone from its DAG parent — the DAG IS the hierarchy (the
+        // bone builder parents each joint directly under its PMX parent).
+        //
+        // This resolves per body per evaluation (~5 DG API calls) — the
+        // result is constant until a message/DAG edit, which configChanged
+        // detects via relatedBoneIndex/parentBoneIndex on the next
+        // evaluation (message connections do not propagate DG dirt).
+        MPlugArray sources;
+        bodiesPlug.elementByLogicalIndex(i).child(aBodyJoint).connectedTo(sources, true, false);
+        if (sources.length() > 0 &&
+            MDagPath::getAPathTo(sources[0].node(), jointPaths[i]) == MS::kSuccess)
+        {
+            b.relatedBoneIndex = mmd::maya::jointPmxBoneIndex(jointPaths[i]);
+            MDagPath parentPath = jointPaths[i];
+            if (parentPath.pop() == MS::kSuccess)
+                b.parentBoneIndex = mmd::maya::jointPmxBoneIndex(parentPath);
+        }
         out.push_back(b);
     }
+
+    // Derive each dynamic body's scrub-back reset anchor: the kinematic-order
+    // index of the body on its NEAREST KINEMATIC ANCESTOR bone (walking the
+    // joint DAG parents), so hair uses the head anchor, skirt uses the pelvis
+    // anchor, etc.  Dynamic bodies without a kinematic ancestor keep -1 (no
+    // reset).  This is derived here — there is no per-body reset-anchor input.
+    {
+        std::map<int, int> boneToAnchor; // bone -> kinematic-order index (first body wins)
+        int kinOrder = 0;
+        for (const Simulation::BodyDefinition& b : out)
+        {
+            if (!b.isKinematic() || !b.enabled)
+                continue;
+            // Anchor slots are consumed by EVERY enabled kinematic body — a
+            // boneless FOLLOW_BONE body pins its rest pose into its own
+            // anchorWorldMatrix element (pmxRigidBody -create), so kinOrder
+            // must count it too or the derived resetAnchorIndex drifts out of
+            // sync with the anchor array.
+            if (b.relatedBoneIndex >= 0)
+                boneToAnchor.emplace(b.relatedBoneIndex, kinOrder);
+            ++kinOrder;
+        }
+        for (size_t i = 0; i < out.size(); ++i)
+        {
+            Simulation::BodyDefinition& b = out[i];
+            if (b.isKinematic() || !b.enabled || b.relatedBoneIndex < 0)
+                continue;
+            MDagPath jp = jointPaths[i];
+            if (!jp.isValid())
+                continue;
+            std::size_t steps = 0;
+            while (steps++ < 256) // exactly 256 DAG steps (cycle guard)
+            {
+                const int bone = mmd::maya::jointPmxBoneIndex(jp);
+                const auto it = boneToAnchor.find(bone);
+                if (it != boneToAnchor.end())
+                {
+                    b.resetAnchorIndex = it->second;
+                    break;
+                }
+                if (jp.pop() != MS::kSuccess)
+                    break;
+            }
+        }
+    }
+
     return out;
 }
 
@@ -785,24 +855,31 @@ void PhysicsNode::getCacheSetup(const MEvaluationNode& evalNode,
 
 bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 {
-    // Direct write-back: each dynamic body's JOINT-LOCAL pose is
-    //   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1   (row-vector)
-    // all in WORLD space (the Bullet world frame): K = jointRestWorld *
-    // bodyRestWorld^-1 (baked by pmxRigidBody -create), B_parent = the parent
-    // body's solved Bullet transform, and M_parent = parentJointRestWorld *
-    // parentBodyRestWorld^-1 — the SAME constant as K[parentBodyIndex], so no
-    // separate parent-offset array exists.  Deriving the parent inverse from
-    // the parent BODY (never the DG joint matrix) avoids the DG feedback cycle
-    // a node-driven parent joint would create.  Bodies without a parent body
-    // (bodyParentBodyIndex = -1) get no write-back (Python leaves those joints
-    // at their animated pose).
+    // Two-pass bone-world write-back — the node builds its OWN temporary
+    // skeleton hierarchy and never reads the driven joints from the DG (that
+    // was the feedback cycle that exploded the sim):
     //
-    // Bullet/btTransform is COLUMN-vector, so the row-vector formula transposes
-    // to the equivalent composition, evaluated directly on btTransforms:
-    //   boneLocal = M_parent^-1 * B_parent^-1 * bodyLocal * K
-    // At rest this telescopes to jointRest * parentJointRest^-1 (the joint's
-    // exact rest-local pose) — same result as the MMatrix chain it replaces,
-    // minus the Matrix4/MMatrix round-trip bookkeeping.
+    //   pass 1 — solved bone world per bone:
+    //       solvedBoneWorld[bone] = bodyPose(i) * K_i
+    //     for every enabled body with a related bone (kinematic AND dynamic).
+    //     A kinematic body's Bullet transform tracks its joint (set to
+    //     K^-1 * jointWorld), so its bone world IS the animated joint world —
+    //     dynamic chains get their root for free.
+    //
+    //   pass 2 — joint-local pose via the BONE hierarchy (resolved from the
+    //       body's joint message + DAG in readBodyData -> bd.parentBoneIndex):
+    //       boneLocal = solvedBoneWorld[parentBone]^-1 * solvedBoneWorld[bone]
+    //     At rest this telescopes to jointRest * parentJointRest^-1 (the
+    //     joint's exact rest-local pose).
+    //
+    // Bodies whose parent bone has no body (or no related bone at all) get
+    // the RAW solved world pose — matching the old behaviour where a missing
+    // parent meant "no write-back, output the body pose".  The command always
+    // connects those outputs too; the node falls back to the raw pose for
+    // them (rare in well-formed chains).
+    //
+    // Bullet/btTransform is COLUMN-vector: `bodyPose * K` is the joint world
+    // (the transpose of the row-vector K * bodyPose).
     MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
@@ -810,34 +887,61 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
     MArrayDataBuilder tBuilder(&dataBlock, aOutTranslate, (unsigned int) mBodies.size());
     MArrayDataBuilder rBuilder(&dataBlock, aOutRotate, (unsigned int) mBodies.size());
 
+    // Pass 1 — solved bone world per bone.  First body on a bone wins (bodies
+    // are created in PMX order, so the lowest body index on a bone drives it).
+    // Bodies without K (no command-baked offset) or without a related bone are
+    // skipped.
+    std::map<int, btTransform> solvedBoneWorld;
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        const Simulation::BodyDefinition& bd = mBodies[i];
+        if (!bd.enabled || bd.relatedBoneIndex < 0)
+            continue;
+        if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
+            continue; // first body on the bone wins
+        if (offsetHandle.jumpToArrayElement((unsigned int) i) != MS::kSuccess)
+            continue; // no K baked -> this bone has no derived world
+        const btTransform k = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
+        const Simulation::Pose wp = mSim.bodyPose(i);
+        solvedBoneWorld.emplace(bd.relatedBoneIndex, poseToTransform(wp.pos, wp.quat) * k);
+    }
+
+    // Pass 2 — write the joint-local pose, or the raw solved world pose when
+    // the parent bone has no body (the command still connects those outputs;
+    // the joint just receives the body's raw world pose — rare in well-formed
+    // chains, where every bone in a physics chain has a body).
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         const Simulation::BodyDefinition& bd = mBodies[i];
         if (bd.isKinematic() || !bd.enabled)
             continue;
 
-        // Start from the solved world-space body pose, then apply the
-        // write-back chain (boneLocal = M_parent^-1 * B_parent^-1 * bodyLocal * K).
         const Simulation::Pose wp = mSim.bodyPose(i);
         btTransform boneLocal = poseToTransform(wp.pos, wp.quat);
 
-        const int parentIdx = bd.parentBodyIndex;
-        if (parentIdx >= 0 && (size_t) parentIdx < mBodies.size() && mBodies[parentIdx].enabled &&
-            offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess &&
-            offsetHandle.jumpToArrayElement((unsigned int) parentIdx) == MS::kSuccess)
+        const int bone = bd.relatedBoneIndex;
+        if (bone >= 0)
         {
-            // The condition above left the handle at parentIdx — re-jump
-            // before each read so k = K[i] and mp = K[parentIdx].
-            offsetHandle.jumpToArrayElement((unsigned int) i);
-            const btTransform k = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
-            offsetHandle.jumpToArrayElement((unsigned int) parentIdx);
-            const btTransform mp = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
-            const Simulation::Pose pp = mSim.bodyPose(parentIdx);
-            const btTransform bp = poseToTransform(pp.pos, pp.quat);
-            boneLocal = mp.inverse() * bp.inverse() * boneLocal * k;
+            const int parentBone = bd.parentBoneIndex;
+            const auto it = solvedBoneWorld.find(bone);
+            const auto pit = solvedBoneWorld.find(parentBone);
+            if (it != solvedBoneWorld.end() && pit != solvedBoneWorld.end())
+            {
+                // boneLocal = solvedBoneWorld[parentBone]^-1 * solvedBoneWorld[bone]
+                boneLocal = pit->second.inverse() * it->second;
+            }
+            else if (parentBone == -1 && it != solvedBoneWorld.end())
+            {
+                // Root bone (no DAG-parent joint): the joint-local pose IS the
+                // solved bone world — its parent is the model root transform,
+                // which sits at identity at the origin.  Do NOT fall through
+                // to the raw body pose: that would bake the body<->joint K
+                // offset into the joint.
+                boneLocal = it->second;
+            }
         }
+        // Parent bone without a body -> boneLocal stays the raw solved world pose.
 
-        // No parent body -> no write-back; boneLocal stays the raw world pose.
         const btVector3& o = boneLocal.getOrigin();
         Double3 rot;
         const btQuaternion& bq = boneLocal.getRotation();

@@ -46,10 +46,15 @@
  *
  * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
  * joint via the kinematic-anchor input (so the collider lives on the correct
- * bone and displays from its rest pose), and bakes the write-back K offset
- * (``bodyWriteBackOffset``) for every body.  It does NOT connect the solver
- * or wire the write-back outputs — the Python builder does that after every
- * body and joint exist.  Edit/query/remove and batch create are later steps.
+ * bone and displays from its rest pose), bakes the write-back K offset
+ * (``bodyWriteBackOffset``) for every body, connects the body's related
+ * joint as a MESSAGE (``bodies[i].bodyJoint``), and ALWAYS connects
+ * outTranslate/outRotate STRAIGHT into the related joint for a dynamic body
+ * on a bone (the node computes the joint-local pose internally via the bone
+ * hierarchy, resolved from the message + the joint DAG; PHYSICS_BONE is
+ * rotation-only).  Kinematic bodies are anchors, never driven; bodies
+ * without a related joint (static colliders) have nothing to connect to.
+ * Edit/query/remove and batch create are later steps.
  */
 
 #pragma once
