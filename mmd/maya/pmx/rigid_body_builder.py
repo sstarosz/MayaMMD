@@ -59,12 +59,11 @@ def _create_physics_group(
 
 
 def _create_physics_solver(name_registry: PMXNamingManager, parent_group: str) -> str:
-    """Create the ``pmxPhysicsNode`` (a locator shape) and make it time-driven.
+    """Create the ``pmxPhysicsNode`` solver (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
     Simulation) and will draw its own guide visualization through a C++ draw
-    override (planned).  The Bullet world runs in WORLD space, so the
-    solver's own location never matters.
+    override (planned).
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver
     every frame (the same path as a parentConstraint, so it works under
@@ -159,6 +158,10 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
     current body count).  Joints are appended in PMX order so the joint index
     matches the PMX joint index.  Data only — the solver is time-driven and
     each body's write-back outputs are wired at creation by the command.
+
+    Unlike bodies, a failed joint needs no count check: nothing downstream
+    references joints by index, so a dropped joint just means one constraint
+    is missing — later joints are unaffected.
     """
     for jt_idx, joint in enumerate(pmx_data.joints):
         try:
@@ -214,18 +217,11 @@ def create_physics_from_pmx_data(
 ) -> str | None:
     """Create the physics graph for a PMX model (no in-memory handle).
 
-    Creates the ``{model}_Physics`` group and one ``pmxPhysicsNode`` solver
-    under it — per model — and POPULATES the ``bodies`` array through the
-    native ``pmxRigidBody`` command (one body per PMX rigid body, in PMX
-    order) and the ``joints`` array through the native
-    ``pmxRigidBodyConstraint`` command (one joint per PMX rigid-body
-    constraint, in PMX order).  The solver is driven by ``time1.outTime``
-    and the solved pose is written STRAIGHT into the related joints — the
-    node computes a solved bone world per bone (``bodyLocal · K``) and
-    divides by the parent bone's solved world via the bone hierarchy
-    (resolved internally from each body's ``bodyJoint`` message + the joint
-    DAG) — there is no separate finalize step; import wires everything in
-    one pass.
+    Creates the ``{model}_Physics`` group with one ``pmxPhysicsNode`` solver
+    under it, then populates the solver through the native commands: one
+    ``pmxRigidBody`` per PMX rigid body and one ``pmxRigidBodyConstraint``
+    per PMX joint, both in PMX order.  Everything is wired in this single
+    pass — there is no separate finalize step.
 
     Args:
         pmx_data:            Parsed PMX model (rigid bodies + joints).
@@ -236,7 +232,8 @@ def create_physics_from_pmx_data(
 
     Returns:
         The solver node name (the caller stamps it on the model root), or
-        ``None`` if the node could not be created.
+        ``None`` if the node could not be created — the (empty) physics
+        group is left in the scene in that case.
     """
     group = _create_physics_group(name_registry, root_transform_obj)
     try:
