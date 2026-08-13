@@ -687,6 +687,11 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         // joint.message).  The bone index comes from the joint's pmxBoneIndex;
         // the parent bone from its DAG parent — the DAG IS the hierarchy (the
         // bone builder parents each joint directly under its PMX parent).
+        //
+        // This resolves per body per evaluation (~5 DG API calls) — the
+        // result is constant until a message/DAG edit, which configChanged
+        // detects via relatedBoneIndex/parentBoneIndex on the next
+        // evaluation (message connections do not propagate DG dirt).
         MPlugArray sources;
         bodiesPlug.elementByLogicalIndex(i).child(aBodyJoint).connectedTo(sources, true, false);
         if (sources.length() > 0 &&
@@ -710,11 +715,16 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         int kinOrder = 0;
         for (const Simulation::BodyDefinition& b : out)
         {
-            if (b.isKinematic() && b.enabled && b.relatedBoneIndex >= 0)
-            {
+            if (!b.isKinematic() || !b.enabled)
+                continue;
+            // Anchor slots are consumed by EVERY enabled kinematic body — a
+            // boneless FOLLOW_BONE body pins its rest pose into its own
+            // anchorWorldMatrix element (pmxRigidBody -create), so kinOrder
+            // must count it too or the derived resetAnchorIndex drifts out of
+            // sync with the anchor array.
+            if (b.relatedBoneIndex >= 0)
                 boneToAnchor.emplace(b.relatedBoneIndex, kinOrder);
-                ++kinOrder;
-            }
+            ++kinOrder;
         }
         for (size_t i = 0; i < out.size(); ++i)
         {
@@ -725,7 +735,7 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
             if (!jp.isValid())
                 continue;
             std::size_t steps = 0;
-            while (steps++ <= 256)
+            while (steps++ < 256) // exactly 256 DAG steps (cycle guard)
             {
                 const int bone = mmd::maya::jointPmxBoneIndex(jp);
                 const auto it = boneToAnchor.find(bone);
@@ -920,8 +930,17 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
                 // boneLocal = solvedBoneWorld[parentBone]^-1 * solvedBoneWorld[bone]
                 boneLocal = pit->second.inverse() * it->second;
             }
+            else if (parentBone == -1 && it != solvedBoneWorld.end())
+            {
+                // Root bone (no DAG-parent joint): the joint-local pose IS the
+                // solved bone world — its parent is the model root transform,
+                // which sits at identity at the origin.  Do NOT fall through
+                // to the raw body pose: that would bake the body<->joint K
+                // offset into the joint.
+                boneLocal = it->second;
+            }
         }
-        // No parent bone world -> boneLocal stays the raw solved world pose.
+        // Parent bone without a body -> boneLocal stays the raw solved world pose.
 
         const btVector3& o = boneLocal.getOrigin();
         Double3 rot;

@@ -138,8 +138,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all internally in `readBodyData` — there are no per-body wiring inputs at
   all.  `pmxRigidBody` no longer dumps the bone hierarchy.
 
-### Changed
-
 - **`pmxPhysicsNode` simplified — no config hashing, no `configVersion`**
   (breaking schema change — re-import required).  The node no longer hashes
   its config inputs to detect edits:
