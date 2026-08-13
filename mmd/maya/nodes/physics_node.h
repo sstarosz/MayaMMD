@@ -124,9 +124,12 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aAnchorWorldMatrix;
 
     // Write-back inputs — the node outputs each dynamic body's JOINT-LOCAL
-    // pose (boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1, with
-    // K = jointRestWorld * bodyRestWorld^-1 and M_parent = K[parentBodyIndex]),
-    // so Python connects outTranslate/outRotate straight into the joints.
+    // pose.  The solver derives it in a two-pass bone-world pass: it computes
+    // every solved bone world internally (bodyLocal * K), then converts to
+    // local via the BONE hierarchy — resolved internally from each body's
+    // joint message (bodies[i].bodyJoint) and the joint DAG — never reading
+    // the driven joints from the DG (that was the feedback cycle that
+    // exploded the sim).  K = jointRestWorld * bodyRestWorld^-1.
     static MObject aBodyWriteBackOffset; // matrix array, body-indexed: K
     // Per-body compound array: aBodies[i] — children are declared to mirror
     // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
@@ -149,18 +152,19 @@ class PhysicsNode : public MPxLocatorNode
     // engine's radius / box half-extents / capsule length by collider type
     // (mmd::core::applyShapeSize) in readBodyData; the draw fallback reads it
     // verbatim.
-    static MObject aBodyShapeSize;       // float3 — PMX shape_size verbatim
-    static MObject aBodyRestTranslate;   // float3 — PMX shape_position (rest, world space)
-    static MObject aBodyRestRotate;      // float3 — PMX shape_rotation (degrees)
-    static MObject aBodyMass;            // double — PMX mass
-    static MObject aBodyLinearDamping;   // double — PMX move_attenuation
-    static MObject aBodyAngularDamping;  // double — PMX rotation_damping
-    static MObject aBodyRestitution;     // double — PMX repulsion
-    static MObject aBodyFriction;        // double — PMX friction_force
-    static MObject aBodyPhysicsMode;     // enum — PMX physics_mode (PhysicsMode)
-    static MObject aBodyParentBodyIndex; // long (wiring) — write-back parent body index; -1 = none
-    static MObject
-        aBodyResetAnchorIndex; // long (wiring) — kinematic anchor for scrub-back reset; -1 = none
+    static MObject aBodyShapeSize;      // float3 — PMX shape_size verbatim
+    static MObject aBodyRestTranslate;  // float3 — PMX shape_position (rest, world space)
+    static MObject aBodyRestRotate;     // float3 — PMX shape_rotation (degrees)
+    static MObject aBodyMass;           // double — PMX mass
+    static MObject aBodyLinearDamping;  // double — PMX move_attenuation
+    static MObject aBodyAngularDamping; // double — PMX rotation_damping
+    static MObject aBodyRestitution;    // double — PMX repulsion
+    static MObject aBodyFriction;       // double — PMX friction_force
+    static MObject aBodyPhysicsMode;    // enum — PMX physics_mode (PhysicsMode)
+    static MObject aBodyJoint;          // message child — the body's related joint (its
+                                        // bone); the node resolves the bone index + the
+                                        // hierarchy from it + the joint DAG.  Unconnected
+                                        // = a static collider (no write-back).
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
@@ -213,7 +217,7 @@ class PhysicsNode : public MPxLocatorNode
     std::size_t mWriteBackOffsetCount = 0;
 
     // Helpers
-    static std::vector<mmd::core::Simulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
+    std::vector<mmd::core::Simulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
     static std::vector<mmd::core::Simulation::JointDefinition> readJointData(MDataBlock& dataBlock);
     static mmd::core::Double3 readGravity(MDataBlock& dataBlock);
     static std::size_t arrayElementCount(MDataBlock& dataBlock, const MObject& attr);

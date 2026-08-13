@@ -8,9 +8,11 @@ the ``{model}_Physics`` group, one solver per model, gravity, and the
 rigid body (data + bone binding for FOLLOW_BONE bodies via the
 kinematic-anchor input) and one per PMX joint (rigid-body constraint data).
 The solver is driven by ``time1.outTime`` and the solved pose is written
-STRAIGHT into the related joints (``boneLocal = K · bodyLocal ·
-B_parent⁻¹ · M_parent⁻¹``) — there is no separate finalize step; import
-wires everything in one pass.  The headless stepping helper
+STRAIGHT into the related joints — the node computes a solved bone world per
+bone (``bodyLocal · K``) and divides by the parent bone's solved world via
+the bone hierarchy (resolved internally from each body's ``bodyJoint``
+message + the joint DAG); there is no separate finalize step; import wires
+everything in one pass.  The headless stepping helper
 (:func:`step_physics`) remains for batch use.
 
 The node is an ``MPxLocatorNode`` (a locator shape) that owns a Maya-free
@@ -40,12 +42,6 @@ from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
 
-
-# ===========================================================================
-# Physics binding — one native pmxPhysicsNode (embedded Bullet) per model
-# ===========================================================================
-
-_NODE_TYPE = "pmxPhysicsNode"
 
 # PMX shape -> pmxRigidBody -shape name (the native command owns the enum).
 # Keyed by enum VALUE (int), not the enum class: mayapy can load mmd.core twice
@@ -115,9 +111,9 @@ def _create_physics_solver(
     """
     solver_name = name_registry.get_physics_solver_name()
     if parent_group:
-        node = cmds.createNode(_NODE_TYPE, name=solver_name, parent=parent_group)
+        node = cmds.createNode("pmxPhysicsNode", name=solver_name, parent=parent_group)
     else:
-        node = cmds.createNode(_NODE_TYPE, name=solver_name)
+        node = cmds.createNode("pmxPhysicsNode", name=solver_name)
     # Time-driven: the evaluation manager steps the solver every frame (the
     # same path as a parentConstraint, so it works under Cached Playback — the
     # node also declares itself non-cacheable via getCacheSetup).
@@ -154,8 +150,9 @@ def _populate_rigid_bodies(
     matches the PMX rigid-body index that the constraint command references.
     FOLLOW_BONE bodies get their kinematic-anchor input here; dynamic bodies
     with a related joint get their write-back K offset (``bodyWriteBackOffset``
-    = jointRestWorld * bodyRestWorld^-1) baked by the command.  The solver is
-    wired and time-driven later (see :func:`_wire_dynamic_write_back`).
+    = jointRestWorld * bodyRestWorld^-1) baked by the command and their
+    outTranslate/outRotate connected into the related joint at creation (the
+    command always wires a dynamic body on a bone).
 
     Returns the number of bodies successfully appended — the caller must
     compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every
@@ -212,8 +209,8 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
     ``rigid_body_index_b``), so this MUST run after ``_populate_rigid_bodies``
     (the command validates the referenced body indices against the node's
     current body count).  Joints are appended in PMX order so the joint index
-    matches the PMX joint index.  Data only — the solver is wired and stepped
-    later (see :func:`_wire_dynamic_write_back`).
+    matches the PMX joint index.  Data only — the solver is time-driven and
+    each body's write-back outputs are wired at creation by the command.
     """
     for jt_idx, joint in enumerate(pmx_data.joints):
         try:
@@ -262,161 +259,17 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Direct write-back — the node writes the solved JOINT-LOCAL pose straight
-# into the related joints (no guide transforms, no -finalize step).
-#   boneLocal = K * bodyLocal * B_parent^-1 * M_parent^-1
-#   K        = jointRestWorld * bodyRestWorld^-1              (bodyWriteBackOffset)
-#   M_parent = K[parentBodyIndex]                             (the same constant as the
-#               parent body's K — no separate parent-offset array)
-#
-# K is baked by the native pmxRigidBody -create command (it knows the related
-# joint and the body rest); this module only resolves the parent body index,
-# the scrub-back reset anchors and the output connections.  Bodies whose
-# parent bone has no rigid body are left undriven.
+# Write-back — the native pmxRigidBody command owns ALL per-body wiring: it
+# connects the body's related joint as a MESSAGE (bodies[i].bodyJoint),
+# bakes K (bodyWriteBackOffset) and ALWAYS connects outTranslate/outRotate
+# STRAIGHT into the related joint for dynamic bodies (PHYSICS_BONE is
+# rotation-only) — every body is created on a bone, so the connection is a
+# deterministic consequence of the bone.  The node computes the joint-local
+# pose internally via the bone hierarchy (resolved from the message + the
+# joint DAG); a body whose parent bone has no rigid body is still connected
+# (the node falls back to the raw solved world pose for it — rare in
+# well-formed chains).  No post-pass wiring remains in this module.
 # ---------------------------------------------------------------------------
-
-
-def _compute_reset_anchor_map(
-    pmx_data: PmxModel, kinematic_order: list[int]
-) -> dict[int, int]:
-    """Map each dynamic body to the anchor that drives its scrub-back reset.
-
-    When time is scrubbed backwards the C++ node teleports dynamic bodies to
-    their rest pose transformed by the CURRENT skeleton pose.  For each dynamic
-    body we use the anchor of its NEAREST KINEMATIC ANCESTOR bone (walking the
-    PMX parent chain), so hair uses the head anchor, skirt uses the pelvis
-    anchor, etc.
-
-    Returns ``{rb_index: anchor_index}`` (anchor_index = position in
-    ``kinematic_order``); dynamic bodies without a kinematic ancestor are
-    omitted (no reset).
-    """
-    follow_bone = PhysicsMode.FOLLOW_BONE.value
-    bone_to_anchor: dict[int, int] = {}
-    for a, rb_idx in enumerate(kinematic_order):
-        rb = pmx_data.rigid_bodies[rb_idx]
-        if rb.related_bone_index >= 0:
-            bone_to_anchor.setdefault(rb.related_bone_index, a)
-
-    def _find_anchor(bone_idx: int) -> int:
-        seen: set[int] = set()
-        while bone_idx >= 0 and bone_idx not in seen:
-            seen.add(bone_idx)
-            if bone_idx in bone_to_anchor:
-                return bone_to_anchor[bone_idx]
-            if bone_idx >= len(pmx_data.bones):
-                return -1
-            bone_idx = pmx_data.bones[bone_idx].parentIndex
-        return -1
-
-    result: dict[int, int] = {}
-    for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
-        if rb.physics_mode.value == follow_bone or rb.related_bone_index < 0:
-            continue
-        anchor = _find_anchor(rb.related_bone_index)
-        if anchor >= 0:
-            result[rb_idx] = anchor
-    return result
-
-
-def _wire_dynamic_write_back(
-    node: str,
-    pmx_data: PmxModel,
-    joint_names: dict[int, str],
-    kinematic_order: list[int],
-) -> None:
-    """Drive the related JOINTS from the node's solved pose.
-
-    Called AFTER every body and joint exists (no -finalize step).  The body
-    data and the write-back K offsets (``bodyWriteBackOffset`` =
-    jointRestWorld * bodyRestWorld^-1) were already baked by ``pmxRigidBody``;
-    here we only resolve the per-body wiring that needs the WHOLE model:
-
-    * ``bodies[i].bodyParentBodyIndex`` — the parent bone's rigid body, so the
-      node derives the parent joint's world from the PARENT BODY's solved
-      Bullet transform (M_parent = K[parentBodyIndex]) with no DG dependency
-      on node-driven parent joints (that was the feedback cycle that exploded
-      the sim).  Bodies whose parent bone has no rigid body are left UNDRIVEN;
-    * ``bodies[i].bodyResetAnchorIndex`` for scrub-back rewind (nearest
-      kinematic ancestor);
-    * ``outTranslate``/``outRotate`` -> joint.translate/rotate — LAST, so the
-      first evaluation (triggered by these connections) sees complete data.
-      PHYSICS_BONE (mode 2) is rotation-only.
-    """
-    follow_bone = PhysicsMode.FOLLOW_BONE.value
-    physics_bone = PhysicsMode.PHYSICS_BONE.value
-
-    # PMX bone index -> rigid-body index (only bodies with a related joint can
-    # be referenced as a write-back parent).
-    bone_of_body: dict[int, int] = {}
-    for rb_idx, body in enumerate(pmx_data.rigid_bodies):
-        if body.related_bone_index >= 0 and body.related_bone_index in joint_names:
-            bone_of_body.setdefault(body.related_bone_index, rb_idx)
-
-    # Parent body resolution (needs the WHOLE model: the parent body may be
-    # created later in the array).  A body whose parent bone has no rigid body
-    # (parent_rb = -1) is left UNDRIVEN — the node cannot write a joint-local
-    # pose for it.
-    parent_body: dict[int, int] = {}
-    for rb_idx, body in enumerate(pmx_data.rigid_bodies):
-        if body.physics_mode.value == follow_bone:
-            continue
-        bone_idx = body.related_bone_index
-        if bone_idx < 0 or bone_idx not in joint_names:
-            continue  # no related joint -> static collider, no write-back
-        parent_rb = -1
-        if (
-            0 <= bone_idx < len(pmx_data.bones)
-            and pmx_data.bones[bone_idx].parentIndex >= 0
-        ):
-            parent_rb = bone_of_body.get(pmx_data.bones[bone_idx].parentIndex, -1)
-        parent_body[rb_idx] = parent_rb
-        cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyParentBodyIndex", int(parent_rb))
-
-    # Scrub-back reset anchors (dynamic body -> nearest kinematic ancestor).
-    for rb_idx, anchor_idx in _compute_reset_anchor_map(
-        pmx_data, kinematic_order
-    ).items():
-        cmds.setAttr(f"{node}.bodies[{rb_idx}].bodyResetAnchorIndex", int(anchor_idx))
-
-    # Solved pose -> joints LAST (triggers the first evaluation, so every
-    # input above is already in place).  Only bodies with a parent body are
-    # driven — the node derives the parent inverse from the PARENT BODY's
-    # solved transform, so joints without a parent body stay at their
-    # animated pose.
-    for rb_idx, body in enumerate(pmx_data.rigid_bodies):
-        if body.physics_mode.value == follow_bone:
-            continue
-        bone_idx = body.related_bone_index
-        if bone_idx < 0 or bone_idx not in joint_names:
-            continue
-        if parent_body.get(rb_idx, -1) < 0:
-            continue  # no parent body -> node cannot write back; leave free
-        jpath = joint_names[bone_idx]
-        try:
-            # Compound-to-compound connections: the node's outTranslate[i] /
-            # outRotate[i] children are UNIT-TYPED (kDistance/kAngle, like
-            # transform.translate/rotate), so Maya connects them DIRECTLY to
-            # joint.translate/rotate with NO auto-inserted unitConversion.
-            if body.physics_mode.value != physics_bone:
-                cmds.connectAttr(
-                    f"{node}.outTranslate[{rb_idx}]",
-                    f"{jpath}.translate",
-                    force=True,
-                )
-            cmds.connectAttr(
-                f"{node}.outRotate[{rb_idx}]",
-                f"{jpath}.rotate",
-                force=True,
-            )
-        except Exception as e:
-            log.warning(
-                "Could not connect dynamic output %d (%s): %s", rb_idx, jpath, e
-            )
-
-    # No `caching` override here: the node's getCacheSetup() already declares
-    # it non-cacheable (it is STATEFUL — caching its outputs would freeze the
-    # sim), so the attribute can stay at its default.
 
 
 def step_physics(node: Optional[str]) -> None:
@@ -456,9 +309,12 @@ def create_physics_from_pmx_data(
     order) and the ``joints`` array through the native
     ``pmxRigidBodyConstraint`` command (one joint per PMX rigid-body
     constraint, in PMX order).  The solver is driven by ``time1.outTime``
-    and the solved pose is written STRAIGHT into the related joints
-    (``boneLocal = K · bodyLocal · B_parent⁻¹ · M_parent⁻¹``) — there is no
-    separate finalize step; import wires everything in one pass.
+    and the solved pose is written STRAIGHT into the related joints — the
+    node computes a solved bone world per bone (``bodyLocal · K``) and
+    divides by the parent bone's solved world via the bone hierarchy
+    (resolved internally from each body's ``bodyJoint`` message + the joint
+    DAG) — there is no separate finalize step; import wires everything in
+    one pass.
 
     Args:
         pmx_data:            Parsed PMX model (rigid bodies + joints).
@@ -485,6 +341,11 @@ def create_physics_from_pmx_data(
         )
         return None
     joint_names = _joint_names_for(joints)
+
+    # Each body's related joint is connected as a MESSAGE by the native
+    # pmxRigidBody command (bodies[i].bodyJoint -> joint.message); the node
+    # resolves the bone index and the hierarchy from it + the joint DAG — no
+    # dump or wiring needed here.
     created = _populate_rigid_bodies(node, pmx_data, joint_names)
     # A body that failed to create shifts every later PMX body index, which
     # would make the constraint (and future write-back) references point at
@@ -499,13 +360,4 @@ def create_physics_from_pmx_data(
         )
     # Constraints reference bodies by index, so they come AFTER every body.
     _populate_rigid_body_constraints(node, pmx_data)
-
-    # Write-back — AFTER every body and joint exists, so the first
-    # evaluation (triggered by the output connections) sees complete data.
-    kinematic_order = [
-        rb_idx
-        for rb_idx, b in enumerate(pmx_data.rigid_bodies)
-        if b.physics_mode.value == PhysicsMode.FOLLOW_BONE.value
-    ]
-    _wire_dynamic_write_back(node, pmx_data, joint_names, kinematic_order)
     return node
