@@ -64,7 +64,7 @@ def _create_rigid_body_solver(
     """Create the ``pmxRigidBodyNode`` solver (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
-    Simulation) and will draw its own guide visualization through a C++ draw
+    RigidBodySimulation) and will draw its own guide visualization through a C++ draw
     override (planned).
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver

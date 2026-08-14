@@ -7,7 +7,7 @@
 
 add_executable(mmd_core_tests
     test_physics_math.cpp
-    test_simulation.cpp
+    test_rigid_body_simulation.cpp
     test_bullet_bridge.cpp
 )
 target_link_libraries(mmd_core_tests PRIVATE

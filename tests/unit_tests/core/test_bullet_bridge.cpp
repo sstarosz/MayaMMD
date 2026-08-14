@@ -6,7 +6,7 @@
  * Unit tests for the Bullet-facing conversions in
  * mmd/core/bullet_bridge.hpp.  This is the ONE core header that exposes
  * Bullet types, so this file (and its target) needs Bullet — unlike
- * test_physics_math.cpp / test_simulation.cpp, which stay Bullet-free.
+ * test_physics_math.cpp / test_rigid_body_simulation.cpp, which stay Bullet-free.
  */
 
 #include <catch2/catch_approx.hpp>

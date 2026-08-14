@@ -50,7 +50,7 @@ from tests.integration.test_helpers import (
 COLLIDER_BOX = 1
 COLLIDER_SPHERE = 2
 COLLIDER_CAPSULE = 3
-# PhysicsMode field values (mmd::core::Simulation::PhysicsMode).
+# PhysicsMode field values (mmd::core::RigidBodySimulation::PhysicsMode).
 MODE_FOLLOW_BONE = 0
 MODE_PHYSICS = 1
 MODE_PHYSICS_BONE = 2

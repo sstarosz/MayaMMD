@@ -44,7 +44,7 @@
 #include <string>
 
 using mmd::core::Double3;
-using mmd::core::Simulation;
+using mmd::core::RigidBodySimulation;
 
 namespace
 {
@@ -254,17 +254,17 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     }
 
     const MString pm = physicsMode.toLowerCase();
-    // The bodyPhysicsMode attribute stores mmd::core::Simulation::PhysicsMode
+    // The bodyPhysicsMode attribute stores mmd::core::RigidBodySimulation::PhysicsMode
     // values directly (the node casts the attribute value back to the engine
     // enum) — there is deliberately NO node-side enum.
-    Simulation::PhysicsMode physicsModeEnum = Simulation::PhysicsMode::ePhysics;
+    RigidBodySimulation::PhysicsMode physicsModeEnum = RigidBodySimulation::PhysicsMode::ePhysics;
     if (pm == "followbone")
     {
-        physicsModeEnum = Simulation::PhysicsMode::eFollowBone;
+        physicsModeEnum = RigidBodySimulation::PhysicsMode::eFollowBone;
     }
     else if (pm == "physicsbone")
     {
-        physicsModeEnum = Simulation::PhysicsMode::ePhysicsBone;
+        physicsModeEnum = RigidBodySimulation::PhysicsMode::ePhysicsBone;
     }
     else if (pm != "physics")
     {
@@ -272,7 +272,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                               "' — expected followBone, physics or physicsBone");
         return MS::kFailure;
     }
-    const bool kinematic = (physicsModeEnum == Simulation::PhysicsMode::eFollowBone);
+    const bool kinematic = (physicsModeEnum == RigidBodySimulation::PhysicsMode::eFollowBone);
 
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
@@ -413,7 +413,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         // A later body on the same bone replaces the source (last wins; all
         // bodies on a bone produce the same bone-world pose, so the joint's
         // value is unaffected).
-        if (physicsModeEnum != Simulation::PhysicsMode::ePhysicsBone)
+        if (physicsModeEnum != RigidBodySimulation::PhysicsMode::ePhysicsBone)
         {
             if (mmd::maya::connectOrReplace(outT, jointFn.findPlug("translate", true, &plugStat)) !=
                 MS::kSuccess)

@@ -4,12 +4,12 @@
  * rigid_body_node.cpp
  *
  * RigidBodyNode — native rigid-body physics node.  An MPxLocatorNode that owns
- * a Maya-free Bullet world (mmd::core::Simulation) and advances it in
+ * a Maya-free Bullet world (mmd::core::RigidBodySimulation) and advances it in
  * compute() whenever `time1.outTime` changes (the same evaluation path as a
  * parentConstraint, so it runs under Cached Playback).
  *
  * The node is an adapter: it reads the PMX body/joint/gravity attributes into
- * a Simulation::Definition, rebuilds the world when those inputs change or
+ * a RigidBodySimulation::Definition, rebuilds the world when those inputs change or
  * time is scrubbed backwards, steps it when time advances or a kinematic
  * anchor moves, and writes each dynamic body's solved local pose to the
  * outTranslate/outRotate outputs.
@@ -62,15 +62,15 @@ using mmd::core::Double3;
 using mmd::core::Double4;
 using mmd::core::Matrix4;
 using mmd::core::shapeSizeFromBodyDefinition;
-using mmd::core::Simulation;
+using mmd::core::RigidBodySimulation;
 
 // ===========================================================================
 // Constants
 // ===========================================================================
 const MTypeId RigidBodyNode::kTypeId(0x0011C105); // unique Maya node type id for pmxRigidBodyNode
 
-// Simulation constants + joint-type mapping moved into the Maya-free engine
-// (mmd_simulation.cpp) — the node only builds a Definition, steps the sim and
+// RigidBodySimulation constants + joint-type mapping moved into the Maya-free engine
+// (rigid_body_simulation.cpp) — the node only builds a Definition, steps the sim and
 // reads solved poses.
 
 // ===========================================================================
@@ -241,27 +241,27 @@ MMatrix jointRestWorldMatrix(const MDagPath& jointPath, std::map<int, MMatrix>& 
 // to the engine's PMX-aligned enum (eSphere=0..eCapsule=2).  The attribute
 // values are stored in scenes, so they cannot change; the engine enum matches
 // the PMX ShapeType byte instead — casting would silently swap sphere/capsule.
-Simulation::ColliderType colliderToEngine(short v)
+RigidBodySimulation::ColliderType colliderToEngine(short v)
 {
     switch (v)
     {
     case RigidBodyNode::kColliderBox:
-        return Simulation::ColliderType::eBox;
+        return RigidBodySimulation::ColliderType::eBox;
     case RigidBodyNode::kColliderSphere:
-        return Simulation::ColliderType::eSphere;
+        return RigidBodySimulation::ColliderType::eSphere;
     default:
-        return Simulation::ColliderType::eCapsule; // kColliderCapsule
+        return RigidBodySimulation::ColliderType::eCapsule; // kColliderCapsule
     }
 }
 
 // Inverse of colliderToEngine — engine enum -> node attribute enum.
-RigidBodyNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
+RigidBodyNode::ColliderType colliderFromEngine(RigidBodySimulation::ColliderType v)
 {
     switch (v)
     {
-    case Simulation::ColliderType::eSphere:
+    case RigidBodySimulation::ColliderType::eSphere:
         return RigidBodyNode::kColliderSphere;
-    case Simulation::ColliderType::eBox:
+    case RigidBodySimulation::ColliderType::eBox:
         return RigidBodyNode::kColliderBox;
     default:
         return RigidBodyNode::kColliderCapsule; // eCapsule
@@ -287,7 +287,7 @@ void readDrawBodyFromPlug(const MPlug& el, RigidBodyNode::DrawBody& db)
     db.shapeSize[1] = s[1];
     db.shapeSize[2] = s[2];
     db.kinematic = (el.child(RigidBodyNode::aBodyPhysicsMode).asShort() ==
-                    static_cast<short>(Simulation::PhysicsMode::eFollowBone));
+                    static_cast<short>(RigidBodySimulation::PhysicsMode::eFollowBone));
     // group id straight from the raw PMX id (the Bullet group bit is derived
     // from it in buildWorld); clamp legacy scenes where it is -1.
     db.groupId = el.child(RigidBodyNode::aBodyGroupId).asShort();
@@ -315,7 +315,7 @@ RigidBodyNode::RigidBodyNode() = default;
 
 // Defaulted: the node is destroyed polymorphically through its MPxNode base
 // (Maya deletes it via the base pointer).  The default teardown is exactly
-// what we want — mSim (Simulation) tears down the Bullet world in its own
+// what we want — mSim (RigidBodySimulation) tears down the Bullet world in its own
 // PIMPL destructor, mBodies/mJoints are plain vectors, and the scalars are
 // trivial.  The only explicit teardown is destroyWorld() below, used to reset
 // to the unbuilt state for a rebuild.
@@ -455,17 +455,17 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
 
     // PMX physics mode — enum: followBone / physics / physicsBone (field
-    // values match Simulation::PhysicsMode).  Field names mirror the
+    // values match RigidBodySimulation::PhysicsMode).  Field names mirror the
     // enumerators.  The node writes the joint-local pose for mode 1/2 (mode 2
     // = rotation only — the command wires only outRotate for those bodies).
     {
         MFnEnumAttribute eAttr;
         aBodyPhysicsMode = eAttr.create(
-            "bodyPhysicsMode", "bpm", static_cast<short>(Simulation::PhysicsMode::ePhysics), &stat);
+            "bodyPhysicsMode", "bpm", static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysics), &stat);
         MMD_CHECK_MSTATUS(stat);
-        eAttr.addField("FollowBone", static_cast<short>(Simulation::PhysicsMode::eFollowBone));
-        eAttr.addField("Physics", static_cast<short>(Simulation::PhysicsMode::ePhysics));
-        eAttr.addField("PhysicsBone", static_cast<short>(Simulation::PhysicsMode::ePhysicsBone));
+        eAttr.addField("FollowBone", static_cast<short>(RigidBodySimulation::PhysicsMode::eFollowBone));
+        eAttr.addField("Physics", static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysics));
+        eAttr.addField("PhysicsBone", static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysicsBone));
         eAttr.setStorable(true);
         eAttr.setKeyable(false);
     }
@@ -701,9 +701,9 @@ MStatus RigidBodyNode::initialize()
 // ===========================================================================
 // Data reading
 // ===========================================================================
-std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& dataBlock)
+std::vector<RigidBodySimulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& dataBlock)
 {
-    std::vector<Simulation::BodyDefinition> out;
+    std::vector<RigidBodySimulation::BodyDefinition> out;
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
     const unsigned int bodyCount = bodiesHandle.elementCount();
     out.reserve(bodyCount);
@@ -717,7 +717,7 @@ std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& 
     {
         bodiesHandle.jumpToArrayElement(i);
         MDataHandle bodyHandle = bodiesHandle.inputValue();
-        Simulation::BodyDefinition b;
+        RigidBodySimulation::BodyDefinition b;
         readDouble3(bodyHandle, aBodyRestTranslate, b.restPos);
         readDouble3(bodyHandle, aBodyRestRotate, b.restRot);
         b.mass = bodyHandle.child(aBodyMass).asDouble();
@@ -737,7 +737,7 @@ std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& 
         // Keep the full PMX physics mode (0/1/2) — kinematic is a derived
         // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
         b.physicsMode =
-            static_cast<Simulation::PhysicsMode>(bodyHandle.child(aBodyPhysicsMode).asShort());
+            static_cast<RigidBodySimulation::PhysicsMode>(bodyHandle.child(aBodyPhysicsMode).asShort());
         b.enabled = bodyHandle.child(aBodyEnabled).asBool();
 
         // Related joint from the bodyJoint MESSAGE (bodies[i].bodyJoint ->
@@ -770,7 +770,7 @@ std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& 
     {
         std::map<int, int> boneToAnchor; // bone -> kinematic-order index (first body wins)
         int kinOrder = 0;
-        for (const Simulation::BodyDefinition& b : out)
+        for (const RigidBodySimulation::BodyDefinition& b : out)
         {
             if (!b.isKinematic() || !b.enabled)
                 continue;
@@ -786,7 +786,7 @@ std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& 
         }
         for (size_t i = 0; i < out.size(); ++i)
         {
-            Simulation::BodyDefinition& b = out[i];
+            RigidBodySimulation::BodyDefinition& b = out[i];
             if (b.isKinematic() || !b.enabled || b.relatedBoneIndex < 0)
                 continue;
             MDagPath jp = jointPaths[i];
@@ -811,7 +811,7 @@ std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& 
     return out;
 }
 
-void RigidBodyNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDefinition>& bodies)
+void RigidBodyNode::deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& bodies)
 {
     // Derive K = jointRestWorld * bodyRestWorld^-1 ONLY when the world is
     // (re)built.  The inputs are static per config — the joints' pmxRest*/
@@ -842,9 +842,9 @@ void RigidBodyNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDef
     }
 }
 
-std::vector<Simulation::JointDefinition> RigidBodyNode::readJointData(MDataBlock& dataBlock)
+std::vector<RigidBodySimulation::JointDefinition> RigidBodyNode::readJointData(MDataBlock& dataBlock)
 {
-    std::vector<Simulation::JointDefinition> out;
+    std::vector<RigidBodySimulation::JointDefinition> out;
     MArrayDataHandle jointsHandle = dataBlock.inputArrayValue(aJoints);
     const unsigned int jointCount = jointsHandle.elementCount();
     out.reserve(jointCount);
@@ -852,7 +852,7 @@ std::vector<Simulation::JointDefinition> RigidBodyNode::readJointData(MDataBlock
     {
         jointsHandle.jumpToArrayElement(i);
         MDataHandle jointHandle = jointsHandle.inputValue();
-        Simulation::JointDefinition j;
+        RigidBodySimulation::JointDefinition j;
         j.bodyA = jointHandle.child(aJointBodyA).asInt();
         j.bodyB = jointHandle.child(aJointBodyB).asInt();
         j.type = jointHandle.child(aJointType).asInt();
@@ -873,8 +873,8 @@ std::vector<Simulation::JointDefinition> RigidBodyNode::readJointData(MDataBlock
 // World construction
 // ===========================================================================
 bool RigidBodyNode::buildWorld(const Double3& gravity,
-                               const std::vector<Simulation::BodyDefinition>& bodies,
-                               const std::vector<Simulation::JointDefinition>& joints)
+                               const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                               const std::vector<RigidBodySimulation::JointDefinition>& joints)
 {
     // An EMPTY node (no bodies) is a valid no-op — a freshly created node
     // before the commands populate the bodies array.  The callers skip
@@ -883,7 +883,7 @@ bool RigidBodyNode::buildWorld(const Double3& gravity,
         return true;
     // The engine owns every Bullet object — the node only hands it the PMX
     // definition (gravity + bodies + joints) read from the attributes.
-    Simulation::Definition definition;
+    RigidBodySimulation::Definition definition;
     definition.gravity = gravity;
     definition.bodies = bodies;
     definition.joints = joints;
@@ -908,7 +908,7 @@ bool RigidBodyNode::updateKinematicAnchors(MDataBlock& dataBlock)
     int anchorIndex = 0;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        const Simulation::BodyDefinition& b = mBodies[i];
+        const RigidBodySimulation::BodyDefinition& b = mBodies[i];
         if (!b.isKinematic() || !b.enabled)
             continue;
         bodiesHandle.jumpToArrayElement((unsigned int) i);
@@ -919,7 +919,7 @@ bool RigidBodyNode::updateKinematicAnchors(MDataBlock& dataBlock)
         {
             w = mK[i].inverse() * w;
         }
-        Simulation::Pose pose;
+        RigidBodySimulation::Pose pose;
         const btTransform t = mayaMatrixToBtTransform(w);
         storePose(pose.pos, pose.quat, t);
         if (mSim.setKinematicPose(anchorIndex, pose))
@@ -982,7 +982,7 @@ bool RigidBodyNode::writeOutputs(MDataBlock& dataBlock)
     std::map<int, btTransform> solvedBoneWorld;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        const Simulation::BodyDefinition& bd = mBodies[i];
+        const RigidBodySimulation::BodyDefinition& bd = mBodies[i];
         if (!bd.enabled || bd.relatedBoneIndex < 0)
             continue;
         if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
@@ -990,7 +990,7 @@ bool RigidBodyNode::writeOutputs(MDataBlock& dataBlock)
         if (i >= mK.size())
             continue; // defensive — K is derived for every body at build
         const btTransform kb = mayaMatrixToBtTransform(mK[i]);
-        const Simulation::Pose wp = mSim.bodyPose(i);
+        const RigidBodySimulation::Pose wp = mSim.bodyPose(i);
         solvedBoneWorld.emplace(bd.relatedBoneIndex, poseToTransform(wp.pos, wp.quat) * kb);
     }
 
@@ -1000,11 +1000,11 @@ bool RigidBodyNode::writeOutputs(MDataBlock& dataBlock)
     // chains, where every bone in a physics chain has a body).
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        const Simulation::BodyDefinition& bd = mBodies[i];
+        const RigidBodySimulation::BodyDefinition& bd = mBodies[i];
         if (bd.isKinematic() || !bd.enabled)
             continue;
 
-        const Simulation::Pose wp = mSim.bodyPose(i);
+        const RigidBodySimulation::Pose wp = mSim.bodyPose(i);
         btTransform boneLocal = poseToTransform(wp.pos, wp.quat);
 
         const int bone = bd.relatedBoneIndex;
@@ -1036,7 +1036,7 @@ bool RigidBodyNode::writeOutputs(MDataBlock& dataBlock)
         quatToEulerXYZDegrees(Double4(bq.x(), bq.y(), bq.z(), bq.w()), rot);
 
         // PHYSICS writes translate+rotate; PHYSICS_BONE is rotation-only.
-        if (bd.physicsMode != Simulation::PhysicsMode::ePhysicsBone)
+        if (bd.physicsMode != RigidBodySimulation::PhysicsMode::ePhysicsBone)
         {
             MDataHandle tEl = tBuilder.addElement((unsigned int) i);
             tEl.child(aOutTranslateX).setMDistance(MDistance(o.x()));
@@ -1089,7 +1089,7 @@ void RigidBodyNode::collectDrawData(std::vector<DrawBody>& out) const
     out.reserve(mBodies.size());
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        const Simulation::BodyDefinition& b = mBodies[i];
+        const RigidBodySimulation::BodyDefinition& b = mBodies[i];
         if (!b.enabled)
             continue;
         DrawBody db;
@@ -1103,7 +1103,7 @@ void RigidBodyNode::collectDrawData(std::vector<DrawBody>& out) const
         db.groupId = b.groupId >= 0 ? b.groupId : 0;
         if (mSim.initialized())
         {
-            const Simulation::Pose p = mSim.bodyPose(i);
+            const RigidBodySimulation::Pose p = mSim.bodyPose(i);
             db.pos[0] = p.pos.x;
             db.pos[1] = p.pos.y;
             db.pos[2] = p.pos.z;
@@ -1131,12 +1131,12 @@ MBoundingBox RigidBodyNode::boundingBox() const
 {
     MBoundingBox box;
     bool any = false;
-    for (const Simulation::BodyDefinition& b : mBodies)
+    for (const RigidBodySimulation::BodyDefinition& b : mBodies)
     {
         double r = 0.0;
-        if (b.colliderType == Simulation::ColliderType::eSphere)
+        if (b.colliderType == RigidBodySimulation::ColliderType::eSphere)
             r = b.radius;
-        else if (b.colliderType == Simulation::ColliderType::eBox)
+        else if (b.colliderType == RigidBodySimulation::ColliderType::eBox)
             r = std::max({b.extents.x, b.extents.y, b.extents.z});
         else
             r = b.radius + (b.length * 0.5);
@@ -1162,8 +1162,8 @@ Double3 RigidBodyNode::readGravity(MDataBlock& dataBlock)
     return Double3(g[0], g[1], g[2]);
 }
 
-bool RigidBodyNode::configChanged(const std::vector<Simulation::BodyDefinition>& bodies,
-                                  const std::vector<Simulation::JointDefinition>& joints,
+bool RigidBodyNode::configChanged(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                                  const std::vector<RigidBodySimulation::JointDefinition>& joints,
                                   const Double3& gravity) const
 {
     // The anchor matrix VALUES are per-frame (bodies[i].bodyAnchorWorld, read
@@ -1176,8 +1176,8 @@ bool RigidBodyNode::configChanged(const std::vector<Simulation::BodyDefinition>&
            gravity.y != mGravity.y || gravity.z != mGravity.z;
 }
 
-void RigidBodyNode::storeConfig(const std::vector<Simulation::BodyDefinition>& bodies,
-                                const std::vector<Simulation::JointDefinition>& joints,
+void RigidBodyNode::storeConfig(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                                const std::vector<RigidBodySimulation::JointDefinition>& joints,
                                 const Double3& gravity)
 {
     mBodies = bodies;
@@ -1204,8 +1204,8 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     // write-back offsets K are DERIVED only on rebuild frames (they are
     // static per config — deriving them per evaluation was a DAG walk + ~9
     // plug reads per ancestor per body per frame).
-    const std::vector<Simulation::BodyDefinition> bodies = readBodyData(dataBlock);
-    const std::vector<Simulation::JointDefinition> joints = readJointData(dataBlock);
+    const std::vector<RigidBodySimulation::BodyDefinition> bodies = readBodyData(dataBlock);
+    const std::vector<RigidBodySimulation::JointDefinition> joints = readJointData(dataBlock);
     const Double3 gravity = readGravity(dataBlock);
 
     // Refresh the kinematic anchors every evaluation (the colliders track
@@ -1256,7 +1256,7 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
         {
             // A bone was dragged at the current frame — one fixed tick so the
             // attached chains follow immediately.
-            mSim.step(Simulation::kFixedDt);
+            mSim.step(RigidBodySimulation::kFixedDt);
         }
     }
 

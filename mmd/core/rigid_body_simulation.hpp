@@ -1,15 +1,15 @@
 /**
- * @file simulation.hpp
+ * @file rigid_body_simulation.hpp
  * @brief Maya-free Bullet physics engine for MMD rigid bodies and joints.
  *
  * DESIGN: everything that actually IS the simulation — the Bullet world,
  * rigid bodies, constraints, collision filtering, kinematic anchors and the
- * scrub-back reset — lives in the private SimulationImpl (PIMPL), so THIS
+ * scrub-back reset — lives in the private RigidBodySimulationImpl (PIMPL), so THIS
  * header is Bullet-free: consumers only see the core value types, and Bullet
  * is an implementation detail (the Bullet-facing math lives in
  * bullet_bridge.hpp).
  * The engine can be unit-tested WITHOUT the Maya SDK and WITHOUT Bullet
- * headers (see tests/unit_tests/core/test_simulation.cpp).  The Maya node
+ * headers (see tests/unit_tests/core/test_rigid_body_simulation.cpp).  The Maya node
  * (mmd/maya/nodes/rigid_body_node.hpp) adapts it: it reads attributes, converts
  * Maya<->Bullet transforms and owns the timeline/state machine.
  *
@@ -32,7 +32,7 @@ namespace mmd::core
 {
 
 /** @brief Simulates a PMX rigid-body world with embedded Bullet. */
-class Simulation
+class RigidBodySimulation
 {
   public:
     /// PMX rigid-body physics mode (PMX PhysicsMode: 0 = follow bone,
@@ -154,15 +154,15 @@ class Simulation
         Double4 quat = Double4(0.0, 0.0, 0.0, 1.0);
     };
 
-    Simulation();
-    ~Simulation();
-    // The Bullet world lives on the heap inside SimulationImpl, so MOVING is
+    RigidBodySimulation();
+    ~RigidBodySimulation();
+    // The Bullet world lives on the heap inside RigidBodySimulationImpl, so MOVING is
     // safe (the unique_ptr transfers ownership without copying the world).
     // Copying is impossible — a Bullet world cannot be copied.
-    Simulation(const Simulation&) = delete;
-    Simulation& operator=(const Simulation&) = delete;
-    Simulation(Simulation&&) noexcept = default;
-    Simulation& operator=(Simulation&&) noexcept = default;
+    RigidBodySimulation(const RigidBodySimulation&) = delete;
+    RigidBodySimulation& operator=(const RigidBodySimulation&) = delete;
+    RigidBodySimulation(RigidBodySimulation&&) noexcept = default;
+    RigidBodySimulation& operator=(RigidBodySimulation&&) noexcept = default;
 
     /// Build the Bullet world from `definition` (calling clear() first).
     /// Returns false when there are no bodies.  An edit requires a fresh
@@ -214,8 +214,8 @@ class Simulation
         Double4 resetOffsetQuat = Double4(0.0, 0.0, 0.0, 1.0);
     };
 
-    struct SimulationImpl;                 // all Bullet state lives here (PIMPL)
-    std::unique_ptr<SimulationImpl> mImpl; // Bullet is an implementation detail
+    struct RigidBodySimulationImpl;                 // all Bullet state lives here (PIMPL)
+    std::unique_ptr<RigidBodySimulationImpl> mImpl; // Bullet is an implementation detail
 };
 
 /// Map a PMX `shape_size` (3 doubles, FULL size — box extents are full, not
@@ -223,17 +223,17 @@ class Simulation
 /// collider type.  The engine stores box extents as HALF-extents (as
 /// btBoxShape expects), so boxes are halved here.  PMX verbatim in,
 /// engine-ready out.
-inline void applyShapeSize(Simulation::BodyDefinition& b, const Double3& size)
+inline void applyShapeSize(RigidBodySimulation::BodyDefinition& b, const Double3& size)
 {
     switch (b.colliderType)
     {
-    case Simulation::ColliderType::eSphere:
+    case RigidBodySimulation::ColliderType::eSphere:
         b.radius = size.x; // sphere uses shape_size[0] as its radius
         break;
-    case Simulation::ColliderType::eBox:
+    case RigidBodySimulation::ColliderType::eBox:
         b.extents = Double3(size.x * 0.5, size.y * 0.5, size.z * 0.5); // FULL -> half
         break;
-    case Simulation::ColliderType::eCapsule:
+    case RigidBodySimulation::ColliderType::eCapsule:
         b.radius = size.x; // capsule: shape_size[0] = radius
         b.length = size.y; //          shape_size[1] = cylinder length
         break;
@@ -243,15 +243,15 @@ inline void applyShapeSize(Simulation::BodyDefinition& b, const Double3& size)
 /// Inverse of applyShapeSize — reconstruct the PMX `shape_size` (FULL size,
 /// box extents doubled) from a BodyDefinition.  Used to build the draw-data
 /// contract (DrawBody.shapeSize) from a solved/rest BodyDefinition.
-inline Double3 shapeSizeFromBodyDefinition(const Simulation::BodyDefinition& b)
+inline Double3 shapeSizeFromBodyDefinition(const RigidBodySimulation::BodyDefinition& b)
 {
     switch (b.colliderType)
     {
-    case Simulation::ColliderType::eSphere:
+    case RigidBodySimulation::ColliderType::eSphere:
         return Double3(b.radius, 0.0, 0.0);
-    case Simulation::ColliderType::eBox:
+    case RigidBodySimulation::ColliderType::eBox:
         return Double3(b.extents.x * 2.0, b.extents.y * 2.0, b.extents.z * 2.0);
-    case Simulation::ColliderType::eCapsule:
+    case RigidBodySimulation::ColliderType::eCapsule:
         return Double3(b.radius, b.length, 0.0);
     }
     return Double3(0.0, 0.0, 0.0);

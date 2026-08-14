@@ -137,7 +137,7 @@ message(STATUS "Maya ${Maya_VERSION} SDK: ${Maya_INCLUDE_DIR} (libs: ${Maya_LIBR
 # Used by the Maya-free core (mmd_core) and the plugin.  Provided by vcpkg
 # (see vcpkg.json, package `bullet3` 3.25) with FLOAT precision — do NOT
 # enable vcpkg's `double-precision` feature, btScalar must stay float to
-# match the consumers in mmd/core/simulation.cpp.
+# match the consumers in mmd/core/rigid_body_simulation.cpp.
 if(NOT CMAKE_TOOLCHAIN_FILE)
     message(FATAL_ERROR
         "No CMake toolchain configured.\n\n"

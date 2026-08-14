@@ -10,10 +10,10 @@
  *
  * PRECISION MODEL: the core's public value types are DOUBLE because the
  * consumer (Maya) is double throughout, and the euler/matrix math must not
- * lose precision.  The Bullet world inside Simulation is FLOAT (btScalar) —
+ * lose precision.  The Bullet world inside RigidBodySimulation is FLOAT (btScalar) —
  * MikuMikuDance itself runs Bullet in float, so float arithmetic is the
  * fidelity reference.  Conversions happen only at the core/Bullet boundary
- * (explicit btScalar() in simulation.cpp; storePose /
+ * (explicit btScalar() in rigid_body_simulation.cpp; storePose /
  * poseToTransform in bullet_bridge.hpp).  Do NOT switch vcpkg's bullet3
  * to double-precision — it would diverge from MMD's behavior.
  */

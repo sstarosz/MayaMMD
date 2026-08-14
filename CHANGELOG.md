@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vcpkg with `VCPKG_ROOT` set is now a build prerequisite (see
   `docs/CPPDevelopment.md`).
 - **Maya-free C++ physics core (`mmd_core`)** — the Bullet-based simulation
-  engine (`simulation.hpp`/`simulation.cpp`, `physics_math.hpp`, `common.hpp`)
+  engine (`rigid_body_simulation.hpp`/`rigid_body_simulation.cpp`, `physics_math.hpp`, `common.hpp`)
   as a static library, covered by Catch2 unit tests (18 cases, no Maya SDK
   required). Internal building block for the upcoming native physics node.
 - **Native rigid-body physics node (`pmxPhysicsNode`)** — the C++
@@ -99,7 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery attribute `pmxPhysicsNode` → `pmxRigidBodyNode`, group
   `{model}_Physics` → `{model}_RigidBodies`, solver `{model}_PhysicsSolver` →
   `{model}_RigidBodySolver`.  C++ files `physics_node.{h,cpp}` →
-  `rigid_body_node.{hpp,cpp}` (class `PhysicsNode` → `RigidBodyNode`).
+  `rigid_body_node.{hpp,cpp}` (class `PhysicsNode` → `RigidBodyNode`).  The
+  Maya-free engine class `Simulation` → `RigidBodySimulation` (files
+  `simulation.{hpp,cpp}` → `rigid_body_simulation.{hpp,cpp}`, PIMPL
+  `SimulationImpl` → `RigidBodySimulationImpl`).
 
 - **`pmxPhysicsNode` schema: per-body anchor input + internally derived K**
   (breaking schema change — re-import required).  The two remaining matrix

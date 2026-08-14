@@ -1,11 +1,11 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * simulation.cpp
+ * rigid_body_simulation.cpp
  *
- * mmd::core::Simulation implementation — see simulation.hpp.  All Bullet
- * state lives in the private Impl (PIMPL), so simulation.hpp stays
- * Bullet-free; the public Simulation methods are thin delegates.
+ * mmd::core::RigidBodySimulation implementation — see rigid_body_simulation.hpp.  All Bullet
+ * state lives in the private Impl (PIMPL), so rigid_body_simulation.hpp stays
+ * Bullet-free; the public RigidBodySimulation methods are thin delegates.
  *
  * The simulation runs in WORLD space (the Bullet world frame); the node
  * supplies and consumes plain poses (pos+quat).  All matrix/unit conversion
@@ -13,7 +13,7 @@
  * the Bullet conversions from bullet_bridge.hpp.
  */
 
-#include "simulation.hpp"
+#include "rigid_body_simulation.hpp"
 #include "bullet_bridge.hpp"
 #include "physics_math.hpp"
 
@@ -38,7 +38,7 @@ constexpr int kJointConeTwist = 3;
 constexpr int kJointSlider = 4;
 constexpr int kJointHinge = 5;
 
-// Simulation stepping constants (see initialize()/step()).
+// RigidBodySimulation stepping constants (see initialize()/step()).
 constexpr int kSolverIterations = 30;         // > Bullet's default 10 — long rigid chains need it
 constexpr int kMaxSubSteps = 8;               // max internal steps per step()
 constexpr double kMaxStepTime = 0.5;          // clamp for huge time jumps (scrub/tab)
@@ -50,7 +50,7 @@ constexpr double kAnchorMoveRotEps = 1e-5;    // column-dot threshold for anchor
 // Shared 6DOF linear/angular limit setup — identical for the SPRING_6DOF
 // (btGeneric6DofSpring2Constraint) and 6DOF (btGeneric6DofConstraint) cases.
 template <typename ConstraintT>
-void applySixDofLimits(ConstraintT& constraint, const mmd::core::Simulation::JointDefinition& j)
+void applySixDofLimits(ConstraintT& constraint, const mmd::core::RigidBodySimulation::JointDefinition& j)
 {
     constraint.setLinearLowerLimit(btVector3(static_cast<btScalar>(j.linearMin.x),
                                              static_cast<btScalar>(j.linearMin.y),
@@ -71,11 +71,11 @@ namespace mmd::core
 {
 
 // =========================================================================
-// SimulationImpl — every Bullet object + the core runtime state (PIMPL).
+// RigidBodySimulationImpl — every Bullet object + the core runtime state (PIMPL).
 //
 // The world does NOT own its dispatcher / broadphase / collision config /
 // solver, and rigid bodies do NOT own their collision shapes —
-// SimulationImpl keeps them alive and tears them down in clear().  The world
+// RigidBodySimulationImpl keeps them alive and tears them down in clear().  The world
 // + its support objects are held BY VALUE in std::optional (no per-object
 // heap allocation) and mWorld is declared LAST so that when members are
 // destroyed (reverse declaration order) the world goes down FIRST, while
@@ -83,7 +83,7 @@ namespace mmd::core
 // what btCollisionWorld's destructor needs (it walks m_collisionObjects and
 // calls destroyProxy() on each live body).
 // =========================================================================
-struct Simulation::SimulationImpl
+struct RigidBodySimulation::RigidBodySimulationImpl
 {
     std::optional<btDefaultCollisionConfiguration> mCollisionConfig;
     std::optional<btCollisionDispatcher> mDispatcher;
@@ -116,7 +116,7 @@ struct Simulation::SimulationImpl
     void createJoint(const JointDefinition& joint);
 };
 
-void Simulation::SimulationImpl::clear()
+void RigidBodySimulation::RigidBodySimulationImpl::clear()
 {
     // CRITICAL teardown order: destroy the WORLD first while every body and
     // constraint is still alive.  btCollisionWorld's destructor iterates
@@ -140,7 +140,7 @@ void Simulation::SimulationImpl::clear()
     mWorldBuilt = false;
 }
 
-bool Simulation::SimulationImpl::initialize(const Definition& definition)
+bool RigidBodySimulation::RigidBodySimulationImpl::initialize(const Definition& definition)
 {
     clear();
     if (definition.bodies.empty())
@@ -175,7 +175,7 @@ bool Simulation::SimulationImpl::initialize(const Definition& definition)
     return true;
 }
 
-void Simulation::SimulationImpl::createWorld(const Double3& gravity)
+void RigidBodySimulation::RigidBodySimulationImpl::createWorld(const Double3& gravity)
 {
     // The world does NOT own the dispatcher / broadphase / collision config /
     // solver — held BY VALUE (std::optional) so nothing here is heap-allocated;
@@ -193,7 +193,7 @@ void Simulation::SimulationImpl::createWorld(const Double3& gravity)
     mWorld->getSolverInfo().m_numIterations = kSolverIterations;
 }
 
-void Simulation::SimulationImpl::createBodies()
+void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
 {
     if (!mWorld)
     {
@@ -325,7 +325,7 @@ void Simulation::SimulationImpl::createBodies()
     }
 }
 
-void Simulation::SimulationImpl::createJoint(const JointDefinition& j)
+void RigidBodySimulation::RigidBodySimulationImpl::createJoint(const JointDefinition& j)
 {
     if (!mWorld)
     {
@@ -432,12 +432,12 @@ void Simulation::SimulationImpl::createJoint(const JointDefinition& j)
     }
 }
 
-bool Simulation::SimulationImpl::initialized() const
+bool RigidBodySimulation::RigidBodySimulationImpl::initialized() const
 {
     return mWorldBuilt;
 }
 
-bool Simulation::SimulationImpl::setKinematicPose(size_t anchorIndex, const Pose& pose)
+bool RigidBodySimulation::RigidBodySimulationImpl::setKinematicPose(size_t anchorIndex, const Pose& pose)
 {
     if (anchorIndex >= mKinematicBodyIndices.size())
     {
@@ -491,7 +491,7 @@ bool Simulation::SimulationImpl::setKinematicPose(size_t anchorIndex, const Pose
     return moved;
 }
 
-void Simulation::SimulationImpl::step(double dt)
+void RigidBodySimulation::RigidBodySimulationImpl::step(double dt)
 {
     if (!mWorld)
     {
@@ -501,7 +501,7 @@ void Simulation::SimulationImpl::step(double dt)
     mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
 }
 
-void Simulation::SimulationImpl::resetDynamicBodies()
+void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
 {
     if (!mWorld)
     {
@@ -548,7 +548,7 @@ void Simulation::SimulationImpl::resetDynamicBodies()
     }
 }
 
-Simulation::Pose Simulation::SimulationImpl::bodyPose(size_t bodyIndex) const
+RigidBodySimulation::Pose RigidBodySimulation::RigidBodySimulationImpl::bodyPose(size_t bodyIndex) const
 {
     Pose p;
     if (mWorld && bodyIndex < mRigidBodies.size() && mRigidBodies[bodyIndex] != nullptr)
@@ -568,43 +568,43 @@ Simulation::Pose Simulation::SimulationImpl::bodyPose(size_t bodyIndex) const
 }
 
 // =========================================================================
-// Simulation — thin PIMPL delegates
+// RigidBodySimulation — thin PIMPL delegates
 // =========================================================================
-Simulation::Simulation() : mImpl(std::make_unique<SimulationImpl>()) {}
+RigidBodySimulation::RigidBodySimulation() : mImpl(std::make_unique<RigidBodySimulationImpl>()) {}
 
-Simulation::~Simulation() = default;
+RigidBodySimulation::~RigidBodySimulation() = default;
 
-bool Simulation::initialize(const Definition& definition)
+bool RigidBodySimulation::initialize(const Definition& definition)
 {
     return mImpl->initialize(definition);
 }
 
-void Simulation::clear()
+void RigidBodySimulation::clear()
 {
     mImpl->clear();
 }
 
-bool Simulation::initialized() const
+bool RigidBodySimulation::initialized() const
 {
     return mImpl->initialized();
 }
 
-bool Simulation::setKinematicPose(size_t anchorIndex, const Pose& pose)
+bool RigidBodySimulation::setKinematicPose(size_t anchorIndex, const Pose& pose)
 {
     return mImpl->setKinematicPose(anchorIndex, pose);
 }
 
-void Simulation::step(double dt)
+void RigidBodySimulation::step(double dt)
 {
     mImpl->step(dt);
 }
 
-void Simulation::resetDynamicBodies()
+void RigidBodySimulation::resetDynamicBodies()
 {
     mImpl->resetDynamicBodies();
 }
 
-Simulation::Pose Simulation::bodyPose(size_t bodyIndex) const
+RigidBodySimulation::Pose RigidBodySimulation::bodyPose(size_t bodyIndex) const
 {
     return mImpl->bodyPose(bodyIndex);
 }

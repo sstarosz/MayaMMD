@@ -11,8 +11,8 @@
  * mayaBullet solver it replaces is a stateful node the evaluation cache does
  * not re-step, which froze dynamic bodies at rest.
  *
- * The node is an adapter over the Maya-free mmd::core::Simulation engine: it
- * reads the scene attributes into a Simulation::Definition, rebuilds the world
+ * The node is an adapter over the Maya-free mmd::core::RigidBodySimulation engine: it
+ * reads the scene attributes into a RigidBodySimulation::Definition, rebuilds the world
  * when those inputs change (or time is scrubbed backwards), steps it when time
  * advances or a kinematic anchor moves, and writes each dynamic body's solved
  * local pose to outTranslate[i]/outRotate[i] (which pmxRigidBody connects
@@ -34,7 +34,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "simulation.hpp"
+#include "rigid_body_simulation.hpp"
 
 // ===========================================================================
 // RigidBodyNode
@@ -51,7 +51,7 @@ class RigidBodyNode : public MPxLocatorNode
     static constexpr const char* kNodeClassify = "drawdb/geometry/pmxRigidBodyNode";
 
     // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
-    // attribute.  The attribute VALUES are mmd::core::Simulation::PhysicsMode
+    // attribute.  The attribute VALUES are mmd::core::RigidBodySimulation::PhysicsMode
     // (eFollowBone=0 / ePhysics=1 / ePhysicsBone=2) so readBodyData can cast
     // directly — there is deliberately NO separate node-side enum (the PMX
     // mode is KEPT on every body, never collapsed to a bool, so follow-bone /
@@ -196,9 +196,9 @@ class RigidBodyNode : public MPxLocatorNode
     // Maya-free Bullet engine + the config it was built with (see
     // configChanged).  The engine owns all Bullet state; this node adapts
     // attributes <-> engine poses and manages the timeline.
-    mmd::core::Simulation mSim;
-    std::vector<mmd::core::Simulation::BodyDefinition> mBodies;
-    std::vector<mmd::core::Simulation::JointDefinition> mJoints;
+    mmd::core::RigidBodySimulation mSim;
+    std::vector<mmd::core::RigidBodySimulation::BodyDefinition> mBodies;
+    std::vector<mmd::core::RigidBodySimulation::JointDefinition> mJoints;
 
     double mLastTime = -1.0;
     MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
@@ -215,24 +215,24 @@ class RigidBodyNode : public MPxLocatorNode
     std::vector<MMatrix> mK; // derived per build; identity for no-joint bodies
 
     // Helpers
-    std::vector<mmd::core::Simulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
+    std::vector<mmd::core::RigidBodySimulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
     // Derive the per-body write-back offsets (K) from the joints' rest data
     // and cache them in mK.  Called only when the world is (re)built — the
     // inputs are static (pmxRest*/jointOrient + body rest pose), so deriving
     // per evaluation would waste a DAG walk per body per frame.
-    void deriveWriteBackOffsets(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies);
-    static std::vector<mmd::core::Simulation::JointDefinition> readJointData(MDataBlock& dataBlock);
+    void deriveWriteBackOffsets(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies);
+    static std::vector<mmd::core::RigidBodySimulation::JointDefinition> readJointData(MDataBlock& dataBlock);
     static mmd::core::Double3 readGravity(MDataBlock& dataBlock);
     bool buildWorld(const mmd::core::Double3& gravity,
-                    const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
-                    const std::vector<mmd::core::Simulation::JointDefinition>& joints);
+                    const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
+                    const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints);
     // True when the fresh inputs differ from what the world was built with.
-    bool configChanged(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
-                       const std::vector<mmd::core::Simulation::JointDefinition>& joints,
+    bool configChanged(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
+                       const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints,
                        const mmd::core::Double3& gravity) const;
     // Remember the config the world was just built with.
-    void storeConfig(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
-                     const std::vector<mmd::core::Simulation::JointDefinition>& joints,
+    void storeConfig(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
+                     const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints,
                      const mmd::core::Double3& gravity);
     void destroyWorld();
     // Refresh the kinematic anchor transforms from their inputs; returns true
