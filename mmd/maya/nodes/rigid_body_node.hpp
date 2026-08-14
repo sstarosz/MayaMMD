@@ -183,6 +183,16 @@ class RigidBodyNode : public MPxLocatorNode
         // every moved anchor shares the same world move, the character was
         // repositioned (not animated) and the dynamic chains ride along.
         std::vector<MMatrix> lastAnchorWorld;
+        // The kinematic anchors' RAW world matrices captured at the FIRST build
+        // (i.e. the import-time skeleton), in kinematic order — the true
+        // "rest" reference for the whole-skeleton-move detector on a REBUILD.
+        // Unlike jointRestWorldMatrix (which rest-composes pmxRest* up the DAG
+        // and does NOT reproduce actual world positions for InheritCtrl joint
+        // chains), this is captured from the same bodyAnchorWorld source as
+        // lastAnchorWorld, so the move comparison stays consistent.  Persisted
+        // across scrub-back rebuilds (see frame()); re-captured on a config
+        // change or first build.
+        std::vector<MMatrix> originalAnchorWorld;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };

@@ -612,8 +612,21 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
 // chains to the CURRENT skeleton pose (a posed skeleton must not snap to
 // rest).  std::nullopt when there are no bodies — an empty node is a valid
 // no-op.
+//
+// Pinning: the engine's resetDynamicBodies places each dynamic body at the
+// K-conjugated anchorCurrent * (anchorRest^-1 * bodyRest) = K^-1·M·K·bodyRest,
+// which for a rotated write-back offset K lands at a rotated (wrong) position
+// when the whole character was moved as a unit since import (a
+// rewind/scrub-back after a drag) — showing up as a persistent jump after
+// every rewind+play.  So when every bone-attached anchor shares the same
+// world move M relative to the ORIGINAL import-time anchors (captured on the
+// first build and persisted across scrub-back rebuilds), the dynamic bodies
+// instead ride along from their rest pose by M.  A pose-only rebuild (anchors
+// moving differently, or no prior original capture) falls back to
+// resetDynamicBodies.
 [[nodiscard]] std::optional<World> buildWorld(const MObject& node, const Inputs& in,
-                                              const MTime& now, MDataBlock& dataBlock)
+                                              const MTime& now, MDataBlock& dataBlock,
+                                              const std::vector<MMatrix>& prevOriginalAnchors)
 {
     if (in.bodies.empty())
         return std::nullopt;
@@ -636,10 +649,32 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
         return std::nullopt;
 
     updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh K
-    world.sim.resetDynamicBodies();           // chains stay at the current pose
+
+    // The whole-skeleton-move detector's "rest" reference.  On a scrub-back
+    // rebuild the ORIGINAL import-time anchors are passed in (preserved from
+    // the previous world by frame()) so the rebuild can still detect the move
+    // the user applied since import; on a first build or a config-change
+    // rebuild the CURRENT anchors are captured as the new baseline (the
+    // wiring changed, so the previous original is meaningless).
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
+    const std::vector<MMatrix> originalAnchors =
+        prevOriginalAnchors.empty() ? curAnchors : prevOriginalAnchors;
+    world.originalAnchorWorld = originalAnchors;
+
+    // Pin the chains to the CURRENT skeleton pose (see the comment above).
+    if (const auto move = detectWholeSkeletonMove(world, originalAnchors, curAnchors))
+    {
+        RigidBodySimulation::Pose movePose;
+        storePose(movePose.pos, movePose.quat, *move);
+        world.sim.rideDynamicBodiesAlong(movePose);
+    }
+    else
+    {
+        world.sim.resetDynamicBodies();
+    }
     // Baseline the raw anchor worlds so the whole-skeleton-move detector has
     // a "previous" frame to compare the first drag against.
-    world.lastAnchorWorld = readRawAnchorWorlds(world, dataBlock);
+    world.lastAnchorWorld = curAnchors;
 
     world.lastTime = now.value(); // no time-step on the (re)build frame
     world.lastTimeUnit = now.unit();
@@ -671,33 +706,44 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
 // are refreshed first so the colliders track their bones.  Returns the world
 // with the updated timeline cursor (unchanged when nothing happened).
 //
-// Whole-skeleton drags (moving/rotating the character at a paused frame) do
-// NOT run physics: every bone-attached anchor shares the same world-space
-// move, so the dynamic chains ride along by that move instead of being yanked
-// by teleported anchors (the old behaviour displaced the skirt/hair by the
-// move, and the displacement was baked into the write-back).  A local bone
-// drag moves the anchors differently and still gets the single fixed tick.
+// Whole-skeleton drags (moving/rotating the whole character) do NOT run
+// physics on the move: every bone-attached anchor shares the same world-space
+// rigid move, so the dynamic chains ride along by that move instead of being
+// yanked by teleported anchors.  This is checked on EVERY evaluation — not
+// just at a paused frame — because an interactive viewport drag does not
+// necessarily re-evaluate the solver while it happens; without the check, the
+// first playback step after the drag would hit anchors already teleported by
+// the move and yank the chains by it (272/273 joints jumped up to 75° in the
+// reproduced case).  A local bone drag moves the anchors differently (returns
+// nullopt) and still steps normally.
 [[nodiscard]] World advance(World world, const MTime& now, MDataBlock& dataBlock)
 {
     const bool anchorsMoved = updateKinematicAnchors(world, dataBlock);
     const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
     const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
-    if (dt > 0.0)
+
+    if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
+    {
+        // Character repositioned as a unit: ride the chains along by the
+        // shared move (velocities zeroed + kinematic interpolation reset by
+        // the engine).  When time is also advancing, keep stepping from the
+        // corrected pose; at a paused frame there is nothing to step.
+        RigidBodySimulation::Pose movePose;
+        storePose(movePose.pos, movePose.quat, *move);
+        world.sim.rideDynamicBodiesAlong(movePose);
+        if (dt > 0.0)
+        {
+            world.sim.step(dt);
+        }
+    }
+    else if (dt > 0.0)
     {
         world.sim.step(dt);
     }
     else if (anchorsMoved)
     {
-        if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
-        {
-            RigidBodySimulation::Pose movePose;
-            storePose(movePose.pos, movePose.quat, *move);
-            world.sim.rideDynamicBodiesAlong(movePose);
-        }
-        else
-        {
-            world.sim.step(RigidBodySimulation::kFixedDt);
-        }
+        // Local bone drag at a paused frame — one fixed tick so chains react.
+        world.sim.step(RigidBodySimulation::kFixedDt);
     }
     else
     {
@@ -717,7 +763,20 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
                                          MDataBlock& dataBlock)
 {
     if (!world || needsRebuild(*world, in, now))
-        return buildWorld(node, in, now, dataBlock);
+    {
+        // Preserve the ORIGINAL import-time anchors across a scrub-back
+        // rebuild: buildWorld re-baselines them on a config change (the
+        // wiring changed, so the previous original is meaningless) but a
+        // time-scrub rebuild must keep the true rest reference — otherwise
+        // the whole-skeleton-move detector would compare against the already-
+        // moved pose and the rewind would fall back to the K-conjugated
+        // resetDynamicBodies (persistent jump after every rewind+play).
+        const std::vector<MMatrix> prevOriginalAnchors =
+            (world && !world->originalAnchorWorld.empty() && !configChanged(*world, in))
+                ? world->originalAnchorWorld
+                : std::vector<MMatrix>();
+        return buildWorld(node, in, now, dataBlock, prevOriginalAnchors);
+    }
     return advance(std::move(*world), now, dataBlock);
 }
 

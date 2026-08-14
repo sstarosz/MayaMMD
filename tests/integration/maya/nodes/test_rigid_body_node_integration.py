@@ -554,6 +554,97 @@ def test_whole_skeleton_move_rides_dynamic_chain_along():
     return True
 
 
+def test_rewind_rebuild_keeps_character_move():
+    """Rewinding after moving the whole character keeps the ride-along — the
+    rebuild must NOT snap the chains back to the un-moved position.
+
+    Regression: the user moved GirlsFrontline_TololoDefault_Bones by -15 and
+    every rewind + replay showed a large persistent jump ("big jump that do
+    not go away every step back in time").  Root cause: on a scrub-back the
+    world is REBUILT, and the rebuild used the engine's K-conjugated
+    resetDynamicBodies (anchorCurrent * (anchorRest^-1 * bodyRest)), which for
+    a moved character lands the chains at K^-1·M·K·bodyRest — a rotated
+    (wrong) position.  The rebuild must instead detect the whole-skeleton move
+    against the ORIGINAL import-time anchors (persisted across rebuilds) and
+    ride the chains from their rest pose by that move.
+    """
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="rewindAnchorJoint", p=(0, 0, 0))
+    cmds.addAttr(
+        joint_a, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 0)
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
+    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{node}.bodies[0].bodyAnchorWorld")
+
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Settle at frame 1: the welded body hangs 1 unit above the anchor.
+    cmds.currentTime(1)
+    settled = _read_output(node, 1)
+    assert_true(abs(settled[1] - 1.0) < 0.05, f"settled at y≈1 (got {settled[1]:.3f})")
+
+    # Move the character up by 5 (first build captured the ORIGINAL anchors,
+    # so the detector has a rest reference for the move).
+    cmds.setAttr(f"{joint_a}.translateY", 5)
+    played = _read_output(node, 1)
+    assert_true(
+        abs(played[1] - 6.0) < 0.1,
+        f"ride-along at frame 1 (got {played[1]:.3f})",
+    )
+
+    # Rewind to frame 0 (scrub-back -> rebuild).  The rebuild must preserve
+    # the character move: the welded body stays at y≈6, NOT snapping back to
+    # y≈1 (the un-moved rest position the K-conjugated reset would produce).
+    # (_read_output(node, 1) reads BODY 1 — the dynamic body — at the CURRENT
+    # time, which the currentTime(0) above has already set.)
+    cmds.currentTime(0)
+    rewind = _read_output(node, 1)
+    assert_true(
+        abs(rewind[1] - 6.0) < 0.1,
+        f"rewind rebuild must keep the move (got {rewind[1]:.3f})",
+    )
+
+    # Replay to frame 2: still riding at y≈6 — no persistent jump.
+    cmds.currentTime(2)
+    replay = _read_output(node, 1)
+    assert_true(
+        abs(replay[1] - 6.0) < 0.15,
+        f"replay after rewind stays at y≈6 (got {replay[1]:.3f})",
+    )
+    print(
+        f"✓ rewind rebuild kept the move: y={rewind[1]:.3f} (frame 0), "
+        f"y={replay[1]:.3f} (frame 2)"
+    )
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -572,5 +663,9 @@ _TESTS = [
     (
         "Whole-Skeleton Drag Rides Dynamic Chain Along (no physics step)",
         test_whole_skeleton_move_rides_dynamic_chain_along,
+    ),
+    (
+        "Rewind Rebuild Keeps Character Move (no persistent jump)",
+        test_rewind_rebuild_keeps_character_move,
     ),
 ]
