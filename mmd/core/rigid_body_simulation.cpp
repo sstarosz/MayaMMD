@@ -109,6 +109,7 @@ struct RigidBodySimulation::RigidBodySimulationImpl
     bool setKinematicPose(size_t anchorIndex, const Pose& pose);
     void step(double dt);
     void resetDynamicBodies();
+    void rideDynamicBodiesAlong(const Pose& move);
     Pose bodyPose(size_t bodyIndex) const;
 
   private:
@@ -550,6 +551,49 @@ void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
     }
 }
 
+void RigidBodySimulation::RigidBodySimulationImpl::rideDynamicBodiesAlong(const Pose& move)
+{
+    if (!mWorld)
+    {
+        return;
+    }
+    const btTransform m = poseToTransform(move.pos, move.quat);
+    for (size_t i = 0; i < mRigidBodies.size(); ++i)
+    {
+        btRigidBody* body = mRigidBodies[i].get();
+        if (body == nullptr)
+        {
+            continue;
+        }
+        const Body& b = mBodies[i];
+        if (b.def.isKinematic())
+        {
+            // The kinematic body's transform was already updated by
+            // setKinematicPose; reset its interpolation so the teleport is
+            // NOT read back as a huge implied velocity on the next real step.
+            body->setInterpolationWorldTransform(body->getWorldTransform());
+            body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
+            continue;
+        }
+        if (!b.def.enabled)
+        {
+            continue;
+        }
+        // Ride the dynamic body along by the same rigid world move (the
+        // character was dragged as a unit — a bone-by-bone drag would not
+        // produce one shared transform).  Zero velocities: the move is a
+        // teleport, not a force.
+        const btTransform target = m * body->getWorldTransform();
+        body->setWorldTransform(target);
+        body->getMotionState()->setWorldTransform(target);
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->setActivationState(DISABLE_DEACTIVATION);
+        body->activate();
+    }
+}
+
 RigidBodySimulation::Pose
 RigidBodySimulation::RigidBodySimulationImpl::bodyPose(size_t bodyIndex) const
 {
@@ -610,6 +654,11 @@ void RigidBodySimulation::step(double dt)
 void RigidBodySimulation::resetDynamicBodies()
 {
     mImpl->resetDynamicBodies();
+}
+
+void RigidBodySimulation::rideDynamicBodiesAlong(const Pose& move)
+{
+    mImpl->rideDynamicBodiesAlong(move);
 }
 
 RigidBodySimulation::Pose RigidBodySimulation::bodyPose(size_t bodyIndex) const

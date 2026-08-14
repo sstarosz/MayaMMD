@@ -176,6 +176,15 @@ class RigidBodySimulation
     /// zeroing velocities.  Called when time is scrubbed backwards.
     void resetDynamicBodies();
 
+    /// Apply a rigid WORLD-space move to every dynamic body, zeroing
+    /// velocities, WITHOUT stepping.  Used when the whole skeleton was moved
+    /// as a rigid unit at a paused frame (a character drag): the dynamic
+    /// chains ride along glued to the character instead of being yanked by
+    /// teleported kinematic anchors.  Also neutralizes the kinematic anchors'
+    /// implied teleport velocity (interpolation reset) so the next real step
+    /// does not read the jump as a huge velocity.
+    void rideDynamicBodiesAlong(const Pose& move);
+
     /// Solved world-space pose of `bodyIndex` — body-indexed, matching
     /// Definition::bodies.  Falls back to the body's REST pose when the body
     /// is disabled/missing or the world is not initialized.

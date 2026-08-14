@@ -483,6 +483,77 @@ def test_solver_location_does_not_affect_simulation():
     return True
 
 
+def test_whole_skeleton_move_rides_dynamic_chain_along():
+    """Moving the whole character at a paused frame rides the chains along
+    WITHOUT running physics.
+
+    Regression: dragging the character (all kinematic anchors share one
+    world-space move) used to teleport the anchors and then step once — the
+    dynamic chains did not ride along, so the write-back displaced them by the
+    move (skirt/hair offset from the skeleton even at frame 0, nothing
+    playing).  A whole-skeleton rigid move must now ride the dynamics along by
+    the same transform instead of stepping.
+    """
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    # One bone-attached kinematic anchor (joint_a at the origin) + a welded
+    # dynamic body 1 unit above it.  Body 1 has no joint -> its output is the
+    # raw solved world pose, so the test reads the ride-along directly.
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="dragAnchorJoint", p=(0, 0, 0))
+    cmds.addAttr(
+        joint_a, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 0)
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
+    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{node}.bodies[0].bodyAnchorWorld")
+
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Settle at frame 1: the welded body hangs 1 unit above the anchor.
+    cmds.currentTime(1)
+    settled = _read_output(node, 1)
+    assert_true(abs(settled[1] - 1.0) < 0.05, f"settled at y≈1 (got {settled[1]:.3f})")
+
+    # At the SAME frame (no time advance), drag the character up by 5.
+    cmds.setAttr(f"{joint_a}.translateY", 5)
+    after = _read_output(node, 1)
+
+    # The welded body rode along to y≈6 (1 above the moved anchor).  A single
+    # physics tick could NOT have carried it there — a step would leave it
+    # displaced near y≈1.
+    assert_true(
+        abs(after[1] - 6.0) < 0.1,
+        f"dynamic body should ride along to y≈6 (got {after[1]:.3f})",
+    )
+    print(f"✓ whole-skeleton drag rode dynamic chain to y={after[1]:.3f}")
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -497,5 +568,9 @@ _TESTS = [
     (
         "Solver Location Irrelevant (World Space)",
         test_solver_location_does_not_affect_simulation,
+    ),
+    (
+        "Whole-Skeleton Drag Rides Dynamic Chain Along (no physics step)",
+        test_whole_skeleton_move_rides_dynamic_chain_along,
     ),
 ]

@@ -525,6 +525,88 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
     return anchorsMoved;
 }
 
+// Read each kinematic anchor's RAW world matrix (bodyAnchorWorld, BEFORE the
+// K^-1 rest offset) in kinematic order.  The whole-skeleton-move detector
+// compares these — the per-body K would otherwise break the shared-move test.
+[[nodiscard]] std::vector<MMatrix> readRawAnchorWorlds(World& world, MDataBlock& dataBlock)
+{
+    std::vector<MMatrix> out;
+    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(RigidBodyNode::aBodies);
+    for (size_t i = 0; i < world.bodies.size(); ++i)
+    {
+        const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
+        if (!b.isKinematic() || !b.enabled)
+            continue;
+        bodiesHandle.jumpToArrayElement((unsigned int) i);
+        out.push_back(
+            bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix());
+    }
+    return out;
+}
+
+// Approximate rigid-transform equality (column-vector): same translation and
+// same basis.  Used to decide whether every anchor moved by one shared move.
+[[nodiscard]] bool transformsNear(const btTransform& a, const btTransform& b,
+                                  btScalar distTol = 1e-3, btScalar rotTol = 1e-4)
+{
+    const btVector3 d = a.getOrigin() - b.getOrigin();
+    if (d.length2() > distTol * distTol)
+        return false;
+    for (int c = 0; c < 3; ++c)
+    {
+        if (a.getBasis().getColumn(c).dot(b.getBasis().getColumn(c)) < 1.0 - rotTol)
+            return false;
+    }
+    return true;
+}
+
+// Detect a WHOLE-SKELETON rigid move: every BONE-ATTACHED kinematic anchor
+// moved by the SAME world-space rigid transform since the last evaluation —
+// the user dragged the character as a unit (e.g. translating/rotating the
+// model root at a paused frame).  Boneless pinned anchors are excluded (they
+// live in the world, not on the skeleton).  Returns the shared move as a
+// column-vector btTransform when detected, nullopt when anchors moved
+// differently (a local bone drag / normal animation) or nothing moved.
+[[nodiscard]] std::optional<btTransform>
+detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
+                        const std::vector<MMatrix>& cur)
+{
+    if (prev.size() != cur.size() || cur.empty())
+        return std::nullopt;
+    std::optional<btTransform> common;
+    size_t anchor = 0;
+    for (size_t i = 0; i < world.bodies.size(); ++i)
+    {
+        const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
+        if (!b.isKinematic() || !b.enabled)
+            continue;
+        if (b.relatedBoneIndex < 0) // boneless pin — not part of the skeleton
+        {
+            ++anchor;
+            continue;
+        }
+        // Maya row-vector: cur = prev * M  =>  M = prev^-1 * cur.  Bullet is
+        // the transpose (column-vector), so btMove = mayaMatrixToBtTransform(M).
+        const MMatrix move = prev[anchor].inverse() * cur[anchor];
+        const btTransform btMove = mayaMatrixToBtTransform(move);
+        if (!common)
+        {
+            common = btMove;
+        }
+        else if (!transformsNear(btMove, *common))
+        {
+            return std::nullopt; // anchors moved differently — local drag
+        }
+        ++anchor;
+    }
+    if (!common)
+        return std::nullopt;
+    // The shared move must be a real move (not the identity transform).
+    if (transformsNear(*common, btTransform::getIdentity()))
+        return std::nullopt;
+    return common;
+}
+
 // Build a fresh world from the PMX-verbatim inputs: resolve the DAG wiring,
 // derive the write-back offsets K, initialize the Bullet engine, and pin the
 // chains to the CURRENT skeleton pose (a posed skeleton must not snap to
@@ -555,6 +637,9 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 
     updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh K
     world.sim.resetDynamicBodies();           // chains stay at the current pose
+    // Baseline the raw anchor worlds so the whole-skeleton-move detector has
+    // a "previous" frame to compare the first drag against.
+    world.lastAnchorWorld = readRawAnchorWorlds(world, dataBlock);
 
     world.lastTime = now.value(); // no time-step on the (re)build frame
     world.lastTimeUnit = now.unit();
@@ -585,16 +670,40 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 // tick when a kinematic bone was dragged at the current frame.  The anchors
 // are refreshed first so the colliders track their bones.  Returns the world
 // with the updated timeline cursor (unchanged when nothing happened).
+//
+// Whole-skeleton drags (moving/rotating the character at a paused frame) do
+// NOT run physics: every bone-attached anchor shares the same world-space
+// move, so the dynamic chains ride along by that move instead of being yanked
+// by teleported anchors (the old behaviour displaced the skirt/hair by the
+// move, and the displacement was baked into the write-back).  A local bone
+// drag moves the anchors differently and still gets the single fixed tick.
 [[nodiscard]] World advance(World world, const MTime& now, MDataBlock& dataBlock)
 {
     const bool anchorsMoved = updateKinematicAnchors(world, dataBlock);
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
     const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
     if (dt > 0.0)
+    {
         world.sim.step(dt);
+    }
     else if (anchorsMoved)
-        world.sim.step(RigidBodySimulation::kFixedDt);
+    {
+        if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
+        {
+            RigidBodySimulation::Pose movePose;
+            storePose(movePose.pos, movePose.quat, *move);
+            world.sim.rideDynamicBodiesAlong(movePose);
+        }
+        else
+        {
+            world.sim.step(RigidBodySimulation::kFixedDt);
+        }
+    }
     else
-        return world;
+    {
+        return world; // nothing moved — the anchor history is still current
+    }
+    world.lastAnchorWorld = std::move(curAnchors);
     world.lastTime = now.value();
     world.lastTimeUnit = now.unit();
     return world;
