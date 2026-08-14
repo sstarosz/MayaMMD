@@ -60,6 +60,10 @@ assets/poses/*
 assets/models_database/*
 assets/motions_database/*
 assets/poses_database/*
+# Generated file lists — regenerate locally with scripts/database/generate_file_list.py (not committed)
+assets/pmx_model_files.py
+assets/vmd_motion_files.py
+assets/vpd_pose_files.py
 !assets/models/README.md
 !assets/motions/README.md
 !assets/poses/README.md
