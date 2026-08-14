@@ -1,7 +1,7 @@
 """
-test_physics_node_integration.py
+test_rigid_body_node_integration.py
 
-Integration tests for PhysicsNode (pmxPhysicsNode) — the native rigid-body
+Integration tests for RigidBodyNode (pmxRigidBodyNode) — the native rigid-body
 physics node (embedded Bullet via the Maya-free mmd_core engine).
 
 Tests cover:
@@ -26,9 +26,9 @@ from tests.integration.test_helpers import (  # noqa: E402
 )
 
 
-_NODE_TYPE = "pmxPhysicsNode"
+_NODE_TYPE = "pmxRigidBodyNode"
 
-# Attribute-enum values (PhysicsNode.h): collider type + physics mode.
+# Attribute-enum values (RigidBodyNode.hpp): collider type + physics mode.
 _COLLIDER_SPHERE = 2  # kColliderSphere
 _PHYSICS_MODE_FOLLOW_BONE = 0
 _PHYSICS_MODE_PHYSICS = 1
@@ -37,8 +37,8 @@ _PHYSICS_MODE_PHYSICS = 1
 _IDENTITY_MATRIX = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
 
 
-def _create_node(name: str = "testPhysicsNode") -> str:
-    """Create a pmxPhysicsNode and assert it exists."""
+def _create_node(name: str = "testRigidBodyNode") -> str:
+    """Create a pmxRigidBodyNode and assert it exists."""
     node = cmds.createNode(_NODE_TYPE, name=name)
     assert_true(cmds.objExists(node), f"{_NODE_TYPE} creation failed")
     return node
@@ -256,7 +256,7 @@ def test_empty_node_evaluates_without_error():
         0,
         "empty node must produce no output elements",
     )
-    print("✓ empty pmxPhysicsNode evaluates cleanly (valid no-op)")
+    print("✓ empty pmxRigidBodyNode evaluates cleanly (valid no-op)")
     return True
 
 
@@ -440,7 +440,7 @@ def test_solver_location_does_not_affect_simulation():
     # Park the solver under a transform that is NOT at the origin.
     holder = cmds.createNode("transform", name="SolverHolder")
     cmds.setAttr(f"{holder}.translateY", 10)
-    node = cmds.createNode(_NODE_TYPE, name="testPhysicsNode", parent=holder)
+    node = cmds.createNode(_NODE_TYPE, name="testRigidBodyNode", parent=holder)
     _connect_time(node)
     _set_welded_chain(node)
 

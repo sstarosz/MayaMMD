@@ -4,7 +4,7 @@
  *
  * This is the ONLY core header that exposes Bullet types.  Consumers that
  * want to stay Bullet-free include common.hpp / physics_math.hpp /
- * simulation.hpp; this bridge is for the engine internals and for adapters
+ * rigid_body_simulation.hpp; this bridge is for the engine internals and for adapters
  * that already link Bullet (e.g. the Maya physics node).
  *
  * Conventions (each was verified empirically against Maya 2026):

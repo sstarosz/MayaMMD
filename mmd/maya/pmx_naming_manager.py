@@ -719,27 +719,27 @@ class PMXNamingManager:
 
         return self.make_unique(desired_name)
 
-    # ----------------------#
-    # ---Physics (native)---#
-    # ----------------------#
-    def get_physics_group_name(self) -> str:
-        """Get unique physics group name (holds the pmxPhysicsNode solver)."""
+    # ----------------------------#
+    # ---Rigid bodies (native)---#
+    # ----------------------------#
+    def get_rigid_bodies_group_name(self) -> str:
+        """Get unique rigid bodies group name (holds the pmxRigidBodyNode solver)."""
         if self.model_name_local:
-            desired_name = f"{self.model_name_local}_Physics"
+            desired_name = f"{self.model_name_local}_RigidBodies"
         elif self.model_name_universal:
-            desired_name = f"{self.model_name_universal}_Physics"
+            desired_name = f"{self.model_name_universal}_RigidBodies"
         else:
-            desired_name = "Physics"
+            desired_name = "RigidBodies"
 
         return self.make_unique(desired_name)
 
-    def get_physics_solver_name(self) -> str:
-        """Get unique pmxPhysicsNode solver shape name for this model."""
+    def get_rigid_body_solver_name(self) -> str:
+        """Get unique pmxRigidBodyNode solver shape name for this model."""
         if self.model_name_local:
-            desired_name = f"{self.model_name_local}_PhysicsSolver"
+            desired_name = f"{self.model_name_local}_RigidBodySolver"
         elif self.model_name_universal:
-            desired_name = f"{self.model_name_universal}_PhysicsSolver"
+            desired_name = f"{self.model_name_universal}_RigidBodySolver"
         else:
-            desired_name = "PhysicsSolver"
+            desired_name = "RigidBodySolver"
 
         return self.make_unique(desired_name)

@@ -11,7 +11,7 @@ from mmd.core.data_types import PmxModel
 from mmd.maya.maya_data_types import MayaPmxData
 from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones
 from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data
-from mmd.maya.pmx.rigid_body_builder import create_physics_from_pmx_data
+from mmd.maya.pmx.rigid_body_builder import create_rigid_bodies_from_pmx_data
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)
@@ -767,16 +767,16 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     )
 
     # Rigid-body physics
-    solver_node = create_physics_from_pmx_data(
+    solver_node = create_rigid_bodies_from_pmx_data(
         pmx_data,
         joints=joints,
         name_registry=name_registry,
         root_transform_obj=root_obj,
     )
     if solver_node:
-        if not cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True):
-            cmds.addAttr(root_name, longName="pmxPhysicsNode", dataType="string")
-        cmds.setAttr(f"{root_name}.pmxPhysicsNode", solver_node, type="string")
+        if not cmds.attributeQuery("pmxRigidBodyNode", node=root_name, exists=True):
+            cmds.addAttr(root_name, longName="pmxRigidBodyNode", dataType="string")
+        cmds.setAttr(f"{root_name}.pmxRigidBodyNode", solver_node, type="string")
 
     return MayaPmxData(
         root_obj=root_obj,

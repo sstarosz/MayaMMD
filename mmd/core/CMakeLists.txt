@@ -5,7 +5,7 @@
 # =========================================================================
 
 add_library(mmd_core STATIC
-    simulation.cpp
+    rigid_body_simulation.cpp
 )
 
 # mmd_core is linked into the shared Maya plugin (MayaMMD.so on Linux), so its

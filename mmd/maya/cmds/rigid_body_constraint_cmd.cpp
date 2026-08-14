@@ -4,7 +4,7 @@
  * rigid_body_constraint_cmd.cpp
  *
  * Native C++ implementation of the ``pmxRigidBodyConstraint`` command (create
- * mode — the default).  Writes ONE PMX joint into a pmxPhysicsNode's
+ * mode — the default).  Writes ONE PMX joint into a pmxRigidBodyNode's
  * ``joints`` array at the next free index, replacing the former Python
  * ``_set_joint_attributes``.
  *
@@ -33,7 +33,7 @@
  */
 
 #include "rigid_body_constraint_cmd.hpp"
-#include "pmx_physics_cmd_utils.hpp"
+#include "pmx_rigid_body_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -44,7 +44,7 @@
 #include <maya/MSyntax.h>
 
 #include "maya_utils.hpp"
-#include "nodes/physics_node.h"
+#include "nodes/rigid_body_node.hpp"
 
 #include <string>
 
@@ -163,7 +163,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Solver / index ──
     MFnDependencyNode fn(solverNode);
     MStatus plugStat;
-    MPlug jointsPlug = fn.findPlug(PhysicsNode::aJoints, true, &plugStat);
+    MPlug jointsPlug = fn.findPlug(RigidBodyNode::aJoints, true, &plugStat);
     if (jointsPlug.isNull())
     {
         MGlobal::displayError("pmxRigidBodyConstraint: node has no 'joints' array");
@@ -187,7 +187,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // the importer (pmxRigidBody loops before this command), and the node's
     // engine silently SKIPS joints whose bodies are missing — catching the
     // mistake here is far friendlier than a silently-dead constraint.
-    MPlug bodiesPlug = fn.findPlug(PhysicsNode::aBodies, true, &plugStat);
+    MPlug bodiesPlug = fn.findPlug(RigidBodyNode::aBodies, true, &plugStat);
     if (bodiesPlug.isNull())
     {
         MGlobal::displayError("pmxRigidBodyConstraint: node has no 'bodies' array");
@@ -233,21 +233,21 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     // ── Write the joint data (simple create) ──
     MPlug elem = jointsPlug.elementByLogicalIndex(n);
-    elem.child(PhysicsNode::aJointNameLocal).setString(nameLocal);
-    elem.child(PhysicsNode::aJointNameUniversal).setString(nameUniversal);
-    elem.child(PhysicsNode::aJointBodyA).setInt(bodyA);
-    elem.child(PhysicsNode::aJointBodyB).setInt(bodyB);
+    elem.child(RigidBodyNode::aJointNameLocal).setString(nameLocal);
+    elem.child(RigidBodyNode::aJointNameUniversal).setString(nameUniversal);
+    elem.child(RigidBodyNode::aJointBodyA).setInt(bodyA);
+    elem.child(RigidBodyNode::aJointBodyB).setInt(bodyB);
     // jointType is an enum attribute — write through setShort (like the
     // bodyGroupId enum).
-    elem.child(PhysicsNode::aJointType).setShort(static_cast<short>(type));
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameTranslate), worldT);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointFrameRotate), worldR);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMin), lmin);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearMax), lmax);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointAngularMin), amin);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointAngularMax), amax);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointLinearSpring), ls);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aJointAngularSpring), as);
+    elem.child(RigidBodyNode::aJointType).setShort(static_cast<short>(type));
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointFrameTranslate), worldT);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointFrameRotate), worldR);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointLinearMin), lmin);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointLinearMax), lmax);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointAngularMin), amin);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointAngularMax), amax);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointLinearSpring), ls);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aJointAngularSpring), as);
 
     outIndex = n;
     return MS::kSuccess;
@@ -331,7 +331,7 @@ MStatus RigidBodyConstraintCmd::doIt(const MArgList& args)
     MObject solverNode;
     if (!mmd::maya::resolveSolver(target, solverNode))
     {
-        displayError("'" + target + "' is not a pmxPhysicsNode or a PMX model root");
+        displayError("'" + target + "' is not a pmxRigidBodyNode or a PMX model root");
         return MS::kFailure;
     }
 

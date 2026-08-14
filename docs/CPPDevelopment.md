@@ -39,7 +39,7 @@ For CI builds, the SDK is downloaded automatically by CMake (see `CMakeLists.txt
 
 MayaMMD resolves its C/C++ dependencies via **vcpkg** (`vcpkg.json`).
 Currently that is **Bullet 3.25** (float precision) for the native
-`pmxPhysicsNode`; future C/C++ dependencies will be added to `vcpkg.json`
+`pmxRigidBodyNode`; future C/C++ dependencies will be added to `vcpkg.json`
 the same way. A fresh clone just needs a bootstrapped vcpkg with
 `VCPKG_ROOT` set:
 
@@ -64,7 +64,7 @@ the build directory) — no manual `vcpkg install` is needed.
   clear toolchain error. Bootstrap vcpkg, set `VCPKG_ROOT`, and re-run.
 - Keep Bullet at **float** precision: do **not** enable vcpkg's
   `double-precision` feature — `btScalar` must stay float to match
-  `physics_node.cpp`.
+  `rigid_body_node.cpp`.
 
 ## Quick Start
 
@@ -156,8 +156,8 @@ mmd/                          # Python package + C++ plugin entry point
 │   │   ├── bone_morph_node.py         # Python bone morph node
 │   │   ├── ccd_ik_solver_node.h       # C++ CCD IK solver header
 │   │   ├── ccd_ik_solver_node.cpp     # C++ CCD IK solver implementation
-│   │   ├── physics_node.h             # C++ rigid-body physics node header
-│   │   └── physics_node.cpp           # C++ rigid-body physics node (embedded Bullet)
+│   │   ├── rigid_body_node.hpp        # C++ rigid-body physics node header
+│   │   └── rigid_body_node.cpp        # C++ rigid-body physics node (embedded Bullet)
 │   ├── pmx/                  # PMX scene builders
 │   └── ...
 └── ui/                       # Qt UI widgets

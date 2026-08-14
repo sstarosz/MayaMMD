@@ -19,7 +19,7 @@
  */
 
 #include "rigid_body_cmd.hpp"
-#include "pmx_physics_cmd_utils.hpp"
+#include "pmx_rigid_body_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -37,14 +37,14 @@
 #include <maya/MVector.h>
 
 #include "maya_utils.hpp"
-#include "nodes/physics_node.h"
+#include "nodes/rigid_body_node.hpp"
 
 #include <cstdlib>
 #include <cstring>
 #include <string>
 
 using mmd::core::Double3;
-using mmd::core::Simulation;
+using mmd::core::RigidBodySimulation;
 
 namespace
 {
@@ -238,14 +238,14 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     // ── Enumerated values ──
     const MString sh = shape.toLowerCase();
-    PhysicsNode::ColliderType colliderType = PhysicsNode::kColliderSphere;
+    RigidBodyNode::ColliderType colliderType = RigidBodyNode::kColliderSphere;
     if (sh == "box")
     {
-        colliderType = PhysicsNode::kColliderBox;
+        colliderType = RigidBodyNode::kColliderBox;
     }
     else if (sh == "capsule")
     {
-        colliderType = PhysicsNode::kColliderCapsule;
+        colliderType = RigidBodyNode::kColliderCapsule;
     }
     else if (sh != "sphere")
     {
@@ -254,17 +254,17 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     }
 
     const MString pm = physicsMode.toLowerCase();
-    // The bodyPhysicsMode attribute stores mmd::core::Simulation::PhysicsMode
+    // The bodyPhysicsMode attribute stores mmd::core::RigidBodySimulation::PhysicsMode
     // values directly (the node casts the attribute value back to the engine
     // enum) — there is deliberately NO node-side enum.
-    Simulation::PhysicsMode physicsModeEnum = Simulation::PhysicsMode::ePhysics;
+    RigidBodySimulation::PhysicsMode physicsModeEnum = RigidBodySimulation::PhysicsMode::ePhysics;
     if (pm == "followbone")
     {
-        physicsModeEnum = Simulation::PhysicsMode::eFollowBone;
+        physicsModeEnum = RigidBodySimulation::PhysicsMode::eFollowBone;
     }
     else if (pm == "physicsbone")
     {
-        physicsModeEnum = Simulation::PhysicsMode::ePhysicsBone;
+        physicsModeEnum = RigidBodySimulation::PhysicsMode::ePhysicsBone;
     }
     else if (pm != "physics")
     {
@@ -272,12 +272,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                               "' — expected followBone, physics or physicsBone");
         return MS::kFailure;
     }
-    const bool kinematic = (physicsModeEnum == Simulation::PhysicsMode::eFollowBone);
+    const bool kinematic = (physicsModeEnum == RigidBodySimulation::PhysicsMode::eFollowBone);
 
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
     MStatus plugStat;
-    MPlug bodiesPlug = fn.findPlug(PhysicsNode::aBodies, true, &plugStat);
+    MPlug bodiesPlug = fn.findPlug(RigidBodyNode::aBodies, true, &plugStat);
     if (bodiesPlug.isNull())
     {
         MGlobal::displayError("pmxRigidBody: node has no 'bodies' array");
@@ -317,27 +317,27 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     // ── Rest pose in WORLD space (MMD ⇒ Maya: Z-flip + handedness) ──
     // The Bullet world runs in world space (the node no longer depends on the
-    // physics group's location), so the PMX rest pose is stored as-is.
+    // rigid bodies group's location), so the PMX rest pose is stored as-is.
     const Double3 worldT = mmd::maya::mmdToMayaTranslate(pos);
     const Double3 worldR = mmd::maya::mmdToMayaRotateDeg(rot);
 
     // ── Write the body data (simple create) ──
     MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestTranslate), worldT);
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyRestRotate), worldR);
-    elem.child(PhysicsNode::aBodyMass).setDouble(mass);
-    elem.child(PhysicsNode::aBodyLinearDamping).setDouble(linearDamping);
-    elem.child(PhysicsNode::aBodyAngularDamping).setDouble(angularDamping);
-    elem.child(PhysicsNode::aBodyFriction).setDouble(friction);
-    elem.child(PhysicsNode::aBodyRestitution).setDouble(restitution);
-    elem.child(PhysicsNode::aBodyColliderType).setShort(colliderType);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyRestTranslate), worldT);
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyRestRotate), worldR);
+    elem.child(RigidBodyNode::aBodyMass).setDouble(mass);
+    elem.child(RigidBodyNode::aBodyLinearDamping).setDouble(linearDamping);
+    elem.child(RigidBodyNode::aBodyAngularDamping).setDouble(angularDamping);
+    elem.child(RigidBodyNode::aBodyFriction).setDouble(friction);
+    elem.child(RigidBodyNode::aBodyRestitution).setDouble(restitution);
+    elem.child(RigidBodyNode::aBodyColliderType).setShort(colliderType);
     // PMX shape_size VERBATIM (full size — the node derives the engine
     // radius/extents/length by collider type via mmd::core::applyShapeSize).
-    mmd::maya::setPlugDouble3(elem.child(PhysicsNode::aBodyShapeSize), size);
-    elem.child(PhysicsNode::aBodyGroupId).setShort(static_cast<short>(group));
+    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyShapeSize), size);
+    elem.child(RigidBodyNode::aBodyGroupId).setShort(static_cast<short>(group));
     for (int g = 0; g < 16; ++g)
-        elem.child(PhysicsNode::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
-    elem.child(PhysicsNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
+        elem.child(RigidBodyNode::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
+    elem.child(RigidBodyNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     // Wiring: the body's related joint as a MESSAGE (bodies[i].bodyJoint ->
     // joint.message).  The solver resolves the bone index, the write-back
     // parent and the scrub-back reset anchor from it + the joint DAG — there
@@ -351,12 +351,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         if (!jointMsg.isNull())
         {
             mmd::maya::connectOrReplace(
-                jointMsg, bodiesPlug.elementByLogicalIndex(n).child(PhysicsNode::aBodyJoint));
+                jointMsg, bodiesPlug.elementByLogicalIndex(n).child(RigidBodyNode::aBodyJoint));
         }
     }
-    elem.child(PhysicsNode::aBodyNameLocal).setString(nameLocal);
-    elem.child(PhysicsNode::aBodyNameUniversal).setString(nameUniversal);
-    elem.child(PhysicsNode::aBodyEnabled).setBool(true);
+    elem.child(RigidBodyNode::aBodyNameLocal).setString(nameLocal);
+    elem.child(RigidBodyNode::aBodyNameUniversal).setString(nameUniversal);
+    elem.child(RigidBodyNode::aBodyEnabled).setBool(true);
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
@@ -377,7 +377,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         // Bullet world runs in world space, so the anchor is stored as-is.
         if (jointPath.isValid())
         {
-            mmd::maya::connectOrReplace(jointWorldPlug, elem.child(PhysicsNode::aBodyAnchorWorld));
+            mmd::maya::connectOrReplace(jointWorldPlug,
+                                        elem.child(RigidBodyNode::aBodyAnchorWorld));
         }
         else
         {
@@ -385,7 +386,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // Pin the body's DIRECT world rest pose — not a round-tripped
             // decomposition, which would drop group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            mmd::maya::setPlugMatrixValue(elem.child(PhysicsNode::aBodyAnchorWorld), bodyWorld);
+            mmd::maya::setPlugMatrixValue(elem.child(RigidBodyNode::aBodyAnchorWorld), bodyWorld);
         }
     }
 
@@ -401,8 +402,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     if (!kinematic && jointPath.isValid())
     {
         MPlug outT =
-            fn.findPlug(PhysicsNode::aOutTranslate, true, &plugStat).elementByLogicalIndex(n);
-        MPlug outR = fn.findPlug(PhysicsNode::aOutRotate, true, &plugStat).elementByLogicalIndex(n);
+            fn.findPlug(RigidBodyNode::aOutTranslate, true, &plugStat).elementByLogicalIndex(n);
+        MPlug outR =
+            fn.findPlug(RigidBodyNode::aOutRotate, true, &plugStat).elementByLogicalIndex(n);
         MFnDependencyNode jointFn(jointPath.node());
         // Compound-to-compound: connecting the output ELEMENT compound to the
         // joint's translate/rotate materializes the element and wires the
@@ -411,7 +413,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         // A later body on the same bone replaces the source (last wins; all
         // bodies on a bone produce the same bone-world pose, so the joint's
         // value is unaffected).
-        if (physicsModeEnum != Simulation::PhysicsMode::ePhysicsBone)
+        if (physicsModeEnum != RigidBodySimulation::PhysicsMode::ePhysicsBone)
         {
             if (mmd::maya::connectOrReplace(outT, jointFn.findPlug("translate", true, &plugStat)) !=
                 MS::kSuccess)
@@ -508,7 +510,7 @@ MStatus RigidBodyCmd::doIt(const MArgList& args)
     MObject solverNode;
     if (!mmd::maya::resolveSolver(target, solverNode))
     {
-        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
+        displayError("'" + target + "' is not an pmxRigidBodyNode or a PMX model root");
         return MS::kFailure;
     }
 

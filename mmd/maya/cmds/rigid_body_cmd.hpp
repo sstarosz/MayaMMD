@@ -3,7 +3,7 @@
  *
  * rigid_body_cmd.hpp
  *
- * RigidBodyCmd — native C++ command for operating on a pmxPhysicsNode.
+ * RigidBodyCmd — native C++ command for operating on a pmxRigidBodyNode.
  *
  * Create mode only (create is the default; -edit/-query are enabled in the
  * syntax but not implemented yet and are rejected):

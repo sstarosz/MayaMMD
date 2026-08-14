@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * pmx_physics_cmd_utils.hpp
+ * pmx_rigid_body_cmd_utils.hpp
  *
  * Shared helpers for the native ``pmxRigidBody`` / ``pmxRigidBodyConstraint``
  * commands.  Both commands resolve the same "solver node or model root"
@@ -22,13 +22,13 @@
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
-#include "nodes/physics_node.h"
+#include "nodes/rigid_body_node.hpp"
 #include "physics_math.hpp"
 
 namespace mmd::maya
 {
 
-/// Resolve *target* to a pmxPhysicsNode MObject (direct node or model root).
+/// Resolve *target* to a pmxRigidBodyNode MObject (direct node or model root).
 inline bool resolveSolver(const MString& target, MObject& outSolver)
 {
     MSelectionList sel;
@@ -41,13 +41,13 @@ inline bool resolveSolver(const MString& target, MObject& outSolver)
         return false;
 
     MFnDependencyNode fn(obj);
-    if (fn.typeName() == PhysicsNode::kNodeName)
+    if (fn.typeName() == RigidBodyNode::kNodeName)
     {
         outSolver = obj;
         return true;
     }
-    // Model root: resolve the pmxPhysicsNode string attribute.
-    MPlug p = fn.findPlug("pmxPhysicsNode", true);
+    // Model root: resolve the pmxRigidBodyNode string attribute.
+    MPlug p = fn.findPlug("pmxRigidBodyNode", true);
     if (!p.isNull())
     {
         const MString solverName = p.asString();
@@ -60,7 +60,7 @@ inline bool resolveSolver(const MString& target, MObject& outSolver)
                 if (sel2.getDependNode(0, obj2) == MS::kSuccess && obj2.hasFn(MFn::kDependencyNode))
                 {
                     MFnDependencyNode fn2(obj2);
-                    if (fn2.typeName() == PhysicsNode::kNodeName)
+                    if (fn2.typeName() == RigidBodyNode::kNodeName)
                     {
                         outSolver = obj2;
                         return true;

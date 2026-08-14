@@ -137,7 +137,7 @@ message(STATUS "Maya ${Maya_VERSION} SDK: ${Maya_INCLUDE_DIR} (libs: ${Maya_LIBR
 # Used by the Maya-free core (mmd_core) and the plugin.  Provided by vcpkg
 # (see vcpkg.json, package `bullet3` 3.25) with FLOAT precision — do NOT
 # enable vcpkg's `double-precision` feature, btScalar must stay float to
-# match the consumers in mmd/core/simulation.cpp.
+# match the consumers in mmd/core/rigid_body_simulation.cpp.
 if(NOT CMAKE_TOOLCHAIN_FILE)
     message(FATAL_ERROR
         "No CMake toolchain configured.\n\n"
@@ -170,7 +170,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     # Source:
     #   - mmd/MayaMMD.cpp               → entry point (initializePlugin/uninitializePlugin)
     #   - mmd/maya/nodes/ccd_ik_solver_node.h/cpp  → C++ CCD IK solver node
-    #   - mmd/maya/nodes/physics_node.h/cpp        → C++ rigid-body physics node
+    #   - mmd/maya/nodes/rigid_body_node.hpp/cpp  → C++ rigid-body physics node
     #     (embedded Bullet; links mmd_core + Bullet — see below)
     # =====================================================================
     add_library(MayaMMD SHARED
@@ -178,7 +178,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
-        mmd/maya/nodes/physics_node.cpp
+        mmd/maya/nodes/rigid_body_node.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"

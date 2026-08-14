@@ -291,7 +291,7 @@ def load_plugin(plugin_name: str = "MayaMMD") -> bool:
 
 
 def step_physics(node: str | None) -> None:
-    """Force a fresh pmxPhysicsNode solver evaluation at the current time.
+    """Force a fresh pmxRigidBodyNode solver evaluation at the current time.
 
     Only needed for headless/batch use (or to manually advance the sim) — in
     interactive Maya the node is time-driven and steps on its own.

@@ -3,7 +3,7 @@ test_pmx_rigid_body_cmd_integration.py
 
 Integration tests for the native C++ ``pmxRigidBody`` command — pure Maya
 command testing WITHOUT any PMX model.  The scene is a small mock: a transform
-group holding one ``pmxPhysicsNode`` solver plus a couple of bare joints.
+group holding one ``pmxRigidBodyNode`` solver plus a couple of bare joints.
 
 Tests cover (the "add a body and configure it on addition" contract):
 
@@ -22,11 +22,11 @@ Tests cover (the "add a body and configure it on addition" contract):
 - Invalid shape / physicsMode values are rejected.
 - Optional-flag defaults (shape, mode, size, mass, friction, group, mask).
 - Case-insensitive -shape / -physicsMode matching; unmatched -bone indices.
-- Solver resolution through a model-root ``pmxPhysicsNode`` attribute.
+- Solver resolution through a model-root ``pmxRigidBodyNode`` attribute.
 - Enum attributes: getAttr returns the numeric field value; the enum field
   list is exposed via attributeQuery(listEnum=True).
 
-NOTE: MayaMMD.mll (which registers pmxPhysicsNode + the pmxRigidBody command)
+NOTE: MayaMMD.mll (which registers pmxRigidBodyNode + the pmxRigidBody command)
 is already loaded by the test runner — no separate plugin loading here.
 
 NOTE: the native ``pmxRigidBodyConstraint`` command is NOT covered here — it
@@ -46,11 +46,11 @@ from tests.integration.test_helpers import (
     setup_test_environment,
 )
 
-# PMX collider type field values (PhysicsNode::ColliderType).
+# PMX collider type field values (RigidBodyNode::ColliderType).
 COLLIDER_BOX = 1
 COLLIDER_SPHERE = 2
 COLLIDER_CAPSULE = 3
-# PhysicsMode field values (mmd::core::Simulation::PhysicsMode).
+# PhysicsMode field values (mmd::core::RigidBodySimulation::PhysicsMode).
 MODE_FOLLOW_BONE = 0
 MODE_PHYSICS = 1
 MODE_PHYSICS_BONE = 2
@@ -63,7 +63,7 @@ def _make_physics_scene():
     """
     setup_test_environment()
     group = cmds.createNode("transform", name="testPhysicsGroup")
-    solver = cmds.createNode("pmxPhysicsNode", name="testSolver", parent=group)
+    solver = cmds.createNode("pmxRigidBodyNode", name="testSolver", parent=group)
     cmds.select(clear=True)
     joint_a = cmds.joint(name="testJointA", p=[0, 0, 0])
     cmds.select(clear=True)
@@ -345,11 +345,11 @@ def test_invalid_physics_mode_rejected():
 
 
 def test_model_root_resolution():
-    """The solver is resolved through a model-root pmxPhysicsNode attribute."""
+    """The solver is resolved through a model-root pmxRigidBodyNode attribute."""
     _group, solver, joint_a, _jb = _make_physics_scene()
     root = cmds.createNode("transform", name="testModelRoot")
-    cmds.addAttr(root, longName="pmxPhysicsNode", dataType="string")
-    cmds.setAttr(f"{root}.pmxPhysicsNode", solver, type="string")
+    cmds.addAttr(root, longName="pmxRigidBodyNode", dataType="string")
+    cmds.setAttr(f"{root}.pmxRigidBodyNode", solver, type="string")
 
     idx = cmds.pmxRigidBody(
         root,
@@ -364,7 +364,7 @@ def test_model_root_resolution():
         "ViaRoot",
         "name via model root",
     )
-    print("✓ solver resolved through model root pmxPhysicsNode")
+    print("✓ solver resolved through model root pmxRigidBodyNode")
     return True
 
 

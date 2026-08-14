@@ -1,8 +1,8 @@
 """
 rigid_body_builder.py — rigid bodies for PMX models.
 
-Creates the ``{model}_Physics`` group and one ``pmxPhysicsNode`` solver per
-PMX model, then populates the solver's ``bodies`` and ``joints`` arrays
+Creates the ``{model}_RigidBodies`` group and one ``pmxRigidBodyNode`` solver
+per PMX model, then populates the solver's ``bodies`` and ``joints`` arrays
 through the native ``pmxRigidBody`` / ``pmxRigidBodyConstraint`` commands
 (one entry per PMX rigid body / joint, in PMX order).  The solver is
 time-driven (``time1.outTime``); the node computes the solved joint-local
@@ -48,21 +48,23 @@ _PHYSICS_MODE_NAME: dict[int, str] = {
 _DEFAULT_GRAVITY_Y = -9.8
 
 
-def _create_physics_group(
+def _create_rigid_bodies_group(
     name_registry: PMXNamingManager, root_transform_obj: om.MObject
 ) -> str:
-    """Create the ``{model}_Physics`` transform group under the model root."""
+    """Create the ``{model}_RigidBodies`` transform group under the model root."""
     parent = om.MFnDependencyNode(root_transform_obj).name()
     return cmds.createNode(
-        "transform", name=name_registry.get_physics_group_name(), parent=parent
+        "transform", name=name_registry.get_rigid_bodies_group_name(), parent=parent
     )
 
 
-def _create_physics_solver(name_registry: PMXNamingManager, parent_group: str) -> str:
-    """Create the ``pmxPhysicsNode`` solver (a locator shape) and make it time-driven.
+def _create_rigid_body_solver(
+    name_registry: PMXNamingManager, parent_group: str
+) -> str:
+    """Create the ``pmxRigidBodyNode`` solver (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
-    Simulation) and will draw its own guide visualization through a C++ draw
+    RigidBodySimulation) and will draw its own guide visualization through a C++ draw
     override (planned).
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver
@@ -71,8 +73,8 @@ def _create_physics_solver(name_registry: PMXNamingManager, parent_group: str) -
     getCacheSetup).  An empty bodies/joints world is a valid no-op, so
     connecting time before the arrays are populated is safe.
     """
-    solver_name = name_registry.get_physics_solver_name()
-    node = cmds.createNode("pmxPhysicsNode", name=solver_name, parent=parent_group)
+    solver_name = name_registry.get_rigid_body_solver_name()
+    node = cmds.createNode("pmxRigidBodyNode", name=solver_name, parent=parent_group)
     try:
         cmds.connectAttr("time1.outTime", f"{node}.time")
     except Exception as e:
@@ -211,16 +213,16 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
             log.warning("Could not create joint %d: %s", jt_idx, exc)
 
 
-def create_physics_from_pmx_data(
+def create_rigid_bodies_from_pmx_data(
     pmx_data: PmxModel,
     joints: Sequence[om.MObject],
     name_registry: PMXNamingManager,
     root_transform_obj: om.MObject,
 ) -> str | None:
-    """Create the physics graph for a PMX model (no in-memory handle).
+    """Create the rigid-body graph for a PMX model (no in-memory handle).
 
-    Creates the ``{model}_Physics`` group with one ``pmxPhysicsNode`` solver
-    under it, then populates the solver through the native commands: one
+    Creates the ``{model}_RigidBodies`` group with one ``pmxRigidBodyNode``
+    solver under it, then populates the solver through the native commands: one
     ``pmxRigidBody`` per PMX rigid body and one ``pmxRigidBodyConstraint``
     per PMX joint, both in PMX order.  Everything is wired in this single
     pass — there is no separate finalize step.
@@ -230,19 +232,19 @@ def create_physics_from_pmx_data(
         joints:              Joint MObjects in PMX bone order (from bone
                              builder; used to bind FOLLOW_BONE bodies).
         name_registry:       Naming manager for unique names.
-        root_transform_obj:  MObject the physics group is parented under.
+        root_transform_obj:  MObject the rigid bodies group is parented under.
 
     Returns:
         The solver node name (the caller stamps it on the model root), or
-        ``None`` if the node could not be created — the (empty) physics
+        ``None`` if the node could not be created — the (empty) rigid bodies
         group is left in the scene in that case.
     """
-    group = _create_physics_group(name_registry, root_transform_obj)
+    group = _create_rigid_bodies_group(name_registry, root_transform_obj)
     try:
-        node = _create_physics_solver(name_registry, parent_group=group)
+        node = _create_rigid_body_solver(name_registry, parent_group=group)
     except Exception as e:  # pragma: no cover - Maya-side failure path
         log.warning(
-            "Could not create physics node for %s: %s",
+            "Could not create rigid body node for %s: %s",
             name_registry.get_model_name(),
             e,
         )
@@ -253,7 +255,7 @@ def create_physics_from_pmx_data(
     # references would point at the WRONG bodies.
     if created != len(pmx_data.rigid_bodies):
         log.warning(
-            "Physics: created %d/%d rigid bodies — PMX body indices no longer "
+            "Rigid bodies: created %d/%d rigid bodies — PMX body indices no longer "
             "match Maya body indices, so constraints are unreliable for this model",
             created,
             len(pmx_data.rigid_bodies),
