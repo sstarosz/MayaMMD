@@ -19,7 +19,6 @@
 using mmd::core::applyShapeSize;
 using mmd::core::Double3;
 using mmd::core::Double4;
-using mmd::core::shapeSizeFromBodyDefinition;
 using mmd::core::RigidBodySimulation;
 using namespace mmd::core::physics_math;
 
@@ -506,7 +505,7 @@ TEST_CASE("Every joint type builds and steps without error", "[sim]")
     }
 }
 
-// â”€â”€ PMX shape_size mapping (applyShapeSize / shapeSizeFromBodyDefinition) â”€â”€
+// â”€â”€ PMX shape_size mapping (applyShapeSize) â”€â”€
 // These lock in the full-size-vs-half-extents convention: the PMX shape_size is
 // a FULL size (box extents are full), while the engine stores box extents as
 // HALF-extents because btBoxShape expects half extents.
@@ -539,63 +538,5 @@ TEST_CASE("applyShapeSize maps PMX shape_size onto the engine fields", "[sim][sh
         applyShapeSize(b, Double3(0.2, 0.4, 0.0));
         REQUIRE(b.radius == Catch::Approx(0.2));
         REQUIRE(b.length == Catch::Approx(0.4));
-    }
-}
-
-TEST_CASE("shapeSizeFromBodyDefinition recovers the PMX shape_size", "[sim][shape-size]")
-{
-    // Sphere: the recovered shape_size is (radius, 0, 0) â€” the unused slots
-    // are zeroed so a round trip through applyShapeSize is lossless.
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eSphere;
-        b.radius = 0.5;
-        requireDouble3(shapeSizeFromBodyDefinition(b), Double3(0.5, 0.0, 0.0));
-    }
-
-    // Box: HALF extents are doubled back to the FULL PMX size.
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eBox;
-        b.extents = Double3(0.075, 0.25, 0.5);
-        requireDouble3(shapeSizeFromBodyDefinition(b), Double3(0.15, 0.5, 1.0));
-    }
-
-    // Capsule: (radius, length, 0).
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eCapsule;
-        b.radius = 0.2;
-        b.length = 0.4;
-        requireDouble3(shapeSizeFromBodyDefinition(b), Double3(0.2, 0.4, 0.0));
-    }
-}
-
-TEST_CASE("applyShapeSize / shapeSizeFromBodyDefinition round-trip", "[sim][shape-size]")
-{
-    // For every collider type, forward-then-inverse must reproduce the PMX
-    // shape_size exactly (the unused slots come back as the zeros the PMX
-    // author wrote).
-    const Double3 kBoxSize(0.15, 0.5, 1.0);
-    const Double3 kSphereSize(0.5, 0.0, 0.0);
-    const Double3 kCapsuleSize(0.2, 0.4, 0.0);
-
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eSphere;
-        applyShapeSize(b, kSphereSize);
-        requireDouble3(shapeSizeFromBodyDefinition(b), kSphereSize);
-    }
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eBox;
-        applyShapeSize(b, kBoxSize);
-        requireDouble3(shapeSizeFromBodyDefinition(b), kBoxSize);
-    }
-    {
-        RigidBodySimulation::BodyDefinition b;
-        b.colliderType = RigidBodySimulation::ColliderType::eCapsule;
-        applyShapeSize(b, kCapsuleSize);
-        requireDouble3(shapeSizeFromBodyDefinition(b), kCapsuleSize);
     }
 }

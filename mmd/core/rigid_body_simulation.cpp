@@ -50,7 +50,8 @@ constexpr double kAnchorMoveRotEps = 1e-5;    // column-dot threshold for anchor
 // Shared 6DOF linear/angular limit setup — identical for the SPRING_6DOF
 // (btGeneric6DofSpring2Constraint) and 6DOF (btGeneric6DofConstraint) cases.
 template <typename ConstraintT>
-void applySixDofLimits(ConstraintT& constraint, const mmd::core::RigidBodySimulation::JointDefinition& j)
+void applySixDofLimits(ConstraintT& constraint,
+                       const mmd::core::RigidBodySimulation::JointDefinition& j)
 {
     constraint.setLinearLowerLimit(btVector3(static_cast<btScalar>(j.linearMin.x),
                                              static_cast<btScalar>(j.linearMin.y),
@@ -437,7 +438,8 @@ bool RigidBodySimulation::RigidBodySimulationImpl::initialized() const
     return mWorldBuilt;
 }
 
-bool RigidBodySimulation::RigidBodySimulationImpl::setKinematicPose(size_t anchorIndex, const Pose& pose)
+bool RigidBodySimulation::RigidBodySimulationImpl::setKinematicPose(size_t anchorIndex,
+                                                                    const Pose& pose)
 {
     if (anchorIndex >= mKinematicBodyIndices.size())
     {
@@ -548,7 +550,8 @@ void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
     }
 }
 
-RigidBodySimulation::Pose RigidBodySimulation::RigidBodySimulationImpl::bodyPose(size_t bodyIndex) const
+RigidBodySimulation::Pose
+RigidBodySimulation::RigidBodySimulationImpl::bodyPose(size_t bodyIndex) const
 {
     Pose p;
     if (mWorld && bodyIndex < mRigidBodies.size() && mRigidBodies[bodyIndex] != nullptr)
@@ -573,6 +576,11 @@ RigidBodySimulation::Pose RigidBodySimulation::RigidBodySimulationImpl::bodyPose
 RigidBodySimulation::RigidBodySimulation() : mImpl(std::make_unique<RigidBodySimulationImpl>()) {}
 
 RigidBodySimulation::~RigidBodySimulation() = default;
+
+// Defined here (not in the header) so a move never requires the PIMPL to be
+// complete at the caller's translation unit.
+RigidBodySimulation::RigidBodySimulation(RigidBodySimulation&&) noexcept = default;
+RigidBodySimulation& RigidBodySimulation::operator=(RigidBodySimulation&&) noexcept = default;
 
 bool RigidBodySimulation::initialize(const Definition& definition)
 {

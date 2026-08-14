@@ -38,7 +38,9 @@
 
 #include "maya_utils.hpp"
 #include "nodes/rigid_body_node.hpp"
+#include "rigid_body_simulation.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -67,17 +69,6 @@ constexpr const char* kRestitutionFlag = "re";
 constexpr const char* kGroupFlag = "g";
 constexpr const char* kMaskFlag = "msk"; // short names are limited to 3 chars
 constexpr const char* kPhysicsModeFlag = "pm";
-
-// PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
-// damping/friction match the import path exactly.
-constexpr double clamp01(double v)
-{
-    if (v < 0.0)
-        return 0.0;
-    if (v > 1.0)
-        return 1.0;
-    return v;
-}
 
 // Read a 3-double flag (e.g. -size x y z) into a Double3 with a single
 // MArgList::asVector call instead of three flagArgumentDouble() lookups: the
@@ -231,10 +222,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     // PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
     // damping/friction match the import path exactly.
-    linearDamping = clamp01(linearDamping);
-    angularDamping = clamp01(angularDamping);
-    friction = clamp01(friction);
-    restitution = clamp01(restitution);
+    linearDamping = std::clamp(linearDamping, 0.0, 1.0);
+    angularDamping = std::clamp(angularDamping, 0.0, 1.0);
+    friction = std::clamp(friction, 0.0, 1.0);
+    restitution = std::clamp(restitution, 0.0, 1.0);
 
     // ── Enumerated values ──
     const MString sh = shape.toLowerCase();
