@@ -66,6 +66,7 @@ sys.modules["maya.cmds"] = _mock_cmds
 from mmd.maya.vmd_scene_builder import (  # noqa: E402
     _convert_vmd_quaternion_to_maya_components,
     _ensure_quaternion_continuity,
+    _extend_playback_range,
     _normalize_quaternion_components,
 )
 
@@ -179,6 +180,43 @@ class TestConvertVmdQuaternionToMayaComponents(unittest.TestCase):
         # Z is kept positive
         expected = (0.0, 0.0, 0.3826834, 0.9238795)
         self.assertAlmostEqual(_quat_dot(result, expected), 1.0, places=4)
+
+
+class TestExtendPlaybackRange(unittest.TestCase):
+    """Tests for _extend_playback_range extend-only semantics.
+
+    The key regression this guards: applying a second, *shorter* VMD must
+    never shrink the timeline and clip a longer animation already applied.
+    """
+
+    def test_extends_max_when_new_animation_is_longer(self):
+        # Current range 1..100, new animation runs to 200 → extend the end.
+        result = _extend_playback_range(1, 100, 1, 200)
+        self.assertEqual(result, (1, 200))
+
+    def test_never_shrinks_when_new_animation_is_shorter(self):
+        # Current range 1..100, new (shorter) animation runs only to 50.
+        # The range must stay 1..100 — this was the bug.
+        result = _extend_playback_range(1, 100, 1, 50)
+        self.assertEqual(result, (1, 100))
+
+    def test_keeps_earlier_start_when_new_animation_starts_later(self):
+        result = _extend_playback_range(1, 100, 20, 120)
+        self.assertEqual(result, (1, 120))
+
+    def test_moves_start_earlier_when_new_animation_starts_earlier(self):
+        result = _extend_playback_range(10, 100, 1, 50)
+        self.assertEqual(result, (1, 100))
+
+    def test_default_range_is_extended(self):
+        # Fresh scene default (1..48) + a 1000-frame animation → 1..1001.
+        result = _extend_playback_range(1, 48, 1, 1000)
+        self.assertEqual(result, (1, 1000))
+
+    def test_float_current_values_are_handled(self):
+        # Maya playbackOptions returns floats; must not break comparison.
+        result = _extend_playback_range(1.0, 48.0, 1, 30.0)
+        self.assertEqual(result, (1, 48.0))
 
 
 if __name__ == "__main__":

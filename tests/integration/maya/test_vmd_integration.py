@@ -1061,6 +1061,56 @@ def test_quaternion_slerp_curves_applied(
     return True
 
 
+@matrix
+def test_playback_range_only_extends(
+    pmx_data: PmxModel,
+    maya_pmx_data: MayaPmxData,
+    vmd_data: VMDFile,
+    sample_every: int = 5,
+) -> bool:
+    """Applying a second, shorter VMD must never shrink the playback range.
+
+    Regression test for the multi-animation bug: apply_vmd_to_scene used to
+    overwrite minTime/maxTime with each VMD's own end frame, so a second
+    (shorter) animation clipped the tail of a longer first animation.  The
+    range must be extend-only.
+    """
+
+    cmds.file(new=True, force=True)
+    fresh_maya_data = build_pmx_scene(pmx_data)
+    model = fresh_maya_data.to_resolved()
+
+    # First apply — long animation (frame_scale stretches the end frame).
+    apply_vmd_to_scene(
+        vmd_data,
+        model=model,
+        start_frame=1,
+        frame_scale=2.0,
+        apply_bone_anim=True,
+        apply_morph_anim=False,
+    )
+    long_max = int(cmds.playbackOptions(query=True, maxTime=True))
+
+    # Second apply — a shorter animation.  No curves are applied (data-only),
+    # but the playback-range path still runs and must NOT shrink the range.
+    apply_vmd_to_scene(
+        vmd_data,
+        model=model,
+        start_frame=1,
+        frame_scale=0.5,
+        apply_bone_anim=False,
+        apply_morph_anim=False,
+    )
+    short_max = int(cmds.playbackOptions(query=True, maxTime=True))
+
+    assert_true(
+        short_max >= long_max,
+        f"playback maxTime shrank after a shorter VMD: {long_max} -> {short_max}",
+    )
+    print(f"  Playback range kept {short_max} >= {long_max} after shorter VMD ✓")
+    return True
+
+
 _TESTS = [
     ("VMD Bone Animation Sync (vs JSON)", test_vmd_bone_animation),
     (
@@ -1090,5 +1140,9 @@ _TESTS = [
     (
         "VMD Quaternion SLERP Curves Applied",
         test_quaternion_slerp_curves_applied,
+    ),
+    (
+        "VMD Playback Range Extend-Only (shorter 2nd VMD)",
+        test_playback_range_only_extends,
     ),
 ]
