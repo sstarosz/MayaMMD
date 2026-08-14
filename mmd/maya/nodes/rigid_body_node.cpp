@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * physics_node.cpp
+ * rigid_body_node.cpp
  *
- * PhysicsNode — native rigid-body physics node.  An MPxLocatorNode that owns
+ * RigidBodyNode — native rigid-body physics node.  An MPxLocatorNode that owns
  * a Maya-free Bullet world (mmd::core::Simulation) and advances it in
  * compute() whenever `time1.outTime` changes (the same evaluation path as a
  * parentConstraint, so it runs under Cached Playback).
@@ -15,7 +15,7 @@
  * outTranslate/outRotate outputs.
  */
 
-#include "physics_node.h"
+#include "rigid_body_node.hpp"
 
 #include "maya_utils.hpp"
 
@@ -67,7 +67,7 @@ using mmd::core::Simulation;
 // ===========================================================================
 // Constants
 // ===========================================================================
-const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for pmxPhysicsNode
+const MTypeId RigidBodyNode::kTypeId(0x0011C105); // unique Maya node type id for pmxRigidBodyNode
 
 // Simulation constants + joint-type mapping moved into the Maya-free engine
 // (mmd_simulation.cpp) — the node only builds a Definition, steps the sim and
@@ -76,51 +76,51 @@ const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for 
 // ===========================================================================
 // Attribute declarations
 // ===========================================================================
-MObject PhysicsNode::aTime;
-MObject PhysicsNode::aGravity;
+MObject RigidBodyNode::aTime;
+MObject RigidBodyNode::aGravity;
 
-MObject PhysicsNode::aBodies;
-MObject PhysicsNode::aBodyEnabled;
-MObject PhysicsNode::aBodyNameLocal;
-MObject PhysicsNode::aBodyNameUniversal;
-MObject PhysicsNode::aBodyGroupId;
-std::array<MObject, 16> PhysicsNode::aBodyMaskGroup;
-MObject PhysicsNode::aBodyColliderType;
-MObject PhysicsNode::aBodyShapeSize;
-MObject PhysicsNode::aBodyRestTranslate;
-MObject PhysicsNode::aBodyRestRotate;
-MObject PhysicsNode::aBodyMass;
-MObject PhysicsNode::aBodyLinearDamping;
-MObject PhysicsNode::aBodyAngularDamping;
-MObject PhysicsNode::aBodyRestitution;
-MObject PhysicsNode::aBodyFriction;
-MObject PhysicsNode::aBodyPhysicsMode;
-MObject PhysicsNode::aBodyJoint;
-MObject PhysicsNode::aBodyAnchorWorld;
+MObject RigidBodyNode::aBodies;
+MObject RigidBodyNode::aBodyEnabled;
+MObject RigidBodyNode::aBodyNameLocal;
+MObject RigidBodyNode::aBodyNameUniversal;
+MObject RigidBodyNode::aBodyGroupId;
+std::array<MObject, 16> RigidBodyNode::aBodyMaskGroup;
+MObject RigidBodyNode::aBodyColliderType;
+MObject RigidBodyNode::aBodyShapeSize;
+MObject RigidBodyNode::aBodyRestTranslate;
+MObject RigidBodyNode::aBodyRestRotate;
+MObject RigidBodyNode::aBodyMass;
+MObject RigidBodyNode::aBodyLinearDamping;
+MObject RigidBodyNode::aBodyAngularDamping;
+MObject RigidBodyNode::aBodyRestitution;
+MObject RigidBodyNode::aBodyFriction;
+MObject RigidBodyNode::aBodyPhysicsMode;
+MObject RigidBodyNode::aBodyJoint;
+MObject RigidBodyNode::aBodyAnchorWorld;
 
-MObject PhysicsNode::aJoints;
-MObject PhysicsNode::aJointNameLocal;
-MObject PhysicsNode::aJointNameUniversal;
-MObject PhysicsNode::aJointBodyA;
-MObject PhysicsNode::aJointBodyB;
-MObject PhysicsNode::aJointType;
-MObject PhysicsNode::aJointFrameTranslate;
-MObject PhysicsNode::aJointFrameRotate;
-MObject PhysicsNode::aJointLinearMin;
-MObject PhysicsNode::aJointLinearMax;
-MObject PhysicsNode::aJointAngularMin;
-MObject PhysicsNode::aJointAngularMax;
-MObject PhysicsNode::aJointLinearSpring;
-MObject PhysicsNode::aJointAngularSpring;
+MObject RigidBodyNode::aJoints;
+MObject RigidBodyNode::aJointNameLocal;
+MObject RigidBodyNode::aJointNameUniversal;
+MObject RigidBodyNode::aJointBodyA;
+MObject RigidBodyNode::aJointBodyB;
+MObject RigidBodyNode::aJointType;
+MObject RigidBodyNode::aJointFrameTranslate;
+MObject RigidBodyNode::aJointFrameRotate;
+MObject RigidBodyNode::aJointLinearMin;
+MObject RigidBodyNode::aJointLinearMax;
+MObject RigidBodyNode::aJointAngularMin;
+MObject RigidBodyNode::aJointAngularMax;
+MObject RigidBodyNode::aJointLinearSpring;
+MObject RigidBodyNode::aJointAngularSpring;
 
-MObject PhysicsNode::aOutTranslate;
-MObject PhysicsNode::aOutTranslateX;
-MObject PhysicsNode::aOutTranslateY;
-MObject PhysicsNode::aOutTranslateZ;
-MObject PhysicsNode::aOutRotate;
-MObject PhysicsNode::aOutRotateX;
-MObject PhysicsNode::aOutRotateY;
-MObject PhysicsNode::aOutRotateZ;
+MObject RigidBodyNode::aOutTranslate;
+MObject RigidBodyNode::aOutTranslateX;
+MObject RigidBodyNode::aOutTranslateY;
+MObject RigidBodyNode::aOutTranslateZ;
+MObject RigidBodyNode::aOutRotate;
+MObject RigidBodyNode::aOutRotateX;
+MObject RigidBodyNode::aOutRotateY;
+MObject RigidBodyNode::aOutRotateZ;
 
 // ===========================================================================
 // Maya-specific conversion (the shared pure math is in physics_math.hpp)
@@ -245,9 +245,9 @@ Simulation::ColliderType colliderToEngine(short v)
 {
     switch (v)
     {
-    case PhysicsNode::kColliderBox:
+    case RigidBodyNode::kColliderBox:
         return Simulation::ColliderType::eBox;
-    case PhysicsNode::kColliderSphere:
+    case RigidBodyNode::kColliderSphere:
         return Simulation::ColliderType::eSphere;
     default:
         return Simulation::ColliderType::eCapsule; // kColliderCapsule
@@ -255,16 +255,16 @@ Simulation::ColliderType colliderToEngine(short v)
 }
 
 // Inverse of colliderToEngine — engine enum -> node attribute enum.
-PhysicsNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
+RigidBodyNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
 {
     switch (v)
     {
     case Simulation::ColliderType::eSphere:
-        return PhysicsNode::kColliderSphere;
+        return RigidBodyNode::kColliderSphere;
     case Simulation::ColliderType::eBox:
-        return PhysicsNode::kColliderBox;
+        return RigidBodyNode::kColliderBox;
     default:
-        return PhysicsNode::kColliderCapsule; // eCapsule
+        return RigidBodyNode::kColliderCapsule; // eCapsule
     }
 }
 
@@ -275,30 +275,30 @@ PhysicsNode::ColliderType colliderFromEngine(Simulation::ColliderType v)
 // by the DG.
 // (The asDouble3() calls are NOLINT'd — the decay happens inside the Maya SDK
 // header, not in this file.)
-void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
+void readDrawBodyFromPlug(const MPlug& el, RigidBodyNode::DrawBody& db)
 {
-    db.colliderType =
-        static_cast<PhysicsNode::ColliderType>(el.child(PhysicsNode::aBodyColliderType).asShort());
+    db.colliderType = static_cast<RigidBodyNode::ColliderType>(
+        el.child(RigidBodyNode::aBodyColliderType).asShort());
     // PMX shape_size VERBATIM (full size) — the draw contract reads it
     // directly and derives the primitive by collider type.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* s = el.child(PhysicsNode::aBodyShapeSize).asMDataHandle().asDouble3();
+    const double* s = el.child(RigidBodyNode::aBodyShapeSize).asMDataHandle().asDouble3();
     db.shapeSize[0] = s[0];
     db.shapeSize[1] = s[1];
     db.shapeSize[2] = s[2];
-    db.kinematic = (el.child(PhysicsNode::aBodyPhysicsMode).asShort() ==
+    db.kinematic = (el.child(RigidBodyNode::aBodyPhysicsMode).asShort() ==
                     static_cast<short>(Simulation::PhysicsMode::eFollowBone));
     // group id straight from the raw PMX id (the Bullet group bit is derived
     // from it in buildWorld); clamp legacy scenes where it is -1.
-    db.groupId = el.child(PhysicsNode::aBodyGroupId).asShort();
+    db.groupId = el.child(RigidBodyNode::aBodyGroupId).asShort();
     db.groupId = std::max(db.groupId, 0); // clamp legacy -1
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* p = el.child(PhysicsNode::aBodyRestTranslate).asMDataHandle().asDouble3();
+    const double* p = el.child(RigidBodyNode::aBodyRestTranslate).asMDataHandle().asDouble3();
     db.pos[0] = p[0];
     db.pos[1] = p[1];
     db.pos[2] = p[2];
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* r = el.child(PhysicsNode::aBodyRestRotate).asMDataHandle().asDouble3();
+    const double* r = el.child(RigidBodyNode::aBodyRestRotate).asMDataHandle().asDouble3();
     const Double4 q = eulerDegreesToQuat(r[0], r[1], r[2]);
     db.quat[0] = q.x;
     db.quat[1] = q.y;
@@ -311,7 +311,7 @@ void readDrawBodyFromPlug(const MPlug& el, PhysicsNode::DrawBody& db)
 // ===========================================================================
 // Node lifecycle
 // ===========================================================================
-PhysicsNode::PhysicsNode() = default;
+RigidBodyNode::RigidBodyNode() = default;
 
 // Defaulted: the node is destroyed polymorphically through its MPxNode base
 // (Maya deletes it via the base pointer).  The default teardown is exactly
@@ -319,9 +319,9 @@ PhysicsNode::PhysicsNode() = default;
 // PIMPL destructor, mBodies/mJoints are plain vectors, and the scalars are
 // trivial.  The only explicit teardown is destroyWorld() below, used to reset
 // to the unbuilt state for a rebuild.
-PhysicsNode::~PhysicsNode() = default;
+RigidBodyNode::~RigidBodyNode() = default;
 
-void PhysicsNode::destroyWorld()
+void RigidBodyNode::destroyWorld()
 {
     // Reset to the unbuilt state for an in-place rebuild (see compute()):
     // clear the Bullet world + the cached body/joint data.  The engine owns
@@ -333,15 +333,15 @@ void PhysicsNode::destroyWorld()
     mJoints.clear();
 }
 
-void* PhysicsNode::creator()
+void* RigidBodyNode::creator()
 {
-    return new PhysicsNode();
+    return new RigidBodyNode();
 }
 
 // ===========================================================================
 // Attribute registration
 // ===========================================================================
-MStatus PhysicsNode::initialize()
+MStatus RigidBodyNode::initialize()
 {
     MFnNumericAttribute nAttr;
     MFnCompoundAttribute cAttr;
@@ -416,7 +416,7 @@ MStatus PhysicsNode::initialize()
     }
 
     // PMX collider type — enum: box / sphere / capsule (field values match
-    // PhysicsNode::ColliderType).  Field names mirror the enumerators.
+    // RigidBodyNode::ColliderType).  Field names mirror the enumerators.
     // Read back via .asShort() like any other numeric attribute.
     {
         MFnEnumAttribute eAttr;
@@ -701,7 +701,7 @@ MStatus PhysicsNode::initialize()
 // ===========================================================================
 // Data reading
 // ===========================================================================
-std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& dataBlock)
+std::vector<Simulation::BodyDefinition> RigidBodyNode::readBodyData(MDataBlock& dataBlock)
 {
     std::vector<Simulation::BodyDefinition> out;
     MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
@@ -811,7 +811,7 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
     return out;
 }
 
-void PhysicsNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDefinition>& bodies)
+void RigidBodyNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDefinition>& bodies)
 {
     // Derive K = jointRestWorld * bodyRestWorld^-1 ONLY when the world is
     // (re)built.  The inputs are static per config — the joints' pmxRest*/
@@ -842,7 +842,7 @@ void PhysicsNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDefin
     }
 }
 
-std::vector<Simulation::JointDefinition> PhysicsNode::readJointData(MDataBlock& dataBlock)
+std::vector<Simulation::JointDefinition> RigidBodyNode::readJointData(MDataBlock& dataBlock)
 {
     std::vector<Simulation::JointDefinition> out;
     MArrayDataHandle jointsHandle = dataBlock.inputArrayValue(aJoints);
@@ -872,9 +872,9 @@ std::vector<Simulation::JointDefinition> PhysicsNode::readJointData(MDataBlock& 
 // ===========================================================================
 // World construction
 // ===========================================================================
-bool PhysicsNode::buildWorld(const Double3& gravity,
-                             const std::vector<Simulation::BodyDefinition>& bodies,
-                             const std::vector<Simulation::JointDefinition>& joints)
+bool RigidBodyNode::buildWorld(const Double3& gravity,
+                               const std::vector<Simulation::BodyDefinition>& bodies,
+                               const std::vector<Simulation::JointDefinition>& joints)
 {
     // An EMPTY node (no bodies) is a valid no-op — a freshly created node
     // before the commands populate the bodies array.  The callers skip
@@ -893,7 +893,7 @@ bool PhysicsNode::buildWorld(const Double3& gravity,
 // ===========================================================================
 // Per-frame update
 // ===========================================================================
-bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
+bool RigidBodyNode::updateKinematicAnchors(MDataBlock& dataBlock)
 {
     if (!mSim.initialized())
         return false;
@@ -929,20 +929,20 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
     return anchorsMoved;
 }
 
-void PhysicsNode::getCacheSetup(const MEvaluationNode& evalNode,
-                                MNodeCacheDisablingInfo& disablingInfo,
-                                MNodeCacheSetupInfo& setupInfo,
-                                MObjectArray& monitoredAttributes) const
+void RigidBodyNode::getCacheSetup(const MEvaluationNode& evalNode,
+                                  MNodeCacheDisablingInfo& disablingInfo,
+                                  MNodeCacheSetupInfo& setupInfo,
+                                  MObjectArray& monitoredAttributes) const
 {
     // This node advances an internal Bullet world in compute(), so its outputs
     // are NOT a pure function of its inputs.  Cached Playback must re-evaluate
     // it every frame, exactly like a scripted/expression node.
-    MString category("pmxPhysicsNode: stateful Bullet solver (steps every frame)");
+    MString category("pmxRigidBodyNode: stateful Bullet solver (steps every frame)");
     MNodeCacheDisablingInfoHelper::setUnsafeNode(disablingInfo, evalNode, &category);
     MPxLocatorNode::getCacheSetup(evalNode, disablingInfo, setupInfo, monitoredAttributes);
 }
 
-bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
+bool RigidBodyNode::writeOutputs(MDataBlock& dataBlock)
 {
     // Two-pass bone-world write-back — the node builds its OWN temporary
     // skeleton hierarchy and never reads the driven joints from the DG (that
@@ -1066,7 +1066,7 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 // ===========================================================================
 // Draw support
 // ===========================================================================
-void PhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
+void RigidBodyNode::collectDrawData(std::vector<DrawBody>& out) const
 {
     out.clear();
     // Before the first compute() the internal body state is empty — draw the
@@ -1127,7 +1127,7 @@ void PhysicsNode::collectDrawData(std::vector<DrawBody>& out) const
     }
 }
 
-MBoundingBox PhysicsNode::boundingBox() const
+MBoundingBox RigidBodyNode::boundingBox() const
 {
     MBoundingBox box;
     bool any = false;
@@ -1153,7 +1153,7 @@ MBoundingBox PhysicsNode::boundingBox() const
 // ===========================================================================
 // Config change detection
 // ===========================================================================
-Double3 PhysicsNode::readGravity(MDataBlock& dataBlock)
+Double3 RigidBodyNode::readGravity(MDataBlock& dataBlock)
 {
     MDataHandle gravHandle = dataBlock.inputValue(aGravity);
     // asDouble3() decays inside the SDK header (same as readDouble3).
@@ -1162,9 +1162,9 @@ Double3 PhysicsNode::readGravity(MDataBlock& dataBlock)
     return Double3(g[0], g[1], g[2]);
 }
 
-bool PhysicsNode::configChanged(const std::vector<Simulation::BodyDefinition>& bodies,
-                                const std::vector<Simulation::JointDefinition>& joints,
-                                const Double3& gravity) const
+bool RigidBodyNode::configChanged(const std::vector<Simulation::BodyDefinition>& bodies,
+                                  const std::vector<Simulation::JointDefinition>& joints,
+                                  const Double3& gravity) const
 {
     // The anchor matrix VALUES are per-frame (bodies[i].bodyAnchorWorld, read
     // fresh in updateKinematicAnchors).  The write-back offsets are derived
@@ -1176,9 +1176,9 @@ bool PhysicsNode::configChanged(const std::vector<Simulation::BodyDefinition>& b
            gravity.y != mGravity.y || gravity.z != mGravity.z;
 }
 
-void PhysicsNode::storeConfig(const std::vector<Simulation::BodyDefinition>& bodies,
-                              const std::vector<Simulation::JointDefinition>& joints,
-                              const Double3& gravity)
+void RigidBodyNode::storeConfig(const std::vector<Simulation::BodyDefinition>& bodies,
+                                const std::vector<Simulation::JointDefinition>& joints,
+                                const Double3& gravity)
 {
     mBodies = bodies;
     mJoints = joints;
@@ -1188,7 +1188,7 @@ void PhysicsNode::storeConfig(const std::vector<Simulation::BodyDefinition>& bod
 // ===========================================================================
 // compute()
 // ===========================================================================
-MStatus PhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
+MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 {
     if (plug != aOutTranslate && plug != aOutRotate && !plug.isElement() && !plug.isChild())
     {

@@ -202,11 +202,11 @@ def get_morph_tests():
 def get_node_tests():
     """Import the no-PMX node suites and return their combined test list."""
     from tests.integration.maya.nodes import test_bone_morph_node_integration
-    from tests.integration.maya.nodes import test_physics_node_integration
+    from tests.integration.maya.nodes import test_rigid_body_node_integration
 
     return [
         *test_bone_morph_node_integration._TESTS,
-        *test_physics_node_integration._TESTS,
+        *test_rigid_body_node_integration._TESTS,
     ]
 
 

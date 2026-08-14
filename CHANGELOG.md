@@ -93,6 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Rigid-body physics renamed to `pmxRigidBodyNode`** (breaking — re-import
+  required).  The native solver node and its scene names are unified with the
+  `rigid_body` family: node type `pmxPhysicsNode` → `pmxRigidBodyNode`, model-root
+  discovery attribute `pmxPhysicsNode` → `pmxRigidBodyNode`, group
+  `{model}_Physics` → `{model}_RigidBodies`, solver `{model}_PhysicsSolver` →
+  `{model}_RigidBodySolver`.  C++ files `physics_node.{h,cpp}` →
+  `rigid_body_node.{hpp,cpp}` (class `PhysicsNode` → `RigidBodyNode`).
+
 - **`pmxPhysicsNode` schema: per-body anchor input + internally derived K**
   (breaking schema change — re-import required).  The two remaining matrix
   inputs are restructured:

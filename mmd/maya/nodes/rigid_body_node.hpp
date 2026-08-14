@@ -1,9 +1,9 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * physics_node.h
+ * rigid_body_node.hpp
  *
- * PhysicsNode — native rigid-body physics node for MMD secondary movement.
+ * RigidBodyNode — native rigid-body physics node for MMD secondary movement.
  *
  * WHY A NATIVE NODE: the Bullet world lives inside this node and advances in
  * compute() whenever `time1.outTime` changes — the same evaluation path as a
@@ -37,18 +37,18 @@
 #include "simulation.hpp"
 
 // ===========================================================================
-// PhysicsNode
+// RigidBodyNode
 // ===========================================================================
-class PhysicsNode : public MPxLocatorNode
+class RigidBodyNode : public MPxLocatorNode
 {
   public:
     static const MTypeId kTypeId;
-    static constexpr const char* kNodeName = "pmxPhysicsNode";
+    static constexpr const char* kNodeName = "pmxRigidBodyNode";
     // VP2 draw-database classification.  A drawable locator node must be
     // registered with the SAME classification string its draw override is
     // registered under ("drawdb/geometry/<nodeType>") or VP2 never associates
     // the override with the node and no guides are drawn.
-    static constexpr const char* kNodeClassify = "drawdb/geometry/pmxPhysicsNode";
+    static constexpr const char* kNodeClassify = "drawdb/geometry/pmxRigidBodyNode";
 
     // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
     // attribute.  The attribute VALUES are mmd::core::Simulation::PhysicsMode
@@ -91,11 +91,11 @@ class PhysicsNode : public MPxLocatorNode
     // Object-space bounding box over the body rest poses (selection/culling).
     MBoundingBox boundingBox() const override;
 
-    PhysicsNode();
+    RigidBodyNode();
     // Defaulted out-of-line: the node is destroyed polymorphically through its
     // MPxNode base (Maya deletes it via the base pointer), and the default
     // teardown is exactly what we want — see the lifecycle notes in the cpp.
-    ~PhysicsNode() override;
+    ~RigidBodyNode() override;
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;

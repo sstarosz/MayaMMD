@@ -3,7 +3,7 @@ test_pmx_rigid_body_constraint_cmd_integration.py
 
 Integration tests for the native C++ ``pmxRigidBodyConstraint`` command — pure
 Maya command testing WITHOUT any PMX model.  The scene is a small mock: a
-transform group holding one ``pmxPhysicsNode`` solver plus two bare joints,
+transform group holding one ``pmxRigidBodyNode`` solver plus two bare joints,
 with a couple of rigid bodies appended through ``pmxRigidBody`` (constraints
 reference bodies by index, so bodies must exist first).
 
@@ -18,10 +18,10 @@ Tests cover (the "add a joint and configure it on addition" contract):
 - Joint type validated to the PMX 0..5 range.
 - bodyA/bodyB validated against the current body count.
 - -index must be the next free index (rejected otherwise).
-- Solver resolution through a model-root ``pmxPhysicsNode`` attribute.
+- Solver resolution through a model-root ``pmxRigidBodyNode`` attribute.
 - Query/edit modes rejected.
 
-NOTE: MayaMMD.mll (which registers pmxPhysicsNode + the pmxRigidBody and
+NOTE: MayaMMD.mll (which registers pmxRigidBodyNode + the pmxRigidBody and
 pmxRigidBodyConstraint commands) is already loaded by the test runner — no
 separate plugin loading here.
 """
@@ -47,7 +47,7 @@ def _make_physics_scene():
     """
     setup_test_environment()
     group = cmds.createNode("transform", name="testPhysicsGroup")
-    solver = cmds.createNode("pmxPhysicsNode", name="testSolver", parent=group)
+    solver = cmds.createNode("pmxRigidBodyNode", name="testSolver", parent=group)
     cmds.select(clear=True)
     joint_a = cmds.joint(name="testJointA", p=[0, 0, 0])
     cmds.select(clear=True)
@@ -236,7 +236,7 @@ def test_asymmetric_angular_limits_real_model():
 
 
 def test_frame_in_world_space():
-    """The joint frame is stored in WORLD space, independent of the physics group.
+    """The joint frame is stored in WORLD space, independent of the rigid bodies group.
 
     The Bullet world runs in world space, so a joint at world (1,2,3) under a
     group translated to (10,0,0) is stored at the raw world position (1,2,-3)
@@ -392,12 +392,12 @@ def test_body_indices_validated():
 
 
 def test_model_root_resolution():
-    """The solver is resolved through a model-root pmxPhysicsNode attribute."""
+    """The solver is resolved through a model-root pmxRigidBodyNode attribute."""
     _group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
     root = cmds.createNode("transform", name="testModelRoot")
-    cmds.addAttr(root, longName="pmxPhysicsNode", dataType="string")
-    cmds.setAttr(f"{root}.pmxPhysicsNode", solver, type="string")
+    cmds.addAttr(root, longName="pmxRigidBodyNode", dataType="string")
+    cmds.setAttr(f"{root}.pmxRigidBodyNode", solver, type="string")
 
     idx = cmds.pmxRigidBodyConstraint(
         root, bodyA=0, bodyB=1, type=0, position=(4.0, 0.0, 0.0)
@@ -409,7 +409,7 @@ def test_model_root_resolution():
         ),
         "frame translate via model root",
     )
-    print("✓ solver resolved through model root pmxPhysicsNode")
+    print("✓ solver resolved through model root pmxRigidBodyNode")
     return True
 
 

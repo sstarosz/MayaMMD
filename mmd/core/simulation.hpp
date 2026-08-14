@@ -10,7 +10,7 @@
  * bullet_bridge.hpp).
  * The engine can be unit-tested WITHOUT the Maya SDK and WITHOUT Bullet
  * headers (see tests/unit_tests/core/test_simulation.cpp).  The Maya node
- * (mmd/maya/nodes/physics_node) adapts it: it reads attributes, converts
+ * (mmd/maya/nodes/rigid_body_node.hpp) adapts it: it reads attributes, converts
  * Maya<->Bullet transforms and owns the timeline/state machine.
  *
  * This class knows nothing about Maya: it consumes a plain Definition

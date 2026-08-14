@@ -170,7 +170,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
     # Source:
     #   - mmd/MayaMMD.cpp               → entry point (initializePlugin/uninitializePlugin)
     #   - mmd/maya/nodes/ccd_ik_solver_node.h/cpp  → C++ CCD IK solver node
-    #   - mmd/maya/nodes/physics_node.h/cpp        → C++ rigid-body physics node
+    #   - mmd/maya/nodes/rigid_body_node.hpp/cpp  → C++ rigid-body physics node
     #     (embedded Bullet; links mmd_core + Bullet — see below)
     # =====================================================================
     add_library(MayaMMD SHARED
@@ -178,7 +178,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
-        mmd/maya/nodes/physics_node.cpp
+        mmd/maya/nodes/rigid_body_node.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"

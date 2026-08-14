@@ -21,7 +21,7 @@ from tests.integration.test_helpers import (
     step_physics,
 )
 
-_NODE_TYPE = "pmxPhysicsNode"
+_NODE_TYPE = "pmxRigidBodyNode"
 
 
 # ---------------------------------------------------------------------------
@@ -207,53 +207,53 @@ def test_pmx_skin_weights_applied(pmx_data: PmxModel, maya_pmx_data):
     return True
 
 
-def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
-    """Test that the physics group + populated pmxPhysicsNode are created per model.
+def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
+    """Test that the rigid bodies group + populated pmxRigidBodyNode are created per model.
 
-    ``build_pmx_scene`` creates a ``{model}_Physics`` group under the root with
-    one ``pmxPhysicsNode`` solver (gravity -9.8), POPULATES its ``bodies``
+    ``build_pmx_scene`` creates a ``{model}_RigidBodies`` group under the root with
+    one ``pmxRigidBodyNode`` solver (gravity -9.8), POPULATES its ``bodies``
     array through the native ``pmxRigidBody`` command (one body per PMX rigid
     body, in PMX order), and stamps the solver name on the root's
-    ``pmxPhysicsNode`` string attribute for discovery.
+    ``pmxRigidBodyNode`` string attribute for discovery.
     """
     root_obj = maya_pmx_data.root_obj
     root_fn = om.MFnTransform(root_obj)
     root_name = root_fn.name()
 
-    # Find the physics group under the root (mirror the _Geo lookup).
+    # Find the rigid bodies group under the root (mirror the _Geo lookup).
     physics_group = None
     for i in range(root_fn.childCount()):
         child = root_fn.child(i)
         child_fn = om.MFnTransform(child)
-        if child_fn.name().endswith("_Physics"):
+        if child_fn.name().endswith("_RigidBodies"):
             physics_group = child_fn
             break
-    assert_true(physics_group is not None, "Physics group not found under root")
+    assert_true(physics_group is not None, "Rigid bodies group not found under root")
     assert_eq(
         om.MFnTransform(physics_group.parent(0)).name(),
         root_name,
-        "Physics group parent is not root",
+        "Rigid bodies group parent is not root",
     )
 
-    # Exactly one pmxPhysicsNode solver shape under the group.
+    # Exactly one pmxRigidBodyNode solver shape under the group.
     solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
-    assert_true(bool(solvers), "No pmxPhysicsNode under the physics group")
+    assert_true(bool(solvers), "No pmxRigidBodyNode under the rigid bodies group")
     solver = solvers[0]
     assert_eq(cmds.nodeType(solver), _NODE_TYPE, "solver has the wrong node type")
 
     # Gravity default is exactly MMD's -9.8 on Y.
     grav = cmds.getAttr(f"{solver}.gravity")[0]
-    assert_eq(round(grav[1], 4), -9.8, "physics node gravity y")
+    assert_eq(round(grav[1], 4), -9.8, "rigid body node gravity y")
 
     # The solver name is stamped on the root for discovery.
     assert_true(
-        cmds.attributeQuery("pmxPhysicsNode", node=root_name, exists=True),
-        "pmxPhysicsNode root attribute missing",
+        cmds.attributeQuery("pmxRigidBodyNode", node=root_name, exists=True),
+        "pmxRigidBodyNode root attribute missing",
     )
     assert_eq(
-        cmds.getAttr(f"{root_name}.pmxPhysicsNode"),
+        cmds.getAttr(f"{root_name}.pmxRigidBodyNode"),
         solver,
-        "root pmxPhysicsNode attribute should name the solver",
+        "root pmxRigidBodyNode attribute should name the solver",
     )
 
     # The bodies array mirrors the PMX rigid bodies (one body per rigid body,
@@ -370,7 +370,7 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
             "no-joint model should have an empty joints array",
         )
     print(
-        f"PASS: physics group + {_NODE_TYPE} with {expected_bodies} bodies, "
+        f"PASS: rigid bodies group + {_NODE_TYPE} with {expected_bodies} bodies, "
         f"{expected_joints} joints created"
     )
     return True
@@ -381,8 +381,8 @@ def test_pmx_physics_node_creation(pmx_data: PmxModel, maya_pmx_data):
 # ---------------------------------------------------------------------------
 
 
-def _find_physics_group_and_solver(maya_pmx_data):
-    """Return ``(physics_group_name, solver_name)`` or ``(None, None)``."""
+def _find_rigid_bodies_group_and_solver(maya_pmx_data):
+    """Return ``(rigid_bodies_group_name, solver_name)`` or ``(None, None)``."""
     root_obj = maya_pmx_data.root_obj
     root_fn = om.MFnTransform(root_obj)
     for i in range(root_fn.childCount()):
@@ -391,7 +391,7 @@ def _find_physics_group_and_solver(maya_pmx_data):
             child_fn = om.MFnTransform(child)
         except Exception:
             continue
-        if child_fn.name().endswith("_Physics"):
+        if child_fn.name().endswith("_RigidBodies"):
             solvers = cmds.listRelatives(
                 child_fn.name(), children=True, type=_NODE_TYPE
             )
@@ -435,7 +435,7 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
     (rotation-only for PHYSICS_BONE).  Bodies without a related joint (static
     colliders) have nothing to connect.
     """
-    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    _group, solver = _find_rigid_bodies_group_and_solver(maya_pmx_data)
     assert_true(solver is not None, "No physics solver")
     joint_names = _joint_paths(maya_pmx_data)
 
@@ -517,7 +517,7 @@ def test_pmx_simulation_steps(pmx_data: PmxModel, maya_pmx_data):
     Advancing time while swinging the root bone must change at least one
     dynamic joint's LOCAL pose — the "simulation is alive" signal.
     """
-    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    _group, solver = _find_rigid_bodies_group_and_solver(maya_pmx_data)
     assert_true(solver is not None, "No physics solver")
     joint_names = _joint_paths(maya_pmx_data)
     dyn = {
@@ -558,7 +558,7 @@ def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
     move).  Rigid chains legitimately hold still, so we scan all dynamic
     bodies and use the strongest signal.
     """
-    _group, solver = _find_physics_group_and_solver(maya_pmx_data)
+    _group, solver = _find_rigid_bodies_group_and_solver(maya_pmx_data)
     assert_true(solver is not None, "No physics solver")
     joint_names = _joint_paths(maya_pmx_data)
     candidates = [
@@ -623,8 +623,8 @@ _TESTS = [
     ("Material Creation", test_pmx_material_creation),
     ("Skin Cluster Creation", test_pmx_skin_cluster_creation),
     ("Skin Weights Applied", test_pmx_skin_weights_applied),
-    ("Physics Node Creation", test_pmx_physics_node_creation),
-    ("Physics Wiring", test_pmx_physics_wiring),
+    ("Rigid Body Node Creation", test_pmx_rigid_body_node_creation),
+    ("Rigid Body Wiring", test_pmx_physics_wiring),
     ("Simulation Steps", test_pmx_simulation_steps),
     ("Write-back Moves Bone", test_pmx_write_back_moves_bone),
 ]

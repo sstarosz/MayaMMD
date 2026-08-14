@@ -24,7 +24,7 @@ namespace mmd::maya
 {
 // A joint's stored PMX bone index (pmxBoneIndex), or -1.  The bone builder
 // stamps it on every joint, and the DAG IS the PMX bone hierarchy — shared
-// by pmxRigidBody (resolveBone) and pmxPhysicsNode (readBodyData's message +
+// by pmxRigidBody (resolveBone) and pmxRigidBodyNode (readBodyData's message +
 // DAG resolution).  Every failure mode is handled explicitly (no exceptions):
 // an invalid path, a non-dependency node, or a missing attribute reports -1.
 inline int jointPmxBoneIndex(const MDagPath& jointPath)

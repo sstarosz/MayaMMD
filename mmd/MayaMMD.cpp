@@ -24,7 +24,7 @@
 #include "maya/cmds/rigid_body_cmd.hpp"
 #include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
-#include "maya/nodes/physics_node.h"
+#include "maya/nodes/rigid_body_node.hpp"
 #include "version.hpp"
 
 // ===========================================================================
@@ -92,13 +92,13 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     //     replaces mayaBullet.  (A draw override for the guide visualization
     //     is planned but intentionally not added yet.)
     {
-        MString classification(PhysicsNode::kNodeClassify);
+        MString classification(RigidBodyNode::kNodeClassify);
         stat =
-            plugin.registerNode(PhysicsNode::kNodeName, PhysicsNode::kTypeId, PhysicsNode::creator,
-                                PhysicsNode::initialize, MPxNode::kLocatorNode, &classification);
+            plugin.registerNode(RigidBodyNode::kNodeName, RigidBodyNode::kTypeId, RigidBodyNode::creator,
+                                RigidBodyNode::initialize, MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
-        MGlobal::displayWarning("  ⚠ pmxPhysicsNode registration failed");
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyNode registration failed");
 
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
@@ -145,7 +145,7 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     run_python_uninitialization();
 
     // 2. Deregister C++ nodes and commands
-    plugin.deregisterNode(PhysicsNode::kTypeId);
+    plugin.deregisterNode(RigidBodyNode::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
     plugin.deregisterCommand(RigidBodyCmd::kName);
     plugin.deregisterCommand(RigidBodyConstraintCmd::kName);
