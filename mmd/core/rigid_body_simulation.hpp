@@ -87,23 +87,6 @@ class RigidBodySimulation
 
         /// FOLLOW_BONE bodies are kinematic anchors driven by their joints.
         bool isKinematic() const { return physicsMode == PhysicsMode::eFollowBone; }
-
-        /// Field-wise equality — the Maya node uses it to detect config edits
-        /// (a changed body definition must rebuild the world).
-        bool operator==(const BodyDefinition& o) const
-        {
-            return restPos.x == o.restPos.x && restPos.y == o.restPos.y &&
-                   restPos.z == o.restPos.z && restRot.x == o.restRot.x &&
-                   restRot.y == o.restRot.y && restRot.z == o.restRot.z && mass == o.mass &&
-                   linearDamping == o.linearDamping && angularDamping == o.angularDamping &&
-                   friction == o.friction && restitution == o.restitution &&
-                   colliderType == o.colliderType && radius == o.radius &&
-                   extents.x == o.extents.x && extents.y == o.extents.y &&
-                   extents.z == o.extents.z && length == o.length && mask == o.mask &&
-                   groupId == o.groupId && physicsMode == o.physicsMode && enabled == o.enabled &&
-                   relatedBoneIndex == o.relatedBoneIndex && parentBoneIndex == o.parentBoneIndex &&
-                   resetAnchorIndex == o.resetAnchorIndex;
-        }
     };
 
     /// One PMX joint (a rigid-body constraint between two bodies).
@@ -158,11 +141,14 @@ class RigidBodySimulation
     ~RigidBodySimulation();
     // The Bullet world lives on the heap inside RigidBodySimulationImpl, so MOVING is
     // safe (the unique_ptr transfers ownership without copying the world).
-    // Copying is impossible — a Bullet world cannot be copied.
+    // Copying is impossible — a Bullet world cannot be copied.  Like the
+    // destructor, the move operations are defined out-of-line in the .cpp
+    // (where RigidBodySimulationImpl is complete): moving must never require
+    // the PIMPL to be visible at the caller's translation unit.
     RigidBodySimulation(const RigidBodySimulation&) = delete;
     RigidBodySimulation& operator=(const RigidBodySimulation&) = delete;
-    RigidBodySimulation(RigidBodySimulation&&) noexcept = default;
-    RigidBodySimulation& operator=(RigidBodySimulation&&) noexcept = default;
+    RigidBodySimulation(RigidBodySimulation&&) noexcept;
+    RigidBodySimulation& operator=(RigidBodySimulation&&) noexcept;
 
     /// Build the Bullet world from `definition` (calling clear() first).
     /// Returns false when there are no bodies.  An edit requires a fresh
@@ -238,23 +224,6 @@ inline void applyShapeSize(RigidBodySimulation::BodyDefinition& b, const Double3
         b.length = size.y; //          shape_size[1] = cylinder length
         break;
     }
-}
-
-/// Inverse of applyShapeSize — reconstruct the PMX `shape_size` (FULL size,
-/// box extents doubled) from a BodyDefinition.  Used to build the draw-data
-/// contract (DrawBody.shapeSize) from a solved/rest BodyDefinition.
-inline Double3 shapeSizeFromBodyDefinition(const RigidBodySimulation::BodyDefinition& b)
-{
-    switch (b.colliderType)
-    {
-    case RigidBodySimulation::ColliderType::eSphere:
-        return Double3(b.radius, 0.0, 0.0);
-    case RigidBodySimulation::ColliderType::eBox:
-        return Double3(b.extents.x * 2.0, b.extents.y * 2.0, b.extents.z * 2.0);
-    case RigidBodySimulation::ColliderType::eCapsule:
-        return Double3(b.radius, b.length, 0.0);
-    }
-    return Double3(0.0, 0.0, 0.0);
 }
 
 } // namespace mmd::core

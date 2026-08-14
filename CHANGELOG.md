@@ -93,6 +93,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`pmxRigidBodyNode` caches the DAG-derived wiring instead of re-resolving
+  it every evaluation** (no schema change, no re-import needed).  The related
+  joint → bone-index resolution and the scrub-back reset-anchor derivation
+  (a DAG walk per body) moved out of the per-frame attribute read into a
+  one-per-world-build wiring pass; the results are cached in the node's
+  `World` record alongside the write-back offsets K.  Per-frame evaluation is
+  now a flat read of the PMX-verbatim attributes plus a verbatim-field config
+  comparison.  Behavioural note: re-binding a body to a different joint or
+  re-parenting a joint is no longer detected mid-session on its own — it takes
+  effect on the next rebuild trigger (any body/joint/gravity edit, scrub-back,
+  or re-import).  The now-unused `BodyDefinition::operator==` was removed
+  from the core engine.
+
+- **`pmxRigidBodyNode` internals rewritten in a functional style** (no schema
+  change, no re-import needed).  The node now holds one `World` value — a
+  nested record in the node header bundling the Bullet world with the config,
+  wiring, and write-back offsets it was built with — and `compute()` runs a
+  pure frame transition over it: read the PMX-verbatim inputs → `frame()`
+  rebuilds (config change, empty world, or time scrubbed backwards) or
+  advances (time step / kinematic anchor drag) → write the outputs.  All
+  logic lives in translation-unit-local pure functions over `World`/`Inputs`;
+  the class keeps no mutable helper state.  The world is held by value in a
+  `std::optional` (empty = no bodies), replacing the earlier indirection and
+  per-frame allocation.  The core engine's move operations moved out-of-line
+  (proper PIMPL) so value-moving a `RigidBodySimulation` never requires its
+  internal Bullet types at the caller's translation unit.  Behaviour is
+  unchanged (all suites pass).
+
+- **`pmxRigidBodyNode` internals refactored** (no schema change, no re-import
+  needed).  The stateless attribute readers (`readBodyData`, `readJointData`,
+  `readGravity`) moved from private members into the translation unit's
+  anonymous namespace; the dead draw-guide support (`DrawBody`,
+  `collectDrawData`, `boundingBox`) and the now-unused
+  `mmd::core::shapeSizeFromBodyDefinition` helper (and its unit tests) were
+  removed, and stale/development comments were cleaned up.  Behaviour is
+  unchanged.
+
 - **Rigid-body physics renamed to `pmxRigidBodyNode`** (breaking — re-import
   required).  The native solver node and its scene names are unified with the
   `rigid_body` family: node type `pmxPhysicsNode` → `pmxRigidBodyNode`, model-root
@@ -202,6 +239,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     user is free to move the skeleton only.
 
 ### Fixed
+
+- **`pmxRigidBodyNode` first evaluation could pop a posed skeleton to rest** —
+  the first `compute()` built the Bullet world at the PMX rest pose and never
+  applied the kinematic anchors / dynamic-body reset, so when the node first
+  evaluated at an already-posed frame (scene opened mid-animation) the joints
+  were written back to rest for one frame before snapping back.  The first
+  evaluation now goes through the same build path as a config edit / scrub-back
+  (anchors applied + dynamic bodies reset to the current skeleton pose; a no-op
+  at rest).  No schema change.
 
 - **CCD IK solver reliability** — `ccdIKSolverNode` no longer overshoots the IK
   target or bends hinge joints (e.g. the knee) the wrong way when the target is

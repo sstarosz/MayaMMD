@@ -21,19 +21,20 @@
 
 #pragma once
 
-#include <maya/MBoundingBox.h>
 #include <maya/MEvaluationNode.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>
-#include <maya/MString.h>
 #include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
+// The engine header is Bullet-free (the engine itself is a PIMPL), so pulling
+// it in here stays cheap and keeps Bullet an implementation detail.
 #include "rigid_body_simulation.hpp"
 
 // ===========================================================================
@@ -44,10 +45,9 @@ class RigidBodyNode : public MPxLocatorNode
   public:
     static const MTypeId kTypeId;
     static constexpr const char* kNodeName = "pmxRigidBodyNode";
-    // VP2 draw-database classification.  A drawable locator node must be
-    // registered with the SAME classification string its draw override is
-    // registered under ("drawdb/geometry/<nodeType>") or VP2 never associates
-    // the override with the node and no guides are drawn.
+    // VP2 draw-database classification.  A locator node must be registered
+    // with a "drawdb/geometry/..." classification so VP2 renders it in the
+    // viewport.
     static constexpr const char* kNodeClassify = "drawdb/geometry/pmxRigidBodyNode";
 
     // PMX rigid-body physics mode — stored in the bodyPhysicsMode enum
@@ -64,32 +64,6 @@ class RigidBodyNode : public MPxLocatorNode
         kColliderSphere = 2,
         kColliderCapsule = 3,
     };
-
-    // ------------------------------------------------------------------
-    // Draw support — per-body primitive data for the guide visualization.
-    // A viewport draw override (planned) pulls this from the node's CURRENT
-    // solver state: solved world poses if the Bullet
-    // world is built, rest poses otherwise.  The node is an MPxLocatorNode so
-    // a default locator is drawn until the override lands.
-    // ------------------------------------------------------------------
-    struct DrawBody
-    {
-        double pos[3] = {};
-        double quat[4] = {};                      // (x, y, z, w)
-        ColliderType colliderType = kColliderBox; // PMX shape type (box/sphere/capsule)
-        // PMX shape_size VERBATIM (3 doubles, FULL size — box extents are
-        // full, not half).  This is the data contract the follow-up viewport
-        // draw override reads; it is derived from the engine's
-        // radius/extents/length by collider type via
-        // mmd::core::shapeSizeFromBodyDefinition.
-        double shapeSize[3] = {};
-        int groupId = 0; // collision group 0..15 (draw palette)
-        bool kinematic = false;
-    };
-    // Fill *out* with one DrawBody per rigid body (body-index aligned).
-    void collectDrawData(std::vector<DrawBody>& out) const;
-    // Object-space bounding box over the body rest poses (selection/culling).
-    MBoundingBox boundingBox() const override;
 
     RigidBodyNode();
     // Defaulted out-of-line: the node is destroyed polymorphically through its
@@ -136,8 +110,7 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aBodyColliderType; // enum — PMX shape (kColliderBox/Sphere/Capsule)
     // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
     // engine's radius / box half-extents / capsule length by collider type
-    // (mmd::core::applyShapeSize) in readBodyData; the draw fallback reads it
-    // verbatim.
+    // (mmd::core::applyShapeSize) in readBodyData.
     static MObject aBodyShapeSize;      // float3 — PMX shape_size verbatim
     static MObject aBodyRestTranslate;  // float3 — PMX shape_position (rest, world space)
     static MObject aBodyRestRotate;     // float3 — PMX shape_rotation (degrees)
@@ -192,52 +165,26 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aOutRotateY; // kAngle child
     static MObject aOutRotateZ; // kAngle child
 
+    // The full per-node simulation state: the Bullet world plus the config,
+    // wiring, and derived write-back offsets it was built with, bundled and
+    // replaced ATOMICALLY on rebuild.  A plain data record — public only so
+    // the translation-unit frame functions can build / advance it; every
+    // field is touched exclusively from rigid_body_node.cpp.
+    struct World
+    {
+        mmd::core::RigidBodySimulation sim;
+        std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies; // wired config
+        std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
+        mmd::core::Double3 gravity;
+        std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
+        double lastTime = -1.0;
+        MTime::Unit lastTimeUnit = MTime::kFilm;
+    };
+
   private:
-    // Maya-free Bullet engine + the config it was built with (see
-    // configChanged).  The engine owns all Bullet state; this node adapts
-    // attributes <-> engine poses and manages the timeline.
-    mmd::core::RigidBodySimulation mSim;
-    std::vector<mmd::core::RigidBodySimulation::BodyDefinition> mBodies;
-    std::vector<mmd::core::RigidBodySimulation::JointDefinition> mJoints;
-
-    double mLastTime = -1.0;
-    MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
-    // The config the world was last built with — compute() re-reads the inputs
-    // every evaluation and rebuilds in place when they differ (a body/joint/
-    // gravity edit takes effect immediately).  The per-body write-back offset
-    // K = jointRestWorld * bodyRestWorld^-1 is DERIVED only when the world is
-    // (re)built — from the joints' pmxRest*/jointOrient attributes (static —
-    // captured by the bone builder) plus the stored body rest pose — and
-    // cached in mK for the per-frame anchor/write-back consumers.  The anchor
-    // matrix VALUES are per-frame (bodies[i].bodyAnchorWorld, read fresh in
-    // updateKinematicAnchors).
-    mmd::core::Double3 mGravity = mmd::core::Double3();
-    std::vector<MMatrix> mK; // derived per build; identity for no-joint bodies
-
-    // Helpers
-    std::vector<mmd::core::RigidBodySimulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
-    // Derive the per-body write-back offsets (K) from the joints' rest data
-    // and cache them in mK.  Called only when the world is (re)built — the
-    // inputs are static (pmxRest*/jointOrient + body rest pose), so deriving
-    // per evaluation would waste a DAG walk per body per frame.
-    void deriveWriteBackOffsets(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies);
-    static std::vector<mmd::core::RigidBodySimulation::JointDefinition> readJointData(MDataBlock& dataBlock);
-    static mmd::core::Double3 readGravity(MDataBlock& dataBlock);
-    bool buildWorld(const mmd::core::Double3& gravity,
-                    const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
-                    const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints);
-    // True when the fresh inputs differ from what the world was built with.
-    bool configChanged(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
-                       const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints,
-                       const mmd::core::Double3& gravity) const;
-    // Remember the config the world was just built with.
-    void storeConfig(const std::vector<mmd::core::RigidBodySimulation::BodyDefinition>& bodies,
-                     const std::vector<mmd::core::RigidBodySimulation::JointDefinition>& joints,
-                     const mmd::core::Double3& gravity);
-    void destroyWorld();
-    // Refresh the kinematic anchor transforms from their inputs; returns true
-    // if any anchor moved since the previous evaluation (a dragged bone at a
-    // fixed time steps the sim immediately).
-    bool updateKinematicAnchors(MDataBlock& dataBlock);
-    bool writeOutputs(MDataBlock& dataBlock);
+    // The simulation state; empty = no bodies (a valid no-op).  compute()
+    // runs a pure frame transition (build or advance) that produces a NEW
+    // World, which atomically replaces this one — the node never mutates
+    // simulation state piecemeal.
+    std::optional<World> mWorld;
 };
