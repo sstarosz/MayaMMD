@@ -356,7 +356,8 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
         bodiesHandle.jumpToArrayElement(i);
-        out.push_back(readBody(bodiesHandle.inputValue()));
+        MDataHandle element = bodiesHandle.inputValue();
+        out.push_back(readBody(element));
     }
     return out;
 }
@@ -439,7 +440,8 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
     for (unsigned int i = 0; i < jointCount; ++i)
     {
         jointsHandle.jumpToArrayElement(i);
-        out.push_back(readJoint(jointsHandle.inputValue()));
+        MDataHandle element = jointsHandle.inputValue();
+        out.push_back(readJoint(element));
     }
     return out;
 }
@@ -534,7 +536,8 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
     if (in.bodies.empty())
         return std::nullopt;
 
-    World world;
+    std::optional<World> result(std::in_place);
+    World& world = *result;
     world.bodies = in.bodies;
     world.joints = in.joints;
     world.gravity = in.gravity;
@@ -555,7 +558,7 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 
     world.lastTime = now.value(); // no time-step on the (re)build frame
     world.lastTimeUnit = now.unit();
-    return std::move(world);
+    return result;
 }
 
 // The PMX-verbatim configs differ — rebuild.  The DAG-derived wiring (bone
