@@ -231,6 +231,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped, and the FIRST body's wiring stayed (this left some real-model
   bodies unwired, e.g. the 蕾米埃尔-泳装 bodies 668/669).  Sources are now
   matched by plug name.
+- **`pmxRigidBody` kinematic anchors now use the per-body
+  `bodies[i].bodyAnchorWorld`** — the command no longer writes the removed
+  top-level `anchorWorldMatrix` array (a compile error against the current
+  schema) and no longer bakes `bodyWriteBackOffset`.  FOLLOW_BONE bodies get
+  `joint.worldMatrix[0] → bodies[i].bodyAnchorWorld` (or their pinned rest
+  world when boneless); the write-back K offset is derived internally by the
+  node at world build, so the stale `bodyWriteBackOffset` writes are gone.
+- **`pmxRigidBody` fails loudly on malformed 3-double flags** — when the user
+  explicitly provides `-size`/`-position`/`-rotation` but the argument list
+  cannot be read (e.g. a malformed invocation), the command now emits a
+  `displayError` and returns `MS::kFailure` instead of silently falling back
+  to the default values, which made the typo hard to debug.
 
 ### Removed
 

@@ -8,11 +8,10 @@
  *
  * ``-create`` is the single body-modification path (the PMX import loops it).
  * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
- * joint through the kinematic-anchor input, bakes the write-back K offset
- * (``bodyWriteBackOffset``) for every body, and ALWAYS connects
- * outTranslate/outRotate STRAIGHT into the related joint for a dynamic body
- * on a bone (the node computes the joint-local pose internally via the bone
- * hierarchy).
+ * joint through the kinematic-anchor input (bodies[i].bodyAnchorWorld), and
+ * ALWAYS connects outTranslate/outRotate STRAIGHT into the related joint for
+ * a dynamic body on a bone (the node computes the joint-local pose internally
+ * via the bone hierarchy and derives the write-back K offset itself).
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -179,12 +178,27 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     Double3 size(0.5, 0.5, 0.5);
     Double3 pos;
     Double3 rot;
-    if (parser.isFlagSet(kSizeFlag))
-        flagArgumentDouble3(parser, kSizeFlag, size);
-    if (parser.isFlagSet(kPositionFlag))
-        flagArgumentDouble3(parser, kPositionFlag, pos);
-    if (parser.isFlagSet(kRotationFlag))
-        flagArgumentDouble3(parser, kRotationFlag, rot);
+    // The user explicitly provided a 3-double flag — if the argument list
+    // cannot be read, that is a malformed invocation, not a missing default.
+    // Fail loudly instead of silently falling back to the defaults (which
+    // would hide the typo and make debugging harder).
+    if (parser.isFlagSet(kSizeFlag) && !flagArgumentDouble3(parser, kSizeFlag, size))
+    {
+        MGlobal::displayError("pmxRigidBody: could not read -size flag (expected three doubles)");
+        return MS::kFailure;
+    }
+    if (parser.isFlagSet(kPositionFlag) && !flagArgumentDouble3(parser, kPositionFlag, pos))
+    {
+        MGlobal::displayError(
+            "pmxRigidBody: could not read -position flag (expected three doubles)");
+        return MS::kFailure;
+    }
+    if (parser.isFlagSet(kRotationFlag) && !flagArgumentDouble3(parser, kRotationFlag, rot))
+    {
+        MGlobal::displayError(
+            "pmxRigidBody: could not read -rotation flag (expected three doubles)");
+        return MS::kFailure;
+    }
 
     double mass = 1.0;
     double linearDamping = 0.0;
@@ -346,32 +360,24 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
-    // kinematic-anchor INPUT (joint.worldMatrix -> anchorWorldMatrix + baked
-    // body<->bone offset) — this is what makes the collider "live on the
-    // correct bone".  Dynamic bodies are wired for write-back here too (see
-    // the Output wiring block below — the command ALWAYS connects them).
-    // Bodies display from their rest pose — the draw override falls back to
-    // reading the plugs when the world is never built.
+    // kinematic-anchor INPUT (joint.worldMatrix -> bodies[i].bodyAnchorWorld;
+    // the node applies the body<->bone rest offset K^-1, derived internally
+    // at world build) — this is what makes the collider "live on the correct
+    // bone".  Dynamic bodies are wired for write-back here too (see the
+    // Output wiring block below — the command ALWAYS connects them).  Bodies
+    // display from their rest pose — the draw override falls back to reading
+    // the plugs when the world is never built.
     if (kinematic)
     {
-        // Kinematic-order index of the new anchor.
-        int k = 0;
-        for (int i = 0; i < n; ++i)
-        {
-            if (bodiesPlug.elementByLogicalIndex(i)
-                    .child(PhysicsNode::aBodyPhysicsMode)
-                    .asShort() == static_cast<short>(Simulation::PhysicsMode::eFollowBone))
-                ++k;
-        }
-        // The anchor world is the joint's world matrix (the node applies the
-        // body<->joint offset as K^-1 from bodyWriteBackOffset — derived
-        // internally, so there is no anchorOffset input to populate).  The
+        // The anchor world lives on the body's OWN compound element
+        // (bodies[i].bodyAnchorWorld — a matrix child of the body compound,
+        // not a top-level array), so there is no separate kinematic-order
+        // index to track.  The node applies the body<->joint rest offset
+        // (K^-1, derived internally when the world is built) on top.  The
         // Bullet world runs in world space, so the anchor is stored as-is.
         if (jointPath.isValid())
         {
-            mmd::maya::connectOrReplace(
-                jointWorldPlug, fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
-                                    .elementByLogicalIndex(k));
+            mmd::maya::connectOrReplace(jointWorldPlug, elem.child(PhysicsNode::aBodyAnchorWorld));
         }
         else
         {
@@ -379,38 +385,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // Pin the body's DIRECT world rest pose — not a round-tripped
             // decomposition, which would drop group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            mmd::maya::setPlugMatrixValue(
-                fn.findPlug(PhysicsNode::aAnchorWorldMatrix, true, &plugStat)
-                    .elementByLogicalIndex(k),
-                bodyWorld);
+            mmd::maya::setPlugMatrixValue(elem.child(PhysicsNode::aBodyAnchorWorld), bodyWorld);
         }
-    }
-
-    // ── Write-back inputs (dense) ──
-    // bodyWriteBackOffset[n] = K = jointRestWorld * bodyRestWorld^-1 for EVERY
-    // body (identity when there is no related joint) — the array is dense by
-    // construction (every -create sets its element).  The node's write-back
-    // computes every solved bone world internally as bodyLocal * K and then
-    // converts to the joint-local pose via the BONE hierarchy (it never reads
-    // driven joints from the DG — that was the feedback cycle that exploded
-    // the sim).  No per-body parent wiring exists.
-    {
-        MMatrix k;
-        k.setToIdentity();
-        if (jointPath.isValid())
-        {
-            // K = jointRestWorld * bodyRestWorld^-1 with the body's DIRECT
-            // world rest pose (MMD Z-flip + handedness).  Do NOT round-trip
-            // through a matrix decomposition — euler decomposition drops any
-            // scale, which would scale K wrongly and land every
-            // write-back-driven bone off its rest pose.
-            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            k = jointPath.inclusiveMatrix() * bodyWorld.inverse();
-        }
-        mmd::maya::setPlugMatrixValue(
-            fn.findPlug(PhysicsNode::aBodyWriteBackOffset, true, &plugStat)
-                .elementByLogicalIndex(n),
-            k);
     }
 
     // ── Output wiring (write-back connections) ──
