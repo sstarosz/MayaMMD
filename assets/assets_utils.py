@@ -2,9 +2,24 @@ import logging
 import os
 from typing import List
 
-from .pmx_model_files import ALL_PMXS
-from .vmd_motion_files import ALL_VMDS
-from .vpd_pose_files import ALL_VPDS
+# The generated file lists (pmx_model_files.py / vmd_motion_files.py /
+# vpd_pose_files.py) are gitignored — regenerate them locally with
+# `scripts/database/generate_file_list.py`.  Fall back to empty lists so the
+# helpers keep working (and tests skip) on a fresh checkout.
+try:
+    from .pmx_model_files import ALL_PMXS
+except ImportError:
+    ALL_PMXS: list[str] = []
+
+try:
+    from .vmd_motion_files import ALL_VMDS
+except ImportError:
+    ALL_VMDS: list[str] = []
+
+try:
+    from .vpd_pose_files import ALL_VPDS
+except ImportError:
+    ALL_VPDS: list[str] = []
 
 _log = logging.getLogger(__name__)
 

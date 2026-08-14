@@ -196,9 +196,9 @@ assets/
 ├── models_database/    # Generated model metadata (JSON)
 ├── motions_database/   # Generated motion metadata (JSON)
 ├── poses_database/     # Generated pose metadata (JSON)
-├── pmx_model_files.py  # Generated: PMX file list
-├── vmd_motion_files.py # Generated: VMD file list
-├── vpd_pose_files.py   # Generated: VPD file list
+├── pmx_model_files.py  # Generated locally (gitignored): PMX file list
+├── vmd_motion_files.py # Generated locally (gitignored): VMD file list
+├── vpd_pose_files.py   # Generated locally (gitignored): VPD file list
 └── assets_utils.py     # Helpers used by tests and scripts
 ```
 
@@ -216,7 +216,9 @@ assets/
 
    This scans `assets/models|motions|poses` and updates
    `assets/pmx_model_files.py`, `assets/vmd_motion_files.py`, and
-   `assets/vpd_pose_files.py`.
+   `assets/vpd_pose_files.py`.  These generated file lists are gitignored —
+   they are produced locally and are not committed, so regenerate them after
+   adding or removing assets.
 
 ### Building the metadata database
 
