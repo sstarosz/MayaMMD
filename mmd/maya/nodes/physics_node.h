@@ -64,12 +64,24 @@ class PhysicsNode : public MPxLocatorNode
         kColliderCapsule = 3,
     };
 
+    // Viewport draw style for the guide visualization (drawMode attribute).
+    // This is a VIEW attribute only — it never affects the Bullet world, so
+    // it is deliberately NOT part of the node's config comparison (changing it
+    // must not rebuild the simulation).
+    enum DrawMode : short
+    {
+        kDrawOff = 0,               // no colliders drawn
+        kDrawWireframe = 1,         // outline only (default)
+        kDrawSolid = 2,             // filled primitives
+        kDrawWireframeAndSolid = 3, // both
+    };
+
     // ------------------------------------------------------------------
     // Draw support — per-body primitive data for the guide visualization.
-    // A viewport draw override (planned) pulls this from the node's CURRENT
-    // solver state: solved world poses if the Bullet
-    // world is built, rest poses otherwise.  The node is an MPxLocatorNode so
-    // a default locator is drawn until the override lands.
+    // The viewport draw override (physics_draw_override.cpp) pulls this from
+    // the node's CURRENT solver state: solved world poses if the Bullet world
+    // is built, rest poses otherwise.  The node is an MPxLocatorNode so a
+    // default locator is drawn until the override is registered.
     // ------------------------------------------------------------------
     struct DrawBody
     {
@@ -115,6 +127,16 @@ class PhysicsNode : public MPxLocatorNode
     // ------------------------------------------------------------------
     static MObject aTime;
     static MObject aGravity;
+
+    // ── View-only draw attributes (never part of the config comparison) ──
+    // These configure the viewport guide visualization; changing them must
+    // NOT rebuild the Bullet world, so they are excluded from configChanged()
+    // and have no attributeAffects on the outputs.
+    static MObject aDrawMode;         // enum DrawMode — collider draw style
+    static MObject aDrawOpacity;      // float 0..1 — transparency of solid draws
+    static MObject
+        aUiSelectedBodyIndex; // long — body the user picked in the viewport (-1 = none); written
+                              // by the draw override's userSelect, read by the AE template
 
     // Kinematic anchors — one per FOLLOW_BONE body, in kinematic order.  The
     // anchor world is the related joint's world matrix; the node applies the
