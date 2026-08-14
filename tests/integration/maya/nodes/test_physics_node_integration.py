@@ -72,6 +72,29 @@ def _set_dynamic_body(node: str, index: int, rest_y: float) -> None:
     cmds.setAttr(f"{p}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
 
 
+def _stamp_joint_rest(joint: str, tx: float, ty: float, tz: float) -> None:
+    """Stamp pmxRest* attributes on a mock joint (as the bone builder does).
+
+    The node derives each body's write-back offset K from these attributes +
+    jointOrient, so tests that exercise the write-back must carry them.
+    """
+    for axis, value in (("X", tx), ("Y", ty), ("Z", tz)):
+        cmds.addAttr(
+            joint,
+            longName=f"pmxRestTranslate{axis}",
+            attributeType="double",
+            defaultValue=0.0,
+        )
+        cmds.setAttr(f"{joint}.pmxRestTranslate{axis}", value)
+        cmds.addAttr(
+            joint,
+            longName=f"pmxRestRotate{axis}",
+            attributeType="double",
+            defaultValue=0.0,
+        )
+        cmds.setAttr(f"{joint}.pmxRestRotate{axis}", 0.0)
+
+
 def _read_output(node: str, index: int) -> tuple[float, float, float]:
     """Force evaluation and read outTranslate[index] (unit-typed compound)."""
     cmds.dgeval(f"{node}.outTranslate")
@@ -136,8 +159,6 @@ def test_attribute_surface_and_defaults():
     top_level = [
         "time",
         "gravity",
-        "anchorWorldMatrix",
-        "bodyWriteBackOffset",
         "bodies",
         "joints",
         "outTranslate",
@@ -167,6 +188,7 @@ def test_attribute_surface_and_defaults():
         "bodyFriction",
         "bodyPhysicsMode",
         "bodyJoint",
+        "bodyAnchorWorld",
     ]
     for child in body_children:
         assert_true(
@@ -298,11 +320,11 @@ def test_kinematic_anchor_drives_welded_body():
     cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
 
-    # Anchor world matrix: translate the kinematic anchor to y=3 (group at
-    # the origin, so the derived group-inverse = identity and the derived
-    # offset (K^-1 = bodyWriteBackOffset[0]^-1) = identity).
+    # Anchor world matrix on the body's OWN compound child: translate the
+    # kinematic anchor to y=3 (no bodyJoint message -> the derived offset
+    # K^-1 = identity).
     cmds.setAttr(
-        f"{node}.anchorWorldMatrix[0]",
+        f"{node}.bodies[0].bodyAnchorWorld",
         1,
         0,
         0,
@@ -354,6 +376,11 @@ def test_config_edit_forces_rebuild():
     for j, bone_idx in ((joint_a, 0), (joint_b, 1)):
         cmds.addAttr(j, longName="pmxBoneIndex", attributeType="long", defaultValue=-1)
         cmds.setAttr(f"{j}.pmxBoneIndex", bone_idx)
+    # Stamp the bone builder's pmxRest* rest capture so the node's derived K
+    # (jointRestWorld * bodyRestWorld^-1) is exact.  joint_b's LOCAL rest
+    # under joint_a is (0, 1, 0).
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+    _stamp_joint_rest(joint_b, 0.0, 1.0, 0.0)
 
     # Body 0: kinematic anchor (followBone) at the origin, on bone 0.
     p0 = _set_body_common(node, 0)
@@ -373,7 +400,7 @@ def test_config_edit_forces_rebuild():
     cmds.connectAttr(f"{joint_b}.message", f"{p1}.bodyJoint")
 
     # Anchor at the origin (identity) so its current pose is captured for reset.
-    cmds.setAttr(f"{node}.anchorWorldMatrix[0]", *_IDENTITY_MATRIX, type="matrix")
+    cmds.setAttr(f"{node}.bodies[0].bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
 
     cmds.currentTime(1)
     initial = _read_output(node, 1)
@@ -419,7 +446,7 @@ def test_solver_location_does_not_affect_simulation():
 
     # World-space anchor at y=3 (there is no groupWorldMatrix input anymore).
     cmds.setAttr(
-        f"{node}.anchorWorldMatrix[0]",
+        f"{node}.bodies[0].bodyAnchorWorld",
         1,
         0,
         0,

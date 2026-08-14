@@ -23,6 +23,7 @@
 
 #include <maya/MBoundingBox.h>
 #include <maya/MEvaluationNode.h>
+#include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MString.h>
@@ -116,21 +117,6 @@ class PhysicsNode : public MPxLocatorNode
     static MObject aTime;
     static MObject aGravity;
 
-    // Kinematic anchors — one per FOLLOW_BONE body, in kinematic order.  The
-    // anchor world is the related joint's world matrix; the node applies the
-    // body<->joint rest offset (K^-1, derived from bodyWriteBackOffset) to
-    // place the collider on its bone.  The Bullet world runs in WORLD space,
-    // so the solver's own location never matters.
-    static MObject aAnchorWorldMatrix;
-
-    // Write-back inputs — the node outputs each dynamic body's JOINT-LOCAL
-    // pose.  The solver derives it in a two-pass bone-world pass: it computes
-    // every solved bone world internally (bodyLocal * K), then converts to
-    // local via the BONE hierarchy — resolved internally from each body's
-    // joint message (bodies[i].bodyJoint) and the joint DAG — never reading
-    // the driven joints from the DG (that was the feedback cycle that
-    // exploded the sim).  K = jointRestWorld * bodyRestWorld^-1.
-    static MObject aBodyWriteBackOffset; // matrix array, body-indexed: K
     // Per-body compound array: aBodies[i] — children are declared to mirror
     // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
     // attribute) sits first.
@@ -165,6 +151,15 @@ class PhysicsNode : public MPxLocatorNode
                                         // bone); the node resolves the bone index + the
                                         // hierarchy from it + the joint DAG.  Unconnected
                                         // = a static collider (no write-back).
+    // The body's kinematic-anchor INPUT — a MATRIX child of the body compound
+    // (the parentConstraint target[i].targetParentMatrix pattern).
+    // pmxRigidBody connects joint.worldMatrix[0] into it for every FOLLOW_BONE
+    // body with a related joint, so each body declares the bone world it
+    // follows; a boneless FOLLOW_BONE body pins its own rest world instead.
+    // The node applies the body<->joint rest offset (K^-1) on top.  The
+    // Bullet world runs in WORLD space, so the solver's own location never
+    // matters.  Unconnected = identity (dynamic bodies never read it).
+    static MObject aBodyAnchorWorld;
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
@@ -209,31 +204,36 @@ class PhysicsNode : public MPxLocatorNode
     MTime::Unit mLastTimeUnit = MTime::kFilm; // time unit of mLastTime (for dt)
     // The config the world was last built with — compute() re-reads the inputs
     // every evaluation and rebuilds in place when they differ (a body/joint/
-    // gravity edit, or a changed anchor/write-back count, takes effect
-    // immediately).  The anchor/write-back matrix VALUES are per-frame and are
-    // read fresh every evaluation, so only their counts are cached here.
+    // gravity edit takes effect immediately).  The per-body write-back offset
+    // K = jointRestWorld * bodyRestWorld^-1 is DERIVED only when the world is
+    // (re)built — from the joints' pmxRest*/jointOrient attributes (static —
+    // captured by the bone builder) plus the stored body rest pose — and
+    // cached in mK for the per-frame anchor/write-back consumers.  The anchor
+    // matrix VALUES are per-frame (bodies[i].bodyAnchorWorld, read fresh in
+    // updateKinematicAnchors).
     mmd::core::Double3 mGravity = mmd::core::Double3();
-    std::size_t mAnchorCount = 0;
-    std::size_t mWriteBackOffsetCount = 0;
+    std::vector<MMatrix> mK; // derived per build; identity for no-joint bodies
 
     // Helpers
     std::vector<mmd::core::Simulation::BodyDefinition> readBodyData(MDataBlock& dataBlock);
+    // Derive the per-body write-back offsets (K) from the joints' rest data
+    // and cache them in mK.  Called only when the world is (re)built — the
+    // inputs are static (pmxRest*/jointOrient + body rest pose), so deriving
+    // per evaluation would waste a DAG walk per body per frame.
+    void deriveWriteBackOffsets(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies);
     static std::vector<mmd::core::Simulation::JointDefinition> readJointData(MDataBlock& dataBlock);
     static mmd::core::Double3 readGravity(MDataBlock& dataBlock);
-    static std::size_t arrayElementCount(MDataBlock& dataBlock, const MObject& attr);
     bool buildWorld(const mmd::core::Double3& gravity,
                     const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
                     const std::vector<mmd::core::Simulation::JointDefinition>& joints);
     // True when the fresh inputs differ from what the world was built with.
     bool configChanged(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
                        const std::vector<mmd::core::Simulation::JointDefinition>& joints,
-                       const mmd::core::Double3& gravity, std::size_t anchorCount,
-                       std::size_t wbOffsetCount) const;
+                       const mmd::core::Double3& gravity) const;
     // Remember the config the world was just built with.
     void storeConfig(const std::vector<mmd::core::Simulation::BodyDefinition>& bodies,
                      const std::vector<mmd::core::Simulation::JointDefinition>& joints,
-                     const mmd::core::Double3& gravity, std::size_t anchorCount,
-                     std::size_t wbOffsetCount);
+                     const mmd::core::Double3& gravity);
     void destroyWorld();
     // Refresh the kinematic anchor transforms from their inputs; returns true
     // if any anchor moved since the previous evaluation (a dragged bone at a

@@ -4,7 +4,7 @@
  * rigid_body_constraint_cmd.cpp
  *
  * Native C++ implementation of the ``pmxRigidBodyConstraint`` command (create
- * mode — the default).  Writes ONE PMX joint into an pmxPhysicsNode's
+ * mode — the default).  Writes ONE PMX joint into a pmxPhysicsNode's
  * ``joints`` array at the next free index, replacing the former Python
  * ``_set_joint_attributes``.
  *
@@ -331,7 +331,7 @@ MStatus RigidBodyConstraintCmd::doIt(const MArgList& args)
     MObject solverNode;
     if (!mmd::maya::resolveSolver(target, solverNode))
     {
-        displayError("'" + target + "' is not an pmxPhysicsNode or a PMX model root");
+        displayError("'" + target + "' is not a pmxPhysicsNode or a PMX model root");
         return MS::kFailure;
     }
 

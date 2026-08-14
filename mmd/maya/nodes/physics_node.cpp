@@ -26,6 +26,7 @@
 #include <maya/MDataBlock.h>
 #include <maya/MDataHandle.h>
 #include <maya/MDistance.h>
+#include <maya/MEulerRotation.h>
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnData.h>
 #include <maya/MFnEnumAttribute.h>
@@ -42,6 +43,9 @@
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
 #include <maya/MPoint.h>
+#include <maya/MQuaternion.h>
+#include <maya/MTransformationMatrix.h>
+#include <maya/MVector.h>
 
 #include "bullet_bridge.hpp"
 #include "physics_math.hpp"
@@ -74,8 +78,6 @@ const MTypeId PhysicsNode::kTypeId(0x0011C105); // unique Maya node type id for 
 // ===========================================================================
 MObject PhysicsNode::aTime;
 MObject PhysicsNode::aGravity;
-MObject PhysicsNode::aAnchorWorldMatrix;
-MObject PhysicsNode::aBodyWriteBackOffset;
 
 MObject PhysicsNode::aBodies;
 MObject PhysicsNode::aBodyEnabled;
@@ -94,6 +96,7 @@ MObject PhysicsNode::aBodyRestitution;
 MObject PhysicsNode::aBodyFriction;
 MObject PhysicsNode::aBodyPhysicsMode;
 MObject PhysicsNode::aBodyJoint;
+MObject PhysicsNode::aBodyAnchorWorld;
 
 MObject PhysicsNode::aJoints;
 MObject PhysicsNode::aJointNameLocal;
@@ -158,6 +161,80 @@ void readDouble3(MDataHandle& hd, const MObject& attr, Double3& out)
     out.x = v[0];
     out.y = v[1];
     out.z = v[2];
+}
+
+// The joint's rest LOCAL matrix, reconstructed from the bone builder's
+// captured rest pose: pmxRestTranslate/Rotate (static attributes on every
+// imported joint) plus the static jointOrient.  Built with
+// MTransformationMatrix so the composition matches Maya's joint localMatrix
+// exactly (orientation · rotation · translation — rotateAxis/scale/pivots are
+// defaults on imported bones).  Missing attributes read as 0 (mock joints in
+// tests carry none).
+MMatrix jointRestLocalMatrix(const MDagPath& jointPath)
+{
+    MFnDependencyNode fn(jointPath.node());
+    const auto read = [&fn](const char* name) -> double
+    {
+        MStatus stat;
+        const MPlug plug = fn.findPlug(name, true, &stat);
+        return plug.isNull() ? 0.0 : plug.asDouble();
+    };
+    const double tx = read("pmxRestTranslateX");
+    const double ty = read("pmxRestTranslateY");
+    const double tz = read("pmxRestTranslateZ");
+    const double ox = MAngle(read("jointOrientX"), MAngle::kDegrees).asRadians();
+    const double oy = MAngle(read("jointOrientY"), MAngle::kDegrees).asRadians();
+    const double oz = MAngle(read("jointOrientZ"), MAngle::kDegrees).asRadians();
+    const double rx = MAngle(read("pmxRestRotateX"), MAngle::kDegrees).asRadians();
+    const double ry = MAngle(read("pmxRestRotateY"), MAngle::kDegrees).asRadians();
+    const double rz = MAngle(read("pmxRestRotateZ"), MAngle::kDegrees).asRadians();
+    MTransformationMatrix tm;
+    tm.setTranslation(MVector(tx, ty, tz), MSpace::kTransform);
+    tm.setRotationOrientation(MEulerRotation(ox, oy, oz).asQuaternion());
+    // Rotation order kXYZ matches the joints' default rotateOrder (0).
+    const double rot[3] = {rx, ry, rz};
+    tm.setRotation(&rot[0], MTransformationMatrix::kXYZ);
+    return tm.asMatrix();
+}
+
+// The joint's rest WORLD matrix: compose the rest-local matrices up the DAG
+// (row-vector: world = local * parentWorld).  The model root contributes
+// nothing (no captured rest attributes → identity) — matching the command's
+// old import-time inclusiveMatrix() bake, where the root sits at the origin.
+// `cache` memoizes rest worlds per pmxBoneIndex so chains sharing ancestors
+// are walked once (populated and consumed within one deriveWriteBackOffsets
+// pass).
+MMatrix jointRestWorldMatrix(const MDagPath& jointPath, std::map<int, MMatrix>& cache)
+{
+    std::vector<MDagPath> chain;
+    MDagPath p = jointPath;
+    MMatrix world; // identity — the model root sits at identity/origin
+    while (true)
+    {
+        const int bone = mmd::maya::jointPmxBoneIndex(p);
+        if (bone >= 0)
+        {
+            const auto it = cache.find(bone);
+            if (it != cache.end())
+            {
+                world = it->second;
+                break;
+            }
+        }
+        chain.push_back(p);
+        if (p.pop() != MS::kSuccess)
+            break;
+    }
+    // Compose from the cached ancestor (or identity at the root) down to the
+    // joint, caching every intermediate rest world by its bone index.
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+    {
+        world = jointRestLocalMatrix(*it) * world;
+        const int bone = mmd::maya::jointPmxBoneIndex(*it);
+        if (bone >= 0)
+            cache.emplace(bone, world);
+    }
+    return world;
 }
 
 // Map the node's persisted attribute enum (kColliderBox=1..kColliderCapsule=3)
@@ -287,27 +364,6 @@ MStatus PhysicsNode::initialize()
     nAttr.setStorable(true);
     nAttr.setKeyable(false);
 
-    // --- anchor world matrices ---
-    aAnchorWorldMatrix =
-        mAttr.create("anchorWorldMatrix", "awm", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
-    mAttr.setKeyable(false);
-
-    // --- write-back inputs ---
-    // The per-body baked write-back offset (K).  This is a TOP-LEVEL matrix
-    // array (compound matrix children are awkward), so the node reads it by
-    // body index in writeOutputs.
-    aBodyWriteBackOffset =
-        mAttr.create("bodyWriteBackOffset", "bwo", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setArray(true);
-    mAttr.setUsesArrayDataBuilder(true);
-    mAttr.setKeyable(false);
-
     // --- body compound ---
     // Body-compound children are created in PMX order (mirrors the
     // rigid_bodies.json fields); aBodyEnabled (a Maya-only custom attribute)
@@ -423,6 +479,17 @@ MStatus PhysicsNode::initialize()
     mMsgAttr.setStorable(true);
     mMsgAttr.setKeyable(false);
 
+    // The body's kinematic-anchor INPUT — a MATRIX child of the body compound
+    // (the parentConstraint target[i].targetParentMatrix pattern):
+    // pmxRigidBody connects joint.worldMatrix[0] into it for every FOLLOW_BONE
+    // body with a related joint; a boneless FOLLOW_BONE body pins its rest
+    // world instead.  The node applies the body<->joint rest offset (K^-1) on
+    // top.  Unconnected = identity (dynamic bodies never read it).
+    aBodyAnchorWorld = mAttr.create("bodyAnchorWorld", "baw", MFnMatrixAttribute::kDouble, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    mAttr.setStorable(true);
+    mAttr.setKeyable(false);
+
     for (MObject* a :
          {&aBodyEnabled, &aBodyShapeSize, &aBodyRestTranslate, &aBodyRestRotate, &aBodyMass,
           &aBodyLinearDamping, &aBodyAngularDamping, &aBodyRestitution, &aBodyFriction})
@@ -461,6 +528,7 @@ MStatus PhysicsNode::initialize()
     cAttr.addChild(aBodyFriction);
     cAttr.addChild(aBodyPhysicsMode);
     cAttr.addChild(aBodyJoint);
+    cAttr.addChild(aBodyAnchorWorld);
 
     // --- joint compound ---
     aJointNameLocal =
@@ -594,10 +662,6 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aAnchorWorldMatrix);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyWriteBackOffset);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodies);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJoints);
@@ -614,9 +678,10 @@ MStatus PhysicsNode::initialize()
     MMD_CHECK_MSTATUS(stat);
 
     // Every config input drives the outputs too, so the node is re-evaluated
-    // when a body/joint/gravity/anchor input changes (this is what lets
-    // compute() detect a config edit) and when a kinematic bone is dragged at
-    // a fixed time (the attached chains follow immediately).
+    // when a body/joint/gravity input changes (this is what lets compute()
+    // detect a config edit) and when a kinematic bone is dragged at a fixed
+    // time (the anchor lives on bodies[i].bodyAnchorWorld, so the aBodies
+    // affects below carry the dirt).
     stat = attributeAffects(aGravity, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
@@ -628,14 +693,6 @@ MStatus PhysicsNode::initialize()
     stat = attributeAffects(aJoints, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJoints, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorWorldMatrix, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aAnchorWorldMatrix, aOutRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyWriteBackOffset, aOutTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodyWriteBackOffset, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
 
     return MS::kSuccess;
@@ -717,11 +774,12 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
         {
             if (!b.isKinematic() || !b.enabled)
                 continue;
-            // Anchor slots are consumed by EVERY enabled kinematic body — a
-            // boneless FOLLOW_BONE body pins its rest pose into its own
-            // anchorWorldMatrix element (pmxRigidBody -create), so kinOrder
-            // must count it too or the derived resetAnchorIndex drifts out of
-            // sync with the anchor array.
+            // The ENGINE kinematic order is consumed by EVERY enabled
+            // kinematic body — a boneless FOLLOW_BONE body pins its rest world
+            // into its own bodies[i].bodyAnchorWorld (pmxRigidBody -create)
+            // and still occupies a kinematic slot, so kinOrder must count it
+            // too or the derived resetAnchorIndex drifts out of sync with the
+            // engine's kinematic indexes.
             if (b.relatedBoneIndex >= 0)
                 boneToAnchor.emplace(b.relatedBoneIndex, kinOrder);
             ++kinOrder;
@@ -751,6 +809,37 @@ std::vector<Simulation::BodyDefinition> PhysicsNode::readBodyData(MDataBlock& da
     }
 
     return out;
+}
+
+void PhysicsNode::deriveWriteBackOffsets(const std::vector<Simulation::BodyDefinition>& bodies)
+{
+    // Derive K = jointRestWorld * bodyRestWorld^-1 ONLY when the world is
+    // (re)built.  The inputs are static per config — the joints' pmxRest*/
+    // jointOrient (captured by the bone builder) and the body rest pose — so
+    // per-frame derivation would walk the joint DAG + read ~9 plugs per
+    // ancestor per body every evaluation for nothing.  The per-frame
+    // consumers (updateKinematicAnchors / writeOutputs) read the cached mK.
+    mK.assign(bodies.size(), MMatrix()); // identity — bodies without a related joint
+    MPlug bodiesPlug(thisMObject(), aBodies);
+    std::map<int, MMatrix> restWorldCache; // pmxBoneIndex -> joint rest world
+
+    for (size_t i = 0; i < bodies.size(); ++i)
+    {
+        if (!bodies[i].enabled || bodies[i].relatedBoneIndex < 0)
+            continue;
+        MPlugArray sources;
+        bodiesPlug.elementByLogicalIndex((unsigned int) i)
+            .child(aBodyJoint)
+            .connectedTo(sources, true, false);
+        if (sources.length() == 0)
+            continue;
+        MDagPath jointPath;
+        if (MDagPath::getAPathTo(sources[0].node(), jointPath) != MS::kSuccess)
+            continue;
+        const MMatrix jointRestWorld = jointRestWorldMatrix(jointPath, restWorldCache);
+        const MMatrix bodyWorld = mmd::maya::matrixFromTR(bodies[i].restPos, bodies[i].restRot);
+        mK[i] = jointRestWorld * bodyWorld.inverse();
+    }
 }
 
 std::vector<Simulation::JointDefinition> PhysicsNode::readJointData(MDataBlock& dataBlock)
@@ -808,27 +897,27 @@ bool PhysicsNode::updateKinematicAnchors(MDataBlock& dataBlock)
 {
     if (!mSim.initialized())
         return false;
-    // anchorWorldMatrix[i] maps 1:1 to the kinematic bodies in body order.
-    // The Bullet world runs in WORLD space: the anchor world IS the body's
-    // world pose, and the body<->joint rest offset (K^-1) moves the collider
-    // onto its bone.
+    // Each FOLLOW_BONE body carries its own anchor INPUT in the compound:
+    // bodies[i].bodyAnchorWorld (joint.worldMatrix[0] for a body on a bone,
+    // the body's own rest world for a boneless pin).  The Bullet world runs
+    // in WORLD space, so the anchor world IS the body's world pose, and the
+    // body<->joint rest offset (K^-1, derived at world build) moves the
+    // collider onto its bone.
     bool anchorsMoved = false;
-    MArrayDataHandle anchors = dataBlock.inputArrayValue(aAnchorWorldMatrix);
-    MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
-    const unsigned int anchorCount = anchors.elementCount();
+    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(aBodies);
     int anchorIndex = 0;
-    for (size_t i = 0; i < mBodies.size() && anchorIndex < (int) anchorCount; ++i)
+    for (size_t i = 0; i < mBodies.size(); ++i)
     {
         const Simulation::BodyDefinition& b = mBodies[i];
         if (!b.isKinematic() || !b.enabled)
             continue;
-        anchors.jumpToArrayElement(anchorIndex);
-        MMatrix w = anchors.inputValue().asMatrix();
-        // K = bodyWriteBackOffset[i] = jointRestWorld * bodyRestWorld^-1
-        // (baked by the command), so the kinematic offset is K^-1.
-        if (offsetHandle.jumpToArrayElement((unsigned int) i) == MS::kSuccess)
+        bodiesHandle.jumpToArrayElement((unsigned int) i);
+        MMatrix w = bodiesHandle.inputValue().child(aBodyAnchorWorld).asMatrix();
+        // K = jointRestWorld * bodyRestWorld^-1 (cached in mK), so the
+        // kinematic offset is K^-1; identity for a boneless pinned body.
+        if (i < mK.size())
         {
-            w = offsetHandle.inputValue().asMatrix().inverse() * w;
+            w = mK[i].inverse() * w;
         }
         Simulation::Pose pose;
         const btTransform t = mayaMatrixToBtTransform(w);
@@ -879,8 +968,8 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
     // them (rare in well-formed chains).
     //
     // Bullet/btTransform is COLUMN-vector: `bodyPose * K` is the joint world
-    // (the transpose of the row-vector K * bodyPose).
-    MArrayDataHandle offsetHandle = dataBlock.inputArrayValue(aBodyWriteBackOffset);
+    // (the transpose of the row-vector K * bodyPose).  K is the per-body
+    // offset derived at world build (cached in mK).
 
     // Dynamic bodies → outTranslate[i] / outRotate[i] keyed by BODY index
     // (kinematic bodies get no output element; reading them yields defaults).
@@ -889,8 +978,7 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
 
     // Pass 1 — solved bone world per bone.  First body on a bone wins (bodies
     // are created in PMX order, so the lowest body index on a bone drives it).
-    // Bodies without K (no command-baked offset) or without a related bone are
-    // skipped.
+    // Bodies without a related bone are skipped (K is derived for every body).
     std::map<int, btTransform> solvedBoneWorld;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
@@ -899,11 +987,11 @@ bool PhysicsNode::writeOutputs(MDataBlock& dataBlock)
             continue;
         if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
             continue; // first body on the bone wins
-        if (offsetHandle.jumpToArrayElement((unsigned int) i) != MS::kSuccess)
-            continue; // no K baked -> this bone has no derived world
-        const btTransform k = mayaMatrixToBtTransform(offsetHandle.inputValue().asMatrix());
+        if (i >= mK.size())
+            continue; // defensive — K is derived for every body at build
+        const btTransform kb = mayaMatrixToBtTransform(mK[i]);
         const Simulation::Pose wp = mSim.bodyPose(i);
-        solvedBoneWorld.emplace(bd.relatedBoneIndex, poseToTransform(wp.pos, wp.quat) * k);
+        solvedBoneWorld.emplace(bd.relatedBoneIndex, poseToTransform(wp.pos, wp.quat) * kb);
     }
 
     // Pass 2 — write the joint-local pose, or the raw solved world pose when
@@ -1074,34 +1162,27 @@ Double3 PhysicsNode::readGravity(MDataBlock& dataBlock)
     return Double3(g[0], g[1], g[2]);
 }
 
-std::size_t PhysicsNode::arrayElementCount(MDataBlock& dataBlock, const MObject& attr)
-{
-    return dataBlock.inputArrayValue(attr).elementCount();
-}
-
 bool PhysicsNode::configChanged(const std::vector<Simulation::BodyDefinition>& bodies,
                                 const std::vector<Simulation::JointDefinition>& joints,
-                                const Double3& gravity, std::size_t anchorCount,
-                                std::size_t wbOffsetCount) const
+                                const Double3& gravity) const
 {
-    // The anchor/write-back matrix VALUES are per-frame (read fresh in
-    // updateKinematicAnchors / writeOutputs), so only their counts define the
-    // world structure.
+    // The anchor matrix VALUES are per-frame (bodies[i].bodyAnchorWorld, read
+    // fresh in updateKinematicAnchors).  The write-back offsets are derived
+    // at world build from static joint rest data — an edit to the joints'
+    // pmxRest*/jointOrient attributes (import-baked, not edited by tools) is
+    // intentionally NOT detected here; body rest-pose and hierarchy edits ARE
+    // (the bodies comparison carries restPos/restRot/bone indices).
     return bodies != mBodies || joints != mJoints || gravity.x != mGravity.x ||
-           gravity.y != mGravity.y || gravity.z != mGravity.z || anchorCount != mAnchorCount ||
-           wbOffsetCount != mWriteBackOffsetCount;
+           gravity.y != mGravity.y || gravity.z != mGravity.z;
 }
 
 void PhysicsNode::storeConfig(const std::vector<Simulation::BodyDefinition>& bodies,
                               const std::vector<Simulation::JointDefinition>& joints,
-                              const Double3& gravity, std::size_t anchorCount,
-                              std::size_t wbOffsetCount)
+                              const Double3& gravity)
 {
     mBodies = bodies;
     mJoints = joints;
     mGravity = gravity;
-    mAnchorCount = anchorCount;
-    mWriteBackOffsetCount = wbOffsetCount;
 }
 
 // ===========================================================================
@@ -1119,42 +1200,46 @@ MStatus PhysicsNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 
     // Read the config inputs once per evaluation.  They define the world
     // (gravity, bodies, joints) and, compared against what the world was
-    // built with, drive the rebuild-vs-step decision below.
+    // built with, drive the rebuild-vs-step decision below.  The per-body
+    // write-back offsets K are DERIVED only on rebuild frames (they are
+    // static per config — deriving them per evaluation was a DAG walk + ~9
+    // plug reads per ancestor per body per frame).
     const std::vector<Simulation::BodyDefinition> bodies = readBodyData(dataBlock);
     const std::vector<Simulation::JointDefinition> joints = readJointData(dataBlock);
     const Double3 gravity = readGravity(dataBlock);
-    const std::size_t anchorCount = arrayElementCount(dataBlock, aAnchorWorldMatrix);
-    const std::size_t wbOffsetCount = arrayElementCount(dataBlock, aBodyWriteBackOffset);
 
     // Refresh the kinematic anchors every evaluation (the colliders track
     // their bones even at a fixed time) and report whether any moved.  No-op
-    // while the world is not built.
+    // while the world is not built.  Uses the cached mK (stale only on a
+    // rebuild frame, where the rebuild branch re-applies after re-deriving).
     const bool anchorsMoved = updateKinematicAnchors(dataBlock);
 
     if (!mSim.initialized())
     {
         // First evaluation: build the world from the current config at rest.
         // An empty node (no bodies) is a valid no-op.
+        deriveWriteBackOffsets(bodies);
         if (!bodies.empty() && !buildWorld(gravity, bodies, joints))
             return MS::kFailure;
-        storeConfig(bodies, joints, gravity, anchorCount, wbOffsetCount);
+        storeConfig(bodies, joints, gravity);
         mLastTime = now;
         mLastTimeUnit = nowTime.unit();
     }
     else
     {
         const double dt = (nowTime - MTime(mLastTime, mLastTimeUnit)).as(MTime::kSeconds);
-        if (configChanged(bodies, joints, gravity, anchorCount, wbOffsetCount) || dt < 0.0)
+        if (configChanged(bodies, joints, gravity) || dt < 0.0)
         {
-            // A config edit (a body/joint/gravity input changed, or a changed
-            // anchor/write-back count) or a scrub backwards — rebuild in place
-            // at the CURRENT skeleton pose.  A fresh world carries no stale
-            // solver warm-start state, so the chains are not yanked.
+            // A config edit (a body/joint/gravity input changed) or a scrub
+            // backwards — rebuild in place at the CURRENT skeleton pose.  A
+            // fresh world carries no stale solver warm-start state, so the
+            // chains are not yanked.  K is re-derived for the new config.
+            deriveWriteBackOffsets(bodies);
             destroyWorld();
             if (!bodies.empty() && !buildWorld(gravity, bodies, joints))
                 return MS::kFailure;
-            storeConfig(bodies, joints, gravity, anchorCount, wbOffsetCount);
-            updateKinematicAnchors(dataBlock); // re-apply current anchors
+            storeConfig(bodies, joints, gravity);
+            updateKinematicAnchors(dataBlock); // re-apply anchors with fresh mK
             mSim.resetDynamicBodies();         // chains stay at the current pose
             mLastTime = now;                   // no time-step on the rebuild frame
             mLastTimeUnit = nowTime.unit();

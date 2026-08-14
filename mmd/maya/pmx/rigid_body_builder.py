@@ -92,11 +92,13 @@ def _populate_rigid_bodies(
 
     Data + bone binding.  Bodies are appended in PMX order so the body index
     matches the PMX rigid-body index that the constraint command references.
-    FOLLOW_BONE bodies get their kinematic-anchor input here; dynamic bodies
-    with a related joint get their write-back K offset (``bodyWriteBackOffset``
-    = jointRestWorld * bodyRestWorld^-1) baked by the command and their
-    outTranslate/outRotate connected into the related joint at creation (the
-    command always wires a dynamic body on a bone).
+    FOLLOW_BONE bodies get their kinematic-anchor INPUT here (the command
+    connects joint.worldMatrix -> bodies[i].bodyAnchorWorld); dynamic bodies
+    with a related joint get their outTranslate/outRotate connected into the
+    related joint at creation (the command always wires a dynamic body on a
+    bone).  The write-back K offset (jointRestWorld * bodyRestWorld^-1) is
+    NOT baked anymore — the node derives it internally from the joints'
+    pmxRest* attributes.
 
     Returns the number of bodies successfully appended — the caller must
     compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every

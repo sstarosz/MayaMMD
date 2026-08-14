@@ -95,13 +95,20 @@ inline MMatrix matrixFromTR(const mmd::core::Double3& t, const mmd::core::Double
 // Idempotent: if dst is already driven by the SAME source, nothing is changed
 // and kSuccess is returned (the anchor-world input is re-connected by every
 // kinematic body create — this makes the repeated call a cheap no-op).
+//
+// Sources are matched by NAME, not plug equality: MPlug::elementByLogicalIndex()
+// on a not-yet-materialized array element returns a degenerate handle that
+// compares == to the existing element (e.g. outTranslate[1] == outTranslate[0]),
+// which would make the "same source" check a silent no-op and leave the
+// previous body's output wired.  Names are unambiguous (node + attribute +
+// element index).
 inline MStatus connectOrReplace(const MPlug& src, const MPlug& dst)
 {
     MPlugArray sources;
     dst.connectedTo(sources, true, false);
     for (unsigned int i = 0; i < sources.length(); ++i)
     {
-        if (sources[i] == src)
+        if (sources[i].name() == src.name())
             return MS::kSuccess; // already connected to the requested source
     }
     MDGModifier mod;

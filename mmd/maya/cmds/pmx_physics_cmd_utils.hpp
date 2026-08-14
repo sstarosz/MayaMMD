@@ -28,56 +28,46 @@
 namespace mmd::maya
 {
 
-/// Resolve *target* to an pmxPhysicsNode MObject (direct node or model root).
-inline bool resolveSolver(const MString& target, MObject& outNode)
+/// Resolve *target* to a pmxPhysicsNode MObject (direct node or model root).
+inline bool resolveSolver(const MString& target, MObject& outSolver)
 {
-    try
-    {
-        MSelectionList sel;
-        if (sel.add(target) != MS::kSuccess || sel.length() == 0)
-            return false;
-        MObject obj;
-        if (sel.getDependNode(0, obj) != MS::kSuccess)
-            return false;
-        if (!obj.hasFn(MFn::kDependencyNode))
-            return false;
+    MSelectionList sel;
+    if (sel.add(target) != MS::kSuccess || sel.length() == 0)
+        return false;
+    MObject obj;
+    if (sel.getDependNode(0, obj) != MS::kSuccess)
+        return false;
+    if (!obj.hasFn(MFn::kDependencyNode))
+        return false;
 
-        MFnDependencyNode fn(obj);
-        if (fn.typeName() == PhysicsNode::kNodeName)
+    MFnDependencyNode fn(obj);
+    if (fn.typeName() == PhysicsNode::kNodeName)
+    {
+        outSolver = obj;
+        return true;
+    }
+    // Model root: resolve the pmxPhysicsNode string attribute.
+    MPlug p = fn.findPlug("pmxPhysicsNode", true);
+    if (!p.isNull())
+    {
+        const MString solverName = p.asString();
+        if (solverName.length() > 0)
         {
-            outNode = obj;
-            return true;
-        }
-        // Model root: resolve the pmxPhysicsNode string attribute.
-        MStatus stat;
-        MPlug p = fn.findPlug("pmxPhysicsNode", true, &stat);
-        if (!p.isNull())
-        {
-            const MString solverName = p.asString();
-            if (solverName.length() > 0)
+            MSelectionList sel2;
+            if (sel2.add(solverName) == MS::kSuccess && sel2.length() > 0)
             {
-                MSelectionList sel2;
-                if (sel2.add(solverName) == MS::kSuccess && sel2.length() > 0)
+                MObject obj2;
+                if (sel2.getDependNode(0, obj2) == MS::kSuccess && obj2.hasFn(MFn::kDependencyNode))
                 {
-                    MObject obj2;
-                    if (sel2.getDependNode(0, obj2) == MS::kSuccess &&
-                        obj2.hasFn(MFn::kDependencyNode))
+                    MFnDependencyNode fn2(obj2);
+                    if (fn2.typeName() == PhysicsNode::kNodeName)
                     {
-                        MFnDependencyNode fn2(obj2);
-                        if (fn2.typeName() == PhysicsNode::kNodeName)
-                        {
-                            outNode = obj2;
-                            return true;
-                        }
+                        outSolver = obj2;
+                        return true;
                     }
                 }
             }
         }
-    }
-    // Resolution failure is reported through the bool return.
-    // NOLINTNEXTLINE(bugprone-empty-catch)
-    catch (...)
-    {
     }
     return false;
 }
