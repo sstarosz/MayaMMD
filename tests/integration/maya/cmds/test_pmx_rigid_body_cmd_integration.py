@@ -10,9 +10,9 @@ Tests cover (the "add a body and configure it on addition" contract):
 - Auto-append body index (0, 1, 2 ...) and stored body DATA (names, mass,
   damping, friction, restitution, group, mask, shape, physics mode, rest pose,
   PMX shape_size verbatim).
-- FOLLOW_BONE + bone -> kinematic anchor binding (anchorWorldMatrix fed by
-  the joint; the body<->bone offset is DERIVED by the node from
-  bodyWriteBackOffset).
+- FOLLOW_BONE + bone -> kinematic anchor binding (bodies[i].bodyAnchorWorld
+  fed by the joint's worldMatrix; the body<->bone offset K is DERIVED by the
+  node from the joints' pmxRest* attributes).
 - PHYSICS / PHYSICS_BONE on a bone -> write-back wired AT CREATION: a dynamic
   body with a related joint gets its outTranslate/outRotate connected straight
   into the joint (PHYSICS_BONE rotation-only).  A body WITHOUT a joint (static
@@ -20,6 +20,8 @@ Tests cover (the "add a body and configure it on addition" contract):
 - FOLLOW_BONE without a bone -> a static collider pinned at its rest pose.
 - clamp01 on damping/friction/restitution.
 - Invalid shape / physicsMode values are rejected.
+- Optional-flag defaults (shape, mode, size, mass, friction, group, mask).
+- Case-insensitive -shape / -physicsMode matching; unmatched -bone indices.
 - Solver resolution through a model-root ``pmxPhysicsNode`` attribute.
 - Enum attributes: getAttr returns the numeric field value; the enum field
   list is exposed via attributeQuery(listEnum=True).
@@ -166,16 +168,19 @@ def test_follow_bone_binds_anchor():
     )
     assert_eq(idx, 0, "index != 0")
 
-    # Anchor world matrix fed by the joint's worldMatrix[0] (listConnections
-    # returns the source NODE name).
-    srcs = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
+    # The anchor world is a MATRIX CHILD of the body compound
+    # (bodies[0].bodyAnchorWorld), fed by the joint's worldMatrix[0]
+    # (listConnections returns the source NODE name).
+    srcs = (
+        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+    )
     assert_true(
         any(joint_a in src for src in srcs),
-        f"anchorWorldMatrix[0] not fed by joint ({srcs})",
+        f"bodies[0].bodyAnchorWorld not fed by joint ({srcs})",
     )
-    # The body<->bone offset is DERIVED by the node (from bodyWriteBackOffset)
-    # — the command no longer writes an anchorOffset input.
-    print("✓ FOLLOW_BONE body bound to joint via kinematic anchor")
+    # The body<->bone offset K is DERIVED by the node from the joints'
+    # pmxRest* attributes — the command stores no offset input.
+    print("✓ FOLLOW_BONE body bound to joint via bodyAnchorWorld")
     return True
 
 
@@ -201,9 +206,11 @@ def test_no_bone_body_has_no_write_back():
         "type",
     )
 
-    # No anchor, and no joint to connect to -> no write-back wiring.
+    # No anchor connection, and no joint to connect to -> no write-back wiring.
     assert_eq(
-        int(cmds.getAttr(f"{solver}.anchorWorldMatrix", size=True) or 0), 0, "no anchor"
+        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or [],
+        [],
+        "no anchor connection for a no-bone body",
     )
     driven = (cmds.listConnections(f"{solver}.outRotate", destination=True) or []) + (
         cmds.listConnections(f"{solver}.outTranslate", destination=True) or []
@@ -227,14 +234,22 @@ def test_static_collider_no_bone():
         physicsMode="followBone",
     )
     assert_eq(idx, 0, "index != 0")
-    # Pinned anchor: no incoming connection on anchorWorldMatrix[0].
-    srcs = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
+    # Pinned anchor: no incoming connection on bodies[0].bodyAnchorWorld.
+    srcs = (
+        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+    )
     assert_true(
         not srcs, f"static collider anchor should be pinned, got sources {srcs}"
     )
-    # The pinned world matrix holds the body's rest pose in world space.
-    pinned = cmds.getAttr(f"{solver}.anchorWorldMatrix[0]")
+    # The pinned world matrix holds the body's rest pose in world space:
+    # translation = the Z-flipped position (2, 0, 0), not a round-tripped
+    # decomposition (which would drop group scale).
+    pinned = cmds.getAttr(f"{solver}.bodies[0].bodyAnchorWorld")
     assert_true(pinned is not None and len(pinned) == 16, "pinned anchor not set")
+    assert_true(
+        approx_equal_tuple(pinned[12:15], (2.0, 0.0, 0.0)),
+        f"pinned anchor translation != (2,0,0) {pinned[12:15]}",
+    )
     print("✓ no-bone FOLLOW_BONE body is a pinned static collider")
     return True
 
@@ -501,41 +516,25 @@ def test_write_back_connected_when_drivable():
     return True
 
 
-def test_write_back_offset_baked():
-    """A body with a related joint gets its write-back K offset baked."""
+def test_dynamic_body_anchor_untouched():
+    """A dynamic body never touches the anchor input (K is derived internally)."""
     _group, solver, joint_a, _jb = _make_physics_scene()
 
     cmds.pmxRigidBody(
         solver,
-        name="KBody",
+        name="DynBody",
         bone=joint_a,
         position=(0.0, 2.0, 0.0),
         physicsMode="physics",
     )
-    k = cmds.getAttr(f"{solver}.bodyWriteBackOffset[0]")
-    assert_true(
-        k is not None and len(k) == 16, f"bodyWriteBackOffset[0] not baked ({k})"
+    # No anchor connection for a dynamic body — its bodyAnchorWorld child
+    # stays at the identity default.  The write-back K offset is no longer
+    # baked anywhere: the node derives it from the joints' pmxRest* attrs.
+    srcs = (
+        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
     )
-    # K = jointRestWorld * bodyRestWorld^-1 — with a non-zero rest offset the
-    # baked matrix is NOT identity (Maya matrices are row-major: translation
-    # lives in the last row, flat indices 12..14 — here the 2-unit Y offset
-    # between the joint and the body rest shows up inverted in K's T).
-    k_trans = [k[12], k[13], k[14]]
-    assert_true(
-        any(abs(v) > 1e-6 for v in k_trans),
-        f"bodyWriteBackOffset[0] looks like identity ({k_trans})",
-    )
-    # A body WITHOUT a joint gets an identity K.
-    cmds.pmxRigidBody(
-        solver, name="NoJoint", position=(0.0, 3.0, 0.0), physicsMode="physics"
-    )
-    k2 = cmds.getAttr(f"{solver}.bodyWriteBackOffset[1]")
-    assert_true(k2 is not None and len(k2) == 16, "bodyWriteBackOffset[1] not baked")
-    assert_true(
-        approx_equal_tuple((k2[12], k2[13], k2[14]), (0.0, 0.0, 0.0)),
-        f"no-joint body K should be identity ({k2[12]},{k2[13]},{k2[14]})",
-    )
-    print("✓ bodyWriteBackOffset baked (K for joint bodies, identity otherwise)")
+    assert_true(not srcs, f"dynamic body must not have an anchor input ({srcs})")
+    print("✓ dynamic body leaves bodyAnchorWorld untouched (K derived by node)")
     return True
 
 
@@ -621,22 +620,30 @@ def test_kinematic_anchor_ordering():
     cmds.pmxRigidBody(solver, name="Dyn2", bone=joint_a, physicsMode="physics")
     cmds.pmxRigidBody(solver, name="Kin3", bone=joint_b, physicsMode="followBone")
 
-    # Two kinematic bodies -> two anchors; anchor[0] is the FIRST follow-bone
-    # body (joint_a), anchor[1] is the second (joint_b).
-    assert_eq(
-        int(cmds.getAttr(f"{solver}.anchorWorldMatrix", size=True)), 2, "anchor count"
-    )
-    srcs0 = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
-    assert_true(
-        any(joint_a in src for src in srcs0),
-        f"anchor[0] not fed by joint_a ({srcs0})",
-    )
-    srcs1 = cmds.listConnections(f"{solver}.anchorWorldMatrix[1]", source=True) or []
-    assert_true(
-        any(joint_b in src for src in srcs1),
-        f"anchor[1] not fed by joint_b ({srcs1})",
-    )
-    print("✓ kinematic anchors indexed in FOLLOW_BONE body order")
+    # Two kinematic bodies -> two bodyAnchorWorld inputs, one per FOLLOW_BONE
+    # body (bodies[1] from joint_a, bodies[3] from joint_b); the dynamic
+    # bodies in between stay unconnected.
+    for body_idx, joint in ((1, joint_a), (3, joint_b)):
+        srcs = (
+            cmds.listConnections(
+                f"{solver}.bodies[{body_idx}].bodyAnchorWorld", source=True
+            )
+            or []
+        )
+        assert_true(
+            any(joint in src for src in srcs),
+            f"bodies[{body_idx}].bodyAnchorWorld not fed by {joint} ({srcs})",
+        )
+    for body_idx in (0, 2):
+        assert_eq(
+            cmds.listConnections(
+                f"{solver}.bodies[{body_idx}].bodyAnchorWorld", source=True
+            )
+            or [],
+            [],
+            f"dynamic bodies[{body_idx}] must have no anchor input",
+        )
+    print("✓ bodyAnchorWorld inputs per FOLLOW_BONE body; dynamic bodies untouched")
     return True
 
 
@@ -650,10 +657,12 @@ def test_numeric_bone_index():
     idx = cmds.pmxRigidBody(solver, name="ByIdx", bone="7", physicsMode="followBone")
     assert_eq(idx, 0, "index != 0")
     # Anchor fed by the joint that carries pmxBoneIndex == 7.
-    srcs = cmds.listConnections(f"{solver}.anchorWorldMatrix[0]", source=True) or []
+    srcs = (
+        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+    )
     assert_true(
         any(joint_a in src for src in srcs),
-        f"anchor[0] not fed by the pmxBoneIndex=7 joint ({srcs})",
+        f"bodies[0].bodyAnchorWorld not fed by the pmxBoneIndex=7 joint ({srcs})",
     )
     print("✓ -bone <pmxBoneIdx> resolves the related joint")
     return True
@@ -724,6 +733,144 @@ def test_group_clamped():
     return True
 
 
+def test_defaults_applied():
+    """Omitting the optional flags applies the safe defaults (flagDouble3 fallback)."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    cmds.pmxRigidBody(solver)
+    base = f"{solver}.bodies[0]"
+    # String defaults: sphere / physics (the -sh / -pm defaults in doCreate).
+    assert_eq(
+        int(cmds.getAttr(f"{base}.bodyColliderType")),
+        COLLIDER_SPHERE,
+        "default shape is sphere",
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{base}.bodyPhysicsMode")),
+        MODE_PHYSICS,
+        "default physicsMode is physics",
+    )
+    assert_eq(cmds.getAttr(f"{base}.bodyNameLocal"), "", "default nameLocal empty")
+    assert_eq(
+        cmds.getAttr(f"{base}.bodyNameUniversal"), "", "default nameUniversal empty"
+    )
+    # Numeric defaults (mass 1.0, friction 0.5, everything else 0).
+    assert_eq(float(cmds.getAttr(f"{base}.bodyMass")), 1.0, "default mass")
+    assert_eq(
+        float(cmds.getAttr(f"{base}.bodyLinearDamping")), 0.0, "default linearDamping"
+    )
+    assert_eq(
+        float(cmds.getAttr(f"{base}.bodyAngularDamping")), 0.0, "default angularDamping"
+    )
+    assert_eq(float(cmds.getAttr(f"{base}.bodyFriction")), 0.5, "default friction")
+    assert_eq(
+        float(cmds.getAttr(f"{base}.bodyRestitution")), 0.0, "default restitution"
+    )
+    assert_eq(int(cmds.getAttr(f"{base}.bodyGroupId")), 0, "default group")
+    # -size / -position / -rotation fall back through flagDouble3.
+    assert_true(
+        approx_equal_tuple(cmds.getAttr(f"{base}.bodyShapeSize")[0], (0.5, 0.5, 0.5)),
+        f"default shapeSize != (0.5,0.5,0.5) {cmds.getAttr(f'{base}.bodyShapeSize')}",
+    )
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{base}.bodyRestTranslate")[0], (0.0, 0.0, 0.0)
+        ),
+        "default rest translate != (0,0,0)",
+    )
+    assert_true(
+        approx_equal_tuple(cmds.getAttr(f"{base}.bodyRestRotate")[0], (0.0, 0.0, 0.0)),
+        "default rest rotate != (0,0,0)",
+    )
+    # Default mask = 0xFFFF (collide with every group).
+    for g in range(16):
+        assert_eq(
+            bool(cmds.getAttr(f"{base}.bodyMaskGroup{g}")),
+            True,
+            f"default mask group {g}",
+        )
+    print("✓ optional-flag defaults applied (shape/mode/size/mass/friction/group/mask)")
+    return True
+
+
+def test_enum_strings_case_insensitive():
+    """-shape and -physicsMode match case-insensitively (parsers lowercase)."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    cmds.pmxRigidBody(solver, name="Mixed", shape="BOX", physicsMode="FollowBone")
+    cmds.pmxRigidBody(
+        solver, name="Jumbled", shape="CaPsUlE", physicsMode="PhysicsBone"
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies[0].bodyColliderType")),
+        COLLIDER_BOX,
+        "shape 'BOX' -> box",
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies[0].bodyPhysicsMode")),
+        MODE_FOLLOW_BONE,
+        "mode 'FollowBone' -> followBone",
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies[1].bodyColliderType")),
+        COLLIDER_CAPSULE,
+        "shape 'CaPsUlE' -> capsule",
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodies[1].bodyPhysicsMode")),
+        MODE_PHYSICS_BONE,
+        "mode 'PhysicsBone' -> physicsBone",
+    )
+    print("✓ -shape / -physicsMode matched case-insensitively")
+    return True
+
+
+def test_last_body_on_shared_bone_wins():
+    """A later dynamic body on a shared bone replaces the write-back source."""
+    _group, solver, joint_a, _jb = _make_physics_scene()
+
+    cmds.pmxRigidBody(solver, name="First", bone=joint_a, physicsMode="physics")
+    cmds.pmxRigidBody(solver, name="Second", bone=joint_a, physicsMode="physics")
+
+    # connectOrReplace: outRotate[1] took over the joint, outRotate[0] is free.
+    srcs = cmds.listConnections(f"{joint_a}.rotate", source=True, plugs=True) or []
+    assert_true(
+        any("outRotate[1]" in s for s in srcs),
+        f"joint rotate not driven by the later body ({srcs})",
+    )
+    assert_true(
+        not any("outRotate[0]" in s for s in srcs),
+        f"earlier body still driving the joint ({srcs})",
+    )
+    print("✓ later body on a shared bone replaces the write-back source")
+    return True
+
+
+def test_bone_index_no_match_no_wiring():
+    """An unmatched -bone <pmxBoneIdx> resolves to no related joint."""
+    _group, solver, _ja, _jb = _make_physics_scene()
+
+    idx = cmds.pmxRigidBody(solver, name="Ghost", bone="999", physicsMode="physics")
+    assert_eq(idx, 0, "index != 0")
+    base = f"{solver}.bodies[0]"
+    assert_eq(
+        cmds.listConnections(f"{base}.bodyJoint", source=True) or [],
+        [],
+        "no bodyJoint for an unmatched bone index",
+    )
+    assert_eq(
+        cmds.listConnections(f"{base}.bodyAnchorWorld", source=True) or [],
+        [],
+        "no anchor for an unmatched bone index",
+    )
+    driven = (cmds.listConnections(f"{solver}.outRotate", destination=True) or []) + (
+        cmds.listConnections(f"{solver}.outTranslate", destination=True) or []
+    )
+    assert_true(not driven, f"unmatched bone index must not drive outputs: {driven}")
+    print("✓ unmatched -bone index behaves like no bone (no wiring)")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
@@ -742,7 +889,7 @@ _TESTS = [
     ("Enum fields exposed", test_enum_fields_exposed),
     ("Body mask group toggles", test_body_mask_group_toggles),
     ("Related joint connected", test_related_joint_connected),
-    ("Write-back offset baked", test_write_back_offset_baked),
+    ("Dynamic body anchor untouched", test_dynamic_body_anchor_untouched),
     ("Shape size verbatim per collider", test_shape_size_verbatim_per_collider),
     ("Rest pose conversion", test_rest_pose_conversion),
     ("Kinematic anchor ordering", test_kinematic_anchor_ordering),
@@ -751,4 +898,8 @@ _TESTS = [
     ("Invalid target rejected", test_invalid_target_rejected),
     ("Missing solver argument rejected", test_missing_solver_argument_rejected),
     ("Group clamped", test_group_clamped),
+    ("Defaults applied", test_defaults_applied),
+    ("Enum strings case-insensitive", test_enum_strings_case_insensitive),
+    ("Last body on shared bone wins", test_last_body_on_shared_bone_wins),
+    ("Bone index no match no wiring", test_bone_index_no_match_no_wiring),
 ]

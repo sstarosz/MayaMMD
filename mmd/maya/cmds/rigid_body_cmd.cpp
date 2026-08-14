@@ -35,6 +35,7 @@
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
+#include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/physics_node.h"
@@ -77,6 +78,22 @@ constexpr double clamp01(double v)
     if (v > 1.0)
         return 1.0;
     return v;
+}
+
+// Read a 3-double flag (e.g. -size x y z) into a Double3 with a single
+// MArgList::asVector call instead of three flagArgumentDouble() lookups: the
+// parser resolves the flag once, then asVector copies all three values in one
+// step.  Requires the flag to be registered with three MSyntax::kDouble
+// arguments (see syntaxCreator).  Returns false if the flag has no arguments.
+bool flagArgumentDouble3(const MArgParser& parser, const char* flag, Double3& out)
+{
+    MArgList args;
+    if (parser.getFlagArgumentList(flag, 0, args) != MS::kSuccess)
+        return false;
+    unsigned int index = 0;
+    const MVector v = args.asVector(index, 3);
+    out = Double3(v.x, v.y, v.z);
+    return true;
 }
 
 // Resolve the -bone argument to a joint dag path (or leave it empty).
@@ -163,20 +180,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     Double3 pos;
     Double3 rot;
     if (parser.isFlagSet(kSizeFlag))
-    {
-        for (int i = 0; i < 3; ++i)
-            size[i] = parser.flagArgumentDouble(kSizeFlag, i);
-    }
+        flagArgumentDouble3(parser, kSizeFlag, size);
     if (parser.isFlagSet(kPositionFlag))
-    {
-        for (int i = 0; i < 3; ++i)
-            pos[i] = parser.flagArgumentDouble(kPositionFlag, i);
-    }
+        flagArgumentDouble3(parser, kPositionFlag, pos);
     if (parser.isFlagSet(kRotationFlag))
-    {
-        for (int i = 0; i < 3; ++i)
-            rot[i] = parser.flagArgumentDouble(kRotationFlag, i);
-    }
+        flagArgumentDouble3(parser, kRotationFlag, rot);
 
     double mass = 1.0;
     double linearDamping = 0.0;

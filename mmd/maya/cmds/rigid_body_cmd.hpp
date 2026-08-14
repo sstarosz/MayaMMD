@@ -1,66 +1,52 @@
-/*
+/**
  * SPDX-License-Identifier: MIT
  *
  * rigid_body_cmd.hpp
  *
  * RigidBodyCmd — native C++ command for operating on a pmxPhysicsNode.
  *
- * WHY C++ (not a Python MPxCommand): the Python command layer in this
- * environment is fragile — the lazy creation of the command's MSyntax
- * (Maya calls syntaxCreator() the first time the command is invoked) crashed
- * the process inside OpenMaya's MSyntax constructor in mayapy 2026, and the
- * Python MArgParser multi-double flag reads were flaky.  A native command has
- * none of that: MSyntax and MArgParser are plain C++ here.
- *
- * Maya command convention: create / edit / query (default = create, with
- * -e/-edit and -q/-query enabled in the syntax).
- *
- * CREATE MODE ONLY (create is the default — no -create flag):
+ * Create mode only (create is the default; -edit/-query are enabled in the
+ * syntax but not implemented yet and are rejected):
  *
  *     pmxRigidBody <solver | modelRoot>
- *         -index <int>              optional target index (must be the next
- *                                   free index; omit to auto-append)
- *         -name <string>            PMX body name (local) → bodies[i].bodyNameLocal
- *         -nameUniversal <string>   PMX body name (universal) → bodies[i].bodyNameUniversal
- *         -bone <joint | pmxBoneIdx>  related joint (Maya name/path or PMX
- *                                   bone index) — drives the bone binding
- *         -shape <sphere|box|capsule>
- *         -size <x y z>             PMX shape_size VERBATIM (full size — box
- *                                   extents are full, not half).  Stored in
- *                                   bodies[i].bodyShapeSize; the node derives
- *                                   the engine radius/extents/length by
- *                                   collider type (mmd::core::applyShapeSize).
- *         -position <x y z>         PMX shape position (MMD space; Z-flip applied)
- *         -rotation <x y z>         PMX shape rotation (MMD radians; handedness flip)
- *         -mass <double>
- *         -linearDamping <double>
- *         -angularDamping <double>
- *         -friction <double>
- *         -restitution <double>
- *         -group <int>             PMX collision group 0..15 (clamped)
- *         -mask <int>              collide-with mask: bit i set = collides with
+ *         -i, -index <int>         optional target index (must be the next free
+ *                                  index; omit to auto-append)
+ *         -n, -name <string>       PMX body name (local) → bodies[i].bodyNameLocal
+ *         -nu, -nameUniversal <string>  PMX body name (universal)
+ *         -b, -bone <joint | pmxBoneIdx>  related joint — drives the bone binding
+ *         -sh, -shape <sphere|box|capsule>  PMX collider
+ *         -sz, -size <x y z>       PMX shape_size VERBATIM (full size — box
+ *                                  extents are full, not half; the node derives
+ *                                  the engine radius/extents/length by collider
+ *                                  type via mmd::core::applyShapeSize)
+ *         -p, -position <x y z>    PMX shape position (MMD space; Z-flip applied)
+ *         -rot, -rotation <x y z>  PMX shape rotation (MMD radians; handedness flip)
+ *         -m, -mass <double>
+ *         -ld, -linearDamping <double>
+ *         -ad, -angularDamping <double>
+ *         -f, -friction <double>
+ *         -re, -restitution <double>
+ *         -g, -group <int>         PMX collision group 0..15 (clamped)
+ *         -msk, -mask <int>        collide-with mask: bit i set = collides with
  *                                  group i (the PMX non_collision_group field
  *                                  stored verbatim; written into
  *                                  bodies[i].bodyMaskGroup0..15).  Default 0xFFFF.
- *         -physicsMode <followBone|physics|physicsBone>
+ *         -pm, -physicsMode <followBone|physics|physicsBone>
  *
- * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
- * joint via the kinematic-anchor input (so the collider lives on the correct
- * bone and displays from its rest pose), bakes the write-back K offset
- * (``bodyWriteBackOffset``) for every body, connects the body's related
- * joint as a MESSAGE (``bodies[i].bodyJoint``), and ALWAYS connects
- * outTranslate/outRotate STRAIGHT into the related joint for a dynamic body
- * on a bone (the node computes the joint-local pose internally via the bone
- * hierarchy, resolved from the message + the joint DAG; PHYSICS_BONE is
- * rotation-only).  Kinematic bodies are anchors, never driven; bodies
- * without a related joint (static colliders) have nothing to connect to.
- * Edit/query/remove and batch create are later steps.
+ * Each -create appends one bodies[i] element: the body DATA, the related
+ * joint as a MESSAGE (bodies[i].bodyJoint), and — for a FOLLOW_BONE body —
+ * the kinematic-anchor INPUT (joint.worldMatrix[0] →
+ * bodies[i].bodyAnchorWorld; a boneless FOLLOW_BONE body pins its rest world
+ * instead).  A dynamic body on a bone ALWAYS gets outTranslate/outRotate
+ * connected STRAIGHT into the joint (PHYSICS_BONE is rotation-only); the node
+ * computes the joint-local pose itself and derives the write-back offset
+ * K = jointRestWorld * bodyRestWorld^-1 at world build from the joints'
+ * pmxRest attributes plus jointOrient.  Static colliders get no wiring.
  */
 
 #pragma once
 
 #include <maya/MPxCommand.h>
-#include <maya/MString.h>
 
 class MSyntax;
 class MArgList;
@@ -69,9 +55,6 @@ class RigidBodyCmd : public MPxCommand
 {
   public:
     static constexpr const char* kName = "pmxRigidBody";
-
-    RigidBodyCmd() = default;
-    ~RigidBodyCmd() override = default;
 
     static void* creator();
     static MSyntax syntaxCreator();

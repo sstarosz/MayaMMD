@@ -93,6 +93,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`pmxPhysicsNode` schema: per-body anchor input + internally derived K**
+  (breaking schema change — re-import required).  The two remaining matrix
+  inputs are restructured:
+  - `anchorWorldMatrix` (top-level matrix array) is replaced by a
+    **`bodyAnchorWorld` matrix child of the `bodies[i]` compound** (the
+    parentConstraint `target[i].targetParentMatrix` pattern): every FOLLOW_BONE
+    body now declares its own anchor world — `pmxRigidBody` connects
+    `joint.worldMatrix[0] → bodies[i].bodyAnchorWorld` (a boneless FOLLOW_BONE
+    body pins its rest world instead).  Dynamic bodies leave the child at its
+    identity default.
+  - `bodyWriteBackOffset` (top-level K matrix array) is removed entirely.  The
+    node now **derives** each body's write-back offset
+    `K = jointRestWorld * bodyRestWorld^-1` internally **when the world is
+    (re)built** from the joints' `pmxRestTranslate/Rotate` + `jointOrient`
+    (static, already captured by the bone builder) via a DAG walk, plus the
+    stored body rest pose; the result is cached for the per-frame
+    anchor/write-back consumers (joint rest-attribute edits are import-baked
+    and not detected — body rest-pose and hierarchy edits are).
+  Behaviourally identical (validated by the Maya integration suites).
 - **`pmxPhysicsNode` inputs simplified — derived, not stored** (breaking
   schema change — re-import required).  Two matrix inputs are gone:
   - `anchorOffset` is removed: it was the kinematic body<->joint rest offset
@@ -201,6 +220,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Physics bodies reappear after a plugin reload** — `rigid_body_builder`
   is now force-reloaded on plugin init, so a stale cached module no longer
   leaves the physics node empty after a reload in the same Maya session.
+- **`pmxRigidBody` write-back on a shared bone now replaces correctly** —
+  when a later dynamic body references a joint that an earlier body already
+  drives, the later body now takes over the joint's `outTranslate`/
+  `outRotate` connection as documented ("last wins").  Previously
+  `connectOrReplace` matched the existing source by plug equality, and
+  `MPlug::elementByLogicalIndex()` on a not-yet-materialized output element
+  returns a degenerate handle that compares `==` to the existing element —
+  so the "already connected" fast-path fired, the replacement was silently
+  skipped, and the FIRST body's wiring stayed (this left some real-model
+  bodies unwired, e.g. the 蕾米埃尔-泳装 bodies 668/669).  Sources are now
+  matched by plug name.
 
 ### Removed
 
