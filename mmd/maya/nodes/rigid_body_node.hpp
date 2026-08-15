@@ -22,6 +22,7 @@
 #pragma once
 
 #include <maya/MEvaluationNode.h>
+#include <maya/MDagPath.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>
@@ -199,6 +200,12 @@ class RigidBodyNode : public MPxLocatorNode
         // across scrub-back rebuilds (see frame()); re-captured on a config
         // change or first build.
         std::vector<MMatrix> originalAnchorWorld;
+        // The related joint's DAG path per body (resolved at build), used by
+        // the write-back fallback: when a dynamic body's parent bone has no
+        // body, the parent joint's CURRENT world is needed to express the
+        // solved bone world as a joint-local pose.  Invalid for bodies with no
+        // connected joint (static colliders).
+        std::vector<MDagPath> jointPaths;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };

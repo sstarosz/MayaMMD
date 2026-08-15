@@ -34,6 +34,7 @@
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
+#include <maya/MFnTransform.h>
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MMatrix.h>
@@ -674,6 +675,11 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);
     world.k = deriveWriteBackOffsets(world.bodies, jointPaths);
+    // Cache the related-joint paths for the write-back fallback (a dynamic
+    // body whose parent bone has no body needs the parent joint's world to
+    // express the solved pose as a joint-local pose).  Resolved once per
+    // build — the DAG wiring is cached in the world, like everything else.
+    world.jointPaths = jointPaths;
 
     RigidBodySimulation::Definition definition;
     definition.gravity = in.gravity;
@@ -986,8 +992,70 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                     // into the joint).
                     boneLocal = it->second;
                 }
+                else if (it != solvedBoneWorld.end() && parentBone != -1 &&
+                         i < world->jointPaths.size() &&
+                         world->jointPaths[i].isValid())
+                {
+                    // Parent bone has NO body — its world is not in
+                    // solvedBoneWorld (no solver entry).  Express the solved
+                    // bone world relative to the parent joint's CURRENT world
+                    // instead of writing the raw solved WORLD pose as the
+                    // joint-local pose: the raw pose, composed through the
+                    // parent chain, doubled the skeleton offset and launched
+                    // these bones meters above the character (Endmin's
+                    // shengzi / jianjia / piaodai chains at y≈14-16 landed at
+                    // y≈33).
+                    //
+                    // The parent's world is reconstructed WITHOUT any DG
+                    // pull: walk up from the parent to the nearest bone whose
+                    // world IS solver-known (in solvedBoneWorld — the pass-1
+                    // solved worlds, which include kinematic anchors), and
+                    // compose the gap bones' LOCAL matrices.  Maya
+                    // row-vector: world(child) = local(child) * world(parent),
+                    // so world(P) = local(P)*...*local(A-child)*world(A).
+                    // Gap bones have no body, so reading their LOCAL
+                    // matrices (MFnTransform::transformationMatrix — a direct
+                    // DAG read) never pulls the solver and cannot cycle, even
+                    // when a dynamic ancestor exists.
+                    MDagPath parentPath = world->jointPaths[i];
+                    if (parentPath.pop() == MS::kSuccess)
+                    {
+                        btTransform base = btTransform::getIdentity();
+                        bool foundBase = false;
+                        std::vector<btTransform> locals; // parent-up order
+                        MDagPath p = parentPath;
+                        for (size_t steps = 0; steps < 256 && p.isValid();
+                             ++steps)
+                        {
+                            const auto anc = solvedBoneWorld.find(
+                                mmd::maya::jointPmxBoneIndex(p));
+                            if (anc != solvedBoneWorld.end())
+                            {
+                                base = anc->second;
+                                foundBase = true;
+                                break;
+                            }
+                            MFnTransform tf(p);
+                            locals.push_back(
+                                mayaMatrixToBtTransform(tf.transformationMatrix()));
+                            if (p.pop() != MS::kSuccess)
+                                break;
+                        }
+                        if (foundBase)
+                        {
+                            btTransform parentWorld = base;
+                            for (auto lit = locals.rbegin();
+                                 lit != locals.rend(); ++lit)
+                            {
+                                parentWorld = *lit * parentWorld;
+                            }
+                            boneLocal = parentWorld.inverse() * it->second;
+                        }
+                    }
+                }
             }
-            // Parent bone without a body -> boneLocal stays the raw solved world pose.
+            // (No other fallback: a body with no related bone keeps the raw
+            // solved world pose — its joint has no bone to be local to.)
 
             const btVector3& o = boneLocal.getOrigin();
             Double3 rot;
