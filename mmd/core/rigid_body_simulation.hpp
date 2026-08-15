@@ -217,18 +217,18 @@ class RigidBodySimulation
 
   private:
     /// Runtime body state: the (copied) input definition plus the scrub-back
-    /// reset data captured at initialize().  BodyDefinition already carries
+    /// reset flag captured at initialize().  BodyDefinition already carries
     /// every rest/physics field, so Body embeds it instead of duplicating the
     /// members — the only extra state is what the engine derives at runtime.
     struct Body
     {
         BodyDefinition def; // copied from Definition::bodies at initialize()
 
-        // Scrub-back reset (captured at initialize): bodyRest = anchorRest *
-        // resetOffset; on rewind the body is placed at anchorCurrent * resetOffset.
+        // Whether this dynamic body has a valid reset anchor (a kinematic
+        // ancestor).  The reset target itself is derived fresh in
+        // resetDynamicBodies from the RAW anchor worlds, so only the flag is
+        // stored.
         bool hasBoneReset = false;
-        Double3 resetOffsetPos;
-        Double4 resetOffsetQuat = Double4(0.0, 0.0, 0.0, 1.0);
     };
 
     struct RigidBodySimulationImpl;                 // all Bullet state lives here (PIMPL)

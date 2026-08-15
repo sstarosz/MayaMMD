@@ -305,16 +305,15 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
         mRigidBodies[i] = std::move(body);
     }
 
-    // Scrub-back reset offsets — SECOND pass, AFTER every kinematic anchor is
+    // Scrub-back reset flag — SECOND pass, AFTER every kinematic anchor is
     // registered.  A dynamic body's reset anchor is its NEAREST KINEMATIC
     // ANCESTOR bone, and that kinematic body can appear LATER in body order
     // (e.g. Endmin's skirt is anchored to a bone whose kinematic body follows
-    // it), so computing the offset inside the body loop sees an mAnchorRest
-    // that is still too small and silently skips the body (no reset — the
-    // body sat at its fresh-world rest pose on every rewind).  On rewind the
-    // body is teleported to anchorCurrent * offset — i.e. its rest pose
-    // transformed by the CURRENT skeleton pose, instead of rebuilding at the
-    // PMX rest pose while the skeleton is at another frame.
+    // it), so setting the flag inside the body loop sees an mAnchorRest that
+    // is still too small and silently skips the body (no reset — the body sat
+    // at its fresh-world rest pose on every rewind).  The reset offset itself
+    // is derived fresh in resetDynamicBodies from the RAW anchor worlds
+    // (anchorCurrent * anchorRest^-1 * bodyRest), so nothing is stored here.
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         Body& b = mBodies[i];
@@ -323,20 +322,7 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
         {
             continue;
         }
-        const btTransform anchorRest = poseToTransform(
-            mAnchorRest[b.def.resetAnchorIndex].pos, mAnchorRest[b.def.resetAnchorIndex].quat);
-        const btTransform start = transformFromRest(b.def.restPos, b.def.restRot);
-        const btTransform offset = anchorRest.inverse() * start;
         b.hasBoneReset = true;
-        const btVector3& o = offset.getOrigin();
-        const btQuaternion& q = offset.getRotation();
-        b.resetOffsetPos.x = o.x();
-        b.resetOffsetPos.y = o.y();
-        b.resetOffsetPos.z = o.z();
-        b.resetOffsetQuat.x = q.x();
-        b.resetOffsetQuat.y = q.y();
-        b.resetOffsetQuat.z = q.z();
-        b.resetOffsetQuat.w = q.w();
     }
 }
 

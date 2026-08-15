@@ -367,6 +367,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offsets are now captured in a second pass AFTER every kinematic anchor is
   registered, so every anchored body re-pins to the CURRENT skeleton pose on
   rewind regardless of body ordering.
+- **A disabled kinematic body no longer breaks the write-back of every
+  anchor after it** — `writeOutputs` pass 1 indexed the raw anchor-world
+  array with a kinematic counter that incremented for DISABLED kinematic
+  bodies too, but the array only records ENABLED anchors.  A disabled
+  kinematic body before an enabled one shifted every subsequent anchor read,
+  so the enabled anchor's bone world was read from the wrong slot (or
+  skipped) and a dynamic body driven on a child bone wrote its raw WORLD pose
+  as the joint-local pose — doubling the skeleton offset (a joint expected at
+  y≈6 landed at y≈11).  The pass-1 counter now advances only for ENABLED
+  kinematic bodies, and a regression test covers a disabled-anchor-first
+  scene.
 
 ### Removed
 

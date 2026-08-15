@@ -178,27 +178,19 @@ class RigidBodyNode : public MPxLocatorNode
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
-        // Per-body RAW anchor-rest matrix (the ORIGINAL import-time joint world
-        // for a bone-attached kinematic body; identity otherwise), body-indexed.
-        // The raw kinematic placement (anchorWorld * anchorRest^-1 * bodyRest)
-        // and its write-back (bodyPose * bodyRest^-1 * anchorRest = joint world)
-        // need it per body.
-        std::vector<MMatrix> anchorRestByBody;
         // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.
         // Used to detect a whole-skeleton rigid drag at a paused frame: when
         // every moved anchor shares the same world move, the character was
         // repositioned (not animated) and the dynamic chains ride along.
         std::vector<MMatrix> lastAnchorWorld;
-        // The kinematic anchors' RAW world matrices captured at the FIRST build
-        // (i.e. the import-time skeleton), in kinematic order — the true
-        // "rest" reference for the whole-skeleton-move detector on a REBUILD.
-        // Unlike jointRestWorldMatrix (which rest-composes pmxRest* up the DAG
-        // and does NOT reproduce actual world positions for InheritCtrl joint
-        // chains), this is captured from the same bodyAnchorWorld source as
-        // lastAnchorWorld, so the move comparison stays consistent.  Persisted
-        // across scrub-back rebuilds (see frame()); re-captured on a config
-        // change or first build.
+        // The kinematic anchors' REST worlds (the joint's composed rest world
+        // from the stamped pmxRest* attributes, or the body's own rest world
+        // for a boneless pin), in kinematic order — the model-constant "rest"
+        // reference for the whole-skeleton-move detector on a REBUILD and for
+        // the raw reset / raw kinematic placement.  Persisted across
+        // scrub-back rebuilds (see frame()); re-captured on a config change or
+        // first build.
         std::vector<MMatrix> originalAnchorWorld;
         // The related joint's DAG path per body (resolved at build), used by
         // the write-back fallback: when a dynamic body's parent bone has no

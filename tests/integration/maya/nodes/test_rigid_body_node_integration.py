@@ -992,6 +992,106 @@ def test_rewind_rebuild_pins_body_with_later_reset_anchor():
     return True
 
 
+def test_disabled_kinematic_body_does_not_shift_anchor_write_back():
+    """A DISABLED kinematic body must not consume a kinematic-order slot in
+    the write-back, so the anchors after it still read the correct raw world.
+
+    Regression: writeOutputs pass 1 indexed lastAnchorWorld with a kinematic
+    counter that incremented for disabled kinematic bodies too — but
+    readRawAnchorWorlds only records ENABLED kinematic anchors.  A disabled
+    kinematic body before an enabled one shifted every subsequent anchor read,
+    so the enabled kinematic body's bone world was read from the wrong slot
+    (or skipped) and a dynamic body driven on a child bone (whose write-back
+    needs the anchor bone's solved world as its parent) landed at the wrong
+    local pose.
+    """
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    # DAG: joint_b (bone 1) is a CHILD of joint_a (bone 0).  Body 2 (dynamic)
+    # drives joint_b; its write-back is relative to bone 0's solved world,
+    # which comes from the kinematic anchor's kinematic-order slot.
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="disabledKinAnchorJoint", p=(0, 0, 0))
+    cmds.addAttr(
+        joint_a, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 0)
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+    cmds.select(clear=True)
+    joint_b = cmds.joint(name="disabledKinChildJoint", p=(0, 1, 0))
+    cmds.addAttr(
+        joint_b, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_b}.pmxBoneIndex", 1)
+    _stamp_joint_rest(joint_b, 0.0, 1.0, 0.0)
+    cmds.parent(joint_b, joint_a)
+
+    # Body 0: DISABLED kinematic anchor — must NOT occupy a slot.
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyEnabled", False)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
+
+    # Body 1: ENABLED kinematic anchor on bone 0 — the FIRST enabled kinematic
+    # body, so it must be kinematic-order slot 0.
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p1}.bodyJoint")
+    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{node}.bodies[1].bodyAnchorWorld")
+
+    # Body 2: dynamic on bone 1 (joint_b), welded to the anchor, 1 unit above.
+    p2 = _set_body_common(node, 2)
+    cmds.setAttr(f"{p2}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p2}.bodyMass", 1.0)
+    cmds.setAttr(f"{p2}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p2}.bodyMaskGroup0", False)  # fall through the anchor
+    cmds.connectAttr(f"{joint_b}.message", f"{p2}.bodyJoint")
+    # The import command wires the solver output straight into the joint, so
+    # the write-back (pass 2) is what moves joint_b — its LOCAL pose is
+    # expressed relative to bone 0's solved world.
+    cmds.connectAttr(f"{node}.outTranslate[2]", f"{joint_b}.translate")
+    cmds.connectAttr(f"{node}.outRotate[2]", f"{joint_b}.rotate")
+
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 1)
+    cmds.setAttr(f"{j}.jointBodyB", 2)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Move the anchor up by 5 and settle: the welded dynamic body rides to
+    # y≈6 in WORLD space, so joint_b's LOCAL write-back (relative to bone 0's
+    # solved world at y=5) is (0,1,0) and its world is y≈6.  If the disabled
+    # kinematic body had shifted the anchor slot, body 1's bone world would be
+    # missing and the write-back would write the raw WORLD pose as the local
+    # one -> joint_b would land at y≈11.
+    cmds.currentTime(1)
+    cmds.setAttr(f"{joint_a}.translateY", 5)
+    cmds.dgeval(f"{node}.outTranslate")
+    after = tuple(cmds.xform(joint_b, query=True, worldSpace=True, translation=True))
+    assert_true(
+        abs(after[1] - 6.0) < 0.1,
+        f"joint_b world must ride to y≈6 past a disabled kinematic body "
+        f"(got y={after[1]:.3f}, expected y≈6; a shifted anchor slot would "
+        f"land it at y≈11)",
+    )
+    print(
+        f"✓ disabled kinematic body did not shift the write-back: "
+        f"joint_b y={after[1]:.3f}"
+    )
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -1026,5 +1126,9 @@ _TESTS = [
     (
         "Rewind Rebuild Pins Body With Later-Registered Reset Anchor",
         test_rewind_rebuild_pins_body_with_later_reset_anchor,
+    ),
+    (
+        "Disabled Kinematic Body Does Not Shift Anchor Write-Back",
+        test_disabled_kinematic_body_does_not_shift_anchor_write_back,
     ),
 ]

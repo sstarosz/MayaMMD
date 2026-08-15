@@ -557,8 +557,7 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
         if (!b.isKinematic() || !b.enabled)
             continue;
         bodiesHandle.jumpToArrayElement((unsigned int) i);
-        out.push_back(
-            bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix());
+        out.push_back(bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix());
     }
     return out;
 }
@@ -604,9 +603,9 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // live in the world, not on the skeleton).  Returns the shared move as a
 // column-vector btTransform when detected, nullopt when anchors moved
 // differently (a local bone drag / normal animation) or nothing moved.
-[[nodiscard]] std::optional<btTransform>
-detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
-                        const std::vector<MMatrix>& cur)
+[[nodiscard]] std::optional<btTransform> detectWholeSkeletonMove(const World& world,
+                                                                 const std::vector<MMatrix>& prev,
+                                                                 const std::vector<MMatrix>& cur)
 {
     if (prev.size() != cur.size() || cur.empty())
         return std::nullopt;
@@ -704,38 +703,19 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
             const RigidBodySimulation::BodyDefinition& b = world.bodies[body];
             if (!b.isKinematic() || !b.enabled)
                 continue;
-            if (b.relatedBoneIndex >= 0 && body < jointPaths.size() &&
-                jointPaths[body].isValid())
+            if (b.relatedBoneIndex >= 0 && body < jointPaths.size() && jointPaths[body].isValid())
             {
-                originalAnchors.push_back(
-                    jointRestWorldMatrix(jointPaths[body], restWorldCache));
+                originalAnchors.push_back(jointRestWorldMatrix(jointPaths[body], restWorldCache));
             }
             else
             {
                 // Boneless pin: the anchor is the body's own rest world.
-                originalAnchors.push_back(
-                    mmd::maya::matrixFromTR(b.restPos, b.restRot));
+                originalAnchors.push_back(mmd::maya::matrixFromTR(b.restPos, b.restRot));
             }
             ++i;
         }
     }
     world.originalAnchorWorld = originalAnchors;
-
-    // Per-body raw anchor-rest map (kinematic order -> body index), so the
-    // raw kinematic write-back can map a RAW-placed body pose back to the
-    // joint world.
-    world.anchorRestByBody.assign(world.bodies.size(), MMatrix());
-    {
-        int anchorIndex = 0;
-        for (size_t i = 0; i < world.bodies.size(); ++i)
-        {
-            if (!world.bodies[i].isKinematic() || !world.bodies[i].enabled)
-                continue;
-            if (anchorIndex < static_cast<int>(originalAnchors.size()))
-                world.anchorRestByBody[i] = originalAnchors[anchorIndex];
-            ++anchorIndex;
-        }
-    }
 
     updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh raw placement
 
@@ -870,17 +850,15 @@ detectWholeSkeletonMove(const World& world, const std::vector<MMatrix>& prev,
     // rewind.  A whole-skeleton move still rides (handled by advance); the
     // rebuild also re-baselines lastAnchorWorld, which would otherwise see
     // the pose change as a "drag" on the next eval.
-    const double dt =
-        (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds);
+    const double dt = (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds);
     if (dt == 0.0)
     {
         const bool anchorsMoved = updateKinematicAnchors(*world, dataBlock);
         if (anchorsMoved)
         {
             const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(*world, dataBlock);
-            const bool wholeMove = detectWholeSkeletonMove(*world, world->lastAnchorWorld,
-                                                           curAnchors)
-                                       .has_value();
+            const bool wholeMove =
+                detectWholeSkeletonMove(*world, world->lastAnchorWorld, curAnchors).has_value();
             if (!wholeMove)
             {
                 return buildWorld(node, in, now, dataBlock);
@@ -927,27 +905,19 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
         {
             const RigidBodySimulation::BodyDefinition& bd = world->bodies[i];
             if (!bd.enabled)
-            {
-                if (bd.isKinematic())
-                    ++kinIndex;
-                continue;
-            }
-            if (bd.relatedBoneIndex < 0)
-            {
-                if (bd.isKinematic())
-                    ++kinIndex;
-                continue;
-            }
-            if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
-            {
-                if (bd.isKinematic())
-                    ++kinIndex;
-                continue; // first body on the bone wins
-            }
+                continue; // disabled bodies have no slot in lastAnchorWorld
             if (bd.isKinematic())
             {
-                if (kinIndex < world->lastAnchorWorld.size())
+                // Every ENABLED kinematic body occupies a slot in
+                // lastAnchorWorld (readRawAnchorWorlds counts all of them,
+                // boneless pins and duplicate-bone bodies included), so the
+                // counter advances in lockstep with it.
+                if (bd.relatedBoneIndex >= 0 &&
+                    solvedBoneWorld.find(bd.relatedBoneIndex) == solvedBoneWorld.end() &&
+                    kinIndex < world->lastAnchorWorld.size())
                 {
+                    // First body on this bone — its bone world IS the raw
+                    // anchor world (the joint world).
                     solvedBoneWorld.emplace(
                         bd.relatedBoneIndex,
                         mayaMatrixToBtTransform(world->lastAnchorWorld[kinIndex]));
@@ -955,6 +925,10 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                 ++kinIndex;
                 continue;
             }
+            if (bd.relatedBoneIndex < 0)
+                continue; // no bone to write back to
+            if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
+                continue; // first body on the bone wins
             if (i >= world->k.size())
                 continue; // defensive — K is derived for every body at build
             const btTransform kb = mayaMatrixToBtTransform(world->k[i]);
@@ -993,8 +967,7 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                     boneLocal = it->second;
                 }
                 else if (it != solvedBoneWorld.end() && parentBone != -1 &&
-                         i < world->jointPaths.size() &&
-                         world->jointPaths[i].isValid())
+                         i < world->jointPaths.size() && world->jointPaths[i].isValid())
                 {
                     // Parent bone has NO body — its world is not in
                     // solvedBoneWorld (no solver entry).  Express the solved
@@ -1024,11 +997,9 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                         bool foundBase = false;
                         std::vector<btTransform> locals; // parent-up order
                         MDagPath p = parentPath;
-                        for (size_t steps = 0; steps < 256 && p.isValid();
-                             ++steps)
+                        for (size_t steps = 0; steps < 256 && p.isValid(); ++steps)
                         {
-                            const auto anc = solvedBoneWorld.find(
-                                mmd::maya::jointPmxBoneIndex(p));
+                            const auto anc = solvedBoneWorld.find(mmd::maya::jointPmxBoneIndex(p));
                             if (anc != solvedBoneWorld.end())
                             {
                                 base = anc->second;
@@ -1036,16 +1007,14 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                                 break;
                             }
                             MFnTransform tf(p);
-                            locals.push_back(
-                                mayaMatrixToBtTransform(tf.transformationMatrix()));
+                            locals.push_back(mayaMatrixToBtTransform(tf.transformationMatrix()));
                             if (p.pop() != MS::kSuccess)
                                 break;
                         }
                         if (foundBase)
                         {
                             btTransform parentWorld = base;
-                            for (auto lit = locals.rbegin();
-                                 lit != locals.rend(); ++lit)
+                            for (auto lit = locals.rbegin(); lit != locals.rend(); ++lit)
                             {
                                 // The locals are stored as btTransforms, i.e.
                                 // TRANSPOSED Maya matrices (column-vector):
