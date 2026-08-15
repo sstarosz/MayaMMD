@@ -300,6 +300,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot be read (e.g. a malformed invocation), the command now emits a
   `displayError` and returns `MS::kFailure` instead of silently falling back
   to the default values, which made the typo hard to debug.
+- **Moving the whole character no longer breaks the simulation** — dragging
+  the character (all kinematic anchors share one world-space rigid move) now
+  rides the dynamic chains along by the same transform at the current pose,
+  with no physics step, instead of teleporting the anchors and yanking the
+  chains (the old behaviour displaced the skirt/hair by the move and baked the
+  offset into the write-back — even at frame 0 with nothing playing).  A local
+  bone drag (anchors move differently) is unchanged and still steps one tick.
+  The ride-along only fires when every bone-attached anchor shares the move,
+  so it can never trigger during normal animation.
+- **Rewinding after playing no longer jumps** — going back in time (scrub-back)
+  rebuilds the physics world, and the rebuild now pins the chains to the
+  CURRENT skeleton pose using the joints' REST worlds as the reference (a
+  model constant from the stamped `pmxRest*` attributes).  Previously the
+  rebuild compared against the anchors captured at the previous build, so a
+  whole-character move or an animation-posed skeleton got baked into the reset
+  offset and every rewind + replay re-displaced the chains.  First play, rewind
+  rebuild, and replay now all pin identically and are move-invariant; dynamic
+  bodies without a kinematic anchor ride along by the detected whole-skeleton
+  move instead of staying at rest.
+- **Dynamic bones whose parent bone has no rigid body no longer fly meters
+  into the air** — the write-back for a body whose PARENT bone carries no
+  rigid body expressed the solved pose relative to the body's own world
+  instead of its parent joint's world, so the offset doubled through the
+  skeleton chain and the bone landed far above the character (Endmin's
+  `shengzi` / `jianjia_fk_a/b` / `piaodai_back_L` chains at y≈14-16 launched
+  to y≈33).  The fallback now reconstructs the parent joint's CURRENT world
+  from the nearest solver-known ancestor's solved world composed with the
+  gap bones' live local matrices (no DG pull, so it is cycle-safe even when a
+  dynamic ancestor exists) and expresses the solved bone world relative to
+  it.
+- **... and they stay put during animation** — the parentless-body fallback
+  originally composed the gap bones' local matrices in the wrong order
+  (pre-multiplying each local onto the ancestor world instead of
+  post-multiplying).  At rest, translation-only locals commute so the result
+  was exact; once the chain rotates (animation playback), the reconstructed
+  parent world was rotated by the gap offset and the bone launched meters
+  away mid-playback (Endmin's `shengzi_0_skin_jnt` flew around the scene
+  during animation).  The composition now post-multiplies each local
+  (`parentWorld = parentWorld * local`, the transpose of the row-vector
+  `world(child) = local(child) * world(parent)`), keeping parentless bones at
+  their solved pose through the whole animation.
+- **Bones below an `_InheritCtrl` controller now rest at their true PMX
+  position** — the solver's write-back offset K is derived from each joint's
+  rest WORLD, which the node composes by walking the DAG and reading the
+  captured `pmxRest*` attributes.  The hidden `_InheritCtrl` transforms
+  (plain DAG nodes inserted by the bone builder for INHERIT_ROTATION) carry
+  a real local translate but no `pmxRest*`, so the composition treated them
+  as identity and the offset was skipped — K was wrong for every bone below
+  them and the write-back moved those joints off their PMX rest (Endmin's
+  `shengzi_0/1_skin_jnt` landed ~1.17 units from the model's true rest).  The
+  bone builder now stamps `pmxRest*` on each `_InheritCtrl` controller at
+  creation (its own local translate, identity rotation), so the rest-world
+  composition — and therefore K, the rewind re-pin and the whole-skeleton
+  move detector — is exact for these chains.  The bone suite's "Joint World
+  Positions" / "Rest Pose Attributes" tests now pass 578/578.
+- **Rewinding after a whole-character move no longer drops some chains at
+  the origin** — the scrub-back reset offset (bodyRest relative to the
+  reset-anchor bone) was captured inside the body-creation loop, where
+  `mAnchorRest` was only as large as the kinematic bodies seen so far.  A
+  dynamic body whose anchor bone's kinematic body appears LATER in body order
+  (Endmin's skirt anchors to a bone whose kinematic body follows it) silently
+  failed the `resetAnchorIndex < mAnchorRest.size()` check and got NO reset —
+  on every rewind it sat at the freshly-built world's rest pose (x≈0) while
+  the skeleton was at x≈16, until the next forward step re-dragged it.  The
+  offsets are now captured in a second pass AFTER every kinematic anchor is
+  registered, so every anchored body re-pins to the CURRENT skeleton pose on
+  rewind regardless of body ordering.
+- **A disabled kinematic body no longer breaks the write-back of every
+  anchor after it** — `writeOutputs` pass 1 indexed the raw anchor-world
+  array with a kinematic counter that incremented for DISABLED kinematic
+  bodies too, but the array only records ENABLED anchors.  A disabled
+  kinematic body before an enabled one shifted every subsequent anchor read,
+  so the enabled anchor's bone world was read from the wrong slot (or
+  skipped) and a dynamic body driven on a child bone wrote its raw WORLD pose
+  as the joint-local pose — doubling the skeleton offset (a joint expected at
+  y≈6 landed at y≈11).  The pass-1 counter now advances only for ENABLED
+  kinematic bodies, and a regression test covers a disabled-anchor-first
+  scene.
 
 ### Removed
 

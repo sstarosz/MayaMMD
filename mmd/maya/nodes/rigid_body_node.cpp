@@ -34,6 +34,7 @@
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
+#include <maya/MFnTransform.h>
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MFnUnitAttribute.h>
 #include <maya/MMatrix.h>
@@ -497,6 +498,14 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
 // Refresh each kinematic anchor from its INPUT (bodies[i].bodyAnchorWorld =
 // joint.worldMatrix[0], or the body's own rest world for a boneless pin).
 // Returns true when any anchor moved (a bone dragged at the current frame).
+//
+// The anchor is placed at the RAW world pose: bodyAnchorWorld (the joint
+// world) transformed by the constant bodyRest^-1 * jointRest offset — i.e.
+// the body's rest pose rigidly attached to the bone's CURRENT world pose.
+// This is EXACT for a whole-skeleton move M (anchor -> M·jointWorld ⇒ body ->
+// M·bodyRest) and for animation (body follows the posed bone).  The write-back
+// (pass 1) therefore reads the kinematic body's pose directly (no K multiply),
+// and the raw-anchor reset keeps the weld constraint exactly satisfied.
 bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 {
     if (!world.sim.initialized())
@@ -511,10 +520,20 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
             continue;
         bodiesHandle.jumpToArrayElement((unsigned int) i);
         MMatrix w = bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix();
-        // K^-1 (K = jointRestWorld * bodyRestWorld^-1); identity for a
-        // boneless pinned body.
-        if (i < world.k.size())
-            w = world.k[i].inverse() * w;
+        // RAW rigid attachment (row-vector): the body is a child of its joint
+        // at a constant local offset, so bodyWorld = bodyRest * anchorRest^-1 *
+        // anchorWorld (bodyRest on the LEFT).  At rest this is bodyRest; under
+        // a whole move M (anchor = anchorRest * M) it is bodyRest * M — EXACT,
+        // no K conjugation.  (For a boneless pin the anchor IS the body's own
+        // rest world, so w stays put.)  The engine reset uses the same form
+        // (anchorCurrent * anchorRest^-1 * bodyRest in bt/column = bodyRest *
+        // anchorRest^-1 * anchorCurrent in row), so kinematic and dynamic
+        // bodies stay weld-consistent.
+        if (anchorIndex < static_cast<int>(world.originalAnchorWorld.size()))
+        {
+            const MMatrix bodyRest = mmd::maya::matrixFromTR(b.restPos, b.restRot);
+            w = bodyRest * world.originalAnchorWorld[anchorIndex].inverse() * w;
+        }
         RigidBodySimulation::Pose pose;
         const btTransform t = mayaMatrixToBtTransform(w);
         storePose(pose.pos, pose.quat, t);
@@ -525,11 +544,121 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
     return anchorsMoved;
 }
 
+// Read each kinematic anchor's RAW world matrix (bodyAnchorWorld, BEFORE the
+// K^-1 rest offset) in kinematic order.  The whole-skeleton-move detector
+// compares these — the per-body K would otherwise break the shared-move test.
+[[nodiscard]] std::vector<MMatrix> readRawAnchorWorlds(World& world, MDataBlock& dataBlock)
+{
+    std::vector<MMatrix> out;
+    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(RigidBodyNode::aBodies);
+    for (size_t i = 0; i < world.bodies.size(); ++i)
+    {
+        const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
+        if (!b.isKinematic() || !b.enabled)
+            continue;
+        bodiesHandle.jumpToArrayElement((unsigned int) i);
+        out.push_back(bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix());
+    }
+    return out;
+}
+
+// Convert RAW (unconjugated) anchor MMatrices to engine Pose vectors, keeping
+// kinematic order.  The scrub-back reset consumes these so a whole-skeleton
+// move is not K-conjugated.
+[[nodiscard]] std::vector<RigidBodySimulation::Pose>
+anchorsToPoses(const std::vector<MMatrix>& anchors)
+{
+    std::vector<RigidBodySimulation::Pose> out;
+    out.reserve(anchors.size());
+    for (const MMatrix& m : anchors)
+    {
+        const btTransform t = mayaMatrixToBtTransform(m);
+        RigidBodySimulation::Pose pose;
+        storePose(pose.pos, pose.quat, t);
+        out.push_back(pose);
+    }
+    return out;
+}
+
+// Approximate rigid-transform equality (column-vector): same translation and
+// same basis.  Used to decide whether every anchor moved by one shared move.
+[[nodiscard]] bool transformsNear(const btTransform& a, const btTransform& b,
+                                  btScalar distTol = 1e-3, btScalar rotTol = 1e-4)
+{
+    const btVector3 d = a.getOrigin() - b.getOrigin();
+    if (d.length2() > distTol * distTol)
+        return false;
+    for (int c = 0; c < 3; ++c)
+    {
+        if (a.getBasis().getColumn(c).dot(b.getBasis().getColumn(c)) < 1.0 - rotTol)
+            return false;
+    }
+    return true;
+}
+
+// Detect a WHOLE-SKELETON rigid move: every BONE-ATTACHED kinematic anchor
+// moved by the SAME world-space rigid transform since the last evaluation —
+// the user dragged the character as a unit (e.g. translating/rotating the
+// model root at a paused frame).  Boneless pinned anchors are excluded (they
+// live in the world, not on the skeleton).  Returns the shared move as a
+// column-vector btTransform when detected, nullopt when anchors moved
+// differently (a local bone drag / normal animation) or nothing moved.
+[[nodiscard]] std::optional<btTransform> detectWholeSkeletonMove(const World& world,
+                                                                 const std::vector<MMatrix>& prev,
+                                                                 const std::vector<MMatrix>& cur)
+{
+    if (prev.size() != cur.size() || cur.empty())
+        return std::nullopt;
+    std::optional<btTransform> common;
+    size_t anchor = 0;
+    for (size_t i = 0; i < world.bodies.size(); ++i)
+    {
+        const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
+        if (!b.isKinematic() || !b.enabled)
+            continue;
+        if (b.relatedBoneIndex < 0) // boneless pin — not part of the skeleton
+        {
+            ++anchor;
+            continue;
+        }
+        // Maya row-vector: cur = prev * M  =>  M = prev^-1 * cur.  Bullet is
+        // the transpose (column-vector), so btMove = mayaMatrixToBtTransform(M).
+        const MMatrix move = prev[anchor].inverse() * cur[anchor];
+        const btTransform btMove = mayaMatrixToBtTransform(move);
+        if (!common)
+        {
+            common = btMove;
+        }
+        else if (!transformsNear(btMove, *common))
+        {
+            return std::nullopt; // anchors moved differently — local drag
+        }
+        ++anchor;
+    }
+    if (!common)
+        return std::nullopt;
+    // The shared move must be a real move (not the identity transform).
+    if (transformsNear(*common, btTransform::getIdentity()))
+        return std::nullopt;
+    return common;
+}
+
 // Build a fresh world from the PMX-verbatim inputs: resolve the DAG wiring,
 // derive the write-back offsets K, initialize the Bullet engine, and pin the
 // chains to the CURRENT skeleton pose (a posed skeleton must not snap to
 // rest).  std::nullopt when there are no bodies — an empty node is a valid
 // no-op.
+//
+// Pinning: the raw reset places each dynamic body at curRaw * (restRaw^-1 *
+// bodyRest) — its rest pose rigidly attached to its reset-anchor bone at the
+// bone's CURRENT world pose.  `restRaw` is the anchor bone's REST world (a
+// model constant composed from the stamped pmxRest* attributes), so the
+// formula is EXACT under both a whole-skeleton move M (curRaw = restRaw * M
+// ⇒ M·bodyRest) and an animation pose (curRaw = restRaw * P ⇒ P·bodyRest).
+// Using the CURRENT anchors as the "rest" reference instead would bake the
+// pose/move into the offset (bodies stuck at rest while the skeleton is
+// posed — the 51° mismatch on first play — and a rewind rebuild comparing
+// against a different captured pose — the persistent rewind jump).
 [[nodiscard]] std::optional<World> buildWorld(const MObject& node, const Inputs& in,
                                               const MTime& now, MDataBlock& dataBlock)
 {
@@ -545,6 +674,11 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);
     world.k = deriveWriteBackOffsets(world.bodies, jointPaths);
+    // Cache the related-joint paths for the write-back fallback (a dynamic
+    // body whose parent bone has no body needs the parent joint's world to
+    // express the solved pose as a joint-local pose).  Resolved once per
+    // build — the DAG wiring is cached in the world, like everything else.
+    world.jointPaths = jointPaths;
 
     RigidBodySimulation::Definition definition;
     definition.gravity = in.gravity;
@@ -553,8 +687,66 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
     if (!world.sim.initialize(definition))
         return std::nullopt;
 
-    updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh K
-    world.sim.resetDynamicBodies();           // chains stay at the current pose
+    // The scrub-back reset's "rest" reference: each kinematic anchor's REST
+    // world (the joint's composed rest world — a model constant from the
+    // stamped pmxRest* attributes; a boneless pin's anchor IS its own rest
+    // world, which never moves).  Read BEFORE updateKinematicAnchors so the
+    // raw placement can use it.
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
+    std::vector<MMatrix> originalAnchors;
+    originalAnchors.reserve(curAnchors.size());
+    {
+        std::map<int, MMatrix> restWorldCache;
+        size_t i = 0;
+        for (size_t body = 0; body < world.bodies.size(); ++body)
+        {
+            const RigidBodySimulation::BodyDefinition& b = world.bodies[body];
+            if (!b.isKinematic() || !b.enabled)
+                continue;
+            if (b.relatedBoneIndex >= 0 && body < jointPaths.size() && jointPaths[body].isValid())
+            {
+                originalAnchors.push_back(jointRestWorldMatrix(jointPaths[body], restWorldCache));
+            }
+            else
+            {
+                // Boneless pin: the anchor is the body's own rest world.
+                originalAnchors.push_back(mmd::maya::matrixFromTR(b.restPos, b.restRot));
+            }
+            ++i;
+        }
+    }
+    world.originalAnchorWorld = originalAnchors;
+
+    updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh raw placement
+
+    // Pin the chains to the CURRENT skeleton pose with the RAW anchor worlds
+    // (the joint worlds, NOT the K^-1-conjugated kinematic-body poses).  Each
+    // dynamic body is placed at curRaw * (restRaw^-1 * bodyRest) — its rest
+    // pose rigidly attached to its reset-anchor bone at the bone's CURRENT
+    // world pose.  This is EXACT for a whole-skeleton move M (curRaw =
+    // restRaw * M ⇒ M·bodyRest) and for an animation-posed skeleton (curRaw
+    // is the posed bone world).  The internally stored mAnchorCurrent is the
+    // kinematic BODY pose (bodyRest * rest^-1 * cur), so the legacy reset
+    // would conjugate the move by the kinematic body's rest rotation — the
+    // very K^-1·M·K rotation the raw design removes.
+    world.sim.resetDynamicBodies(anchorsToPoses(originalAnchors), anchorsToPoses(curAnchors));
+    // The raw reset only pins bodies that HAVE a reset anchor (a kinematic
+    // ancestor).  Unanchored dynamic bodies (no kinematic ancestor) have no
+    // anchor to pin to; when the whole skeleton was moved as a unit since
+    // rest (a character drag that then triggers a rebuild, e.g. on rewind)
+    // they must ride along from their REST pose by that move instead of
+    // staying at rest.  Compare against the REST reference (originalAnchors),
+    // not the previous frame: at first build there is no previous frame, and
+    // a whole-skeleton move must be detected relative to the model's rest.
+    if (const auto move = detectWholeSkeletonMove(world, originalAnchors, curAnchors))
+    {
+        RigidBodySimulation::Pose movePose;
+        storePose(movePose.pos, movePose.quat, *move);
+        world.sim.rideUnanchoredBodiesFromRest(movePose);
+    }
+    // Baseline the raw anchor worlds so the whole-skeleton-move detector has
+    // a "previous" frame to compare the first drag against.
+    world.lastAnchorWorld = curAnchors;
 
     world.lastTime = now.value(); // no time-step on the (re)build frame
     world.lastTimeUnit = now.unit();
@@ -585,16 +777,51 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 // tick when a kinematic bone was dragged at the current frame.  The anchors
 // are refreshed first so the colliders track their bones.  Returns the world
 // with the updated timeline cursor (unchanged when nothing happened).
+//
+// Whole-skeleton drags (moving/rotating the whole character) do NOT run
+// physics on the move: every bone-attached anchor shares the same world-space
+// rigid move, so the dynamic chains ride along by that move instead of being
+// yanked by teleported anchors.  This is checked on EVERY evaluation — not
+// just at a paused frame — because an interactive viewport drag does not
+// necessarily re-evaluate the solver while it happens; without the check, the
+// first playback step after the drag would hit anchors already teleported by
+// the move and yank the chains by it (272/273 joints jumped up to 75° in the
+// reproduced case).  A local bone drag moves the anchors differently (returns
+// nullopt) and still steps normally.
 [[nodiscard]] World advance(World world, const MTime& now, MDataBlock& dataBlock)
 {
     const bool anchorsMoved = updateKinematicAnchors(world, dataBlock);
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
     const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
-    if (dt > 0.0)
+
+    if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
+    {
+        // Character repositioned as a unit: ride the chains along by the
+        // shared move (velocities zeroed + kinematic interpolation reset by
+        // the engine).  When time is also advancing, keep stepping from the
+        // corrected pose; at a paused frame there is nothing to step.
+        RigidBodySimulation::Pose movePose;
+        storePose(movePose.pos, movePose.quat, *move);
+        world.sim.rideDynamicBodiesAlong(movePose);
+        if (dt > 0.0)
+        {
+            world.sim.step(dt);
+        }
+    }
+    else if (dt > 0.0)
+    {
         world.sim.step(dt);
+    }
     else if (anchorsMoved)
+    {
+        // Local bone drag at a paused frame — one fixed tick so chains react.
         world.sim.step(RigidBodySimulation::kFixedDt);
+    }
     else
-        return world;
+    {
+        return world; // nothing moved — the anchor history is still current
+    }
+    world.lastAnchorWorld = std::move(curAnchors);
     world.lastTime = now.value();
     world.lastTimeUnit = now.unit();
     return world;
@@ -608,7 +835,36 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
                                          MDataBlock& dataBlock)
 {
     if (!world || needsRebuild(*world, in, now))
+    {
+        // The rebuild derives its own REST reference from the stamped
+        // pmxRest* attributes (buildWorld reads the joint rest worlds — a
+        // model constant, so the pinning is identical whether the world is
+        // first built, rebuilt on a config change, or rebuilt on a scrub-back;
+        // a moved/posed skeleton is never baked into the offset).
         return buildWorld(node, in, now, dataBlock);
+    }
+    // A PAUSED-FRAME pose change (e.g. an animation was just applied and
+    // posed the bones at the current frame without time advancing) re-pins
+    // the chains by rebuilding — exactly what a scrub-back rebuild produces,
+    // so the frame looks the same whether you arrived by first play or by
+    // rewind.  A whole-skeleton move still rides (handled by advance); the
+    // rebuild also re-baselines lastAnchorWorld, which would otherwise see
+    // the pose change as a "drag" on the next eval.
+    const double dt = (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds);
+    if (dt == 0.0)
+    {
+        const bool anchorsMoved = updateKinematicAnchors(*world, dataBlock);
+        if (anchorsMoved)
+        {
+            const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(*world, dataBlock);
+            const bool wholeMove =
+                detectWholeSkeletonMove(*world, world->lastAnchorWorld, curAnchors).has_value();
+            if (!wholeMove)
+            {
+                return buildWorld(node, in, now, dataBlock);
+            }
+        }
+    }
     return advance(std::move(*world), now, dataBlock);
 }
 
@@ -635,12 +891,42 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
         // Pass 1 — solved bone world per bone.  First body on a bone wins
         // (bodies are created in PMX order, so the lowest body index on a bone
         // drives it); bodies without a related bone are skipped.
+        //
+        // KINEMATIC bodies are placed at the RAW rigid attachment
+        // (anchorWorld * anchorRest^-1 * bodyRest — exact under whole-skeleton
+        // moves), so their bone world IS the raw anchor world (the joint
+        // world); no K multiply.  DYNAMIC bodies are solved in the sim and
+        // map back to the joint world via the constant K = jointRest *
+        // bodyRest^-1 (bodyPose * K — the transpose of the row-vector
+        // K * bodyPose).
         std::map<int, btTransform> solvedBoneWorld;
+        size_t kinIndex = 0; // kinematic-order counter, aligned with lastAnchorWorld
         for (size_t i = 0; i < world->bodies.size(); ++i)
         {
             const RigidBodySimulation::BodyDefinition& bd = world->bodies[i];
-            if (!bd.enabled || bd.relatedBoneIndex < 0)
+            if (!bd.enabled)
+                continue; // disabled bodies have no slot in lastAnchorWorld
+            if (bd.isKinematic())
+            {
+                // Every ENABLED kinematic body occupies a slot in
+                // lastAnchorWorld (readRawAnchorWorlds counts all of them,
+                // boneless pins and duplicate-bone bodies included), so the
+                // counter advances in lockstep with it.
+                if (bd.relatedBoneIndex >= 0 &&
+                    solvedBoneWorld.find(bd.relatedBoneIndex) == solvedBoneWorld.end() &&
+                    kinIndex < world->lastAnchorWorld.size())
+                {
+                    // First body on this bone — its bone world IS the raw
+                    // anchor world (the joint world).
+                    solvedBoneWorld.emplace(
+                        bd.relatedBoneIndex,
+                        mayaMatrixToBtTransform(world->lastAnchorWorld[kinIndex]));
+                }
+                ++kinIndex;
                 continue;
+            }
+            if (bd.relatedBoneIndex < 0)
+                continue; // no bone to write back to
             if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
                 continue; // first body on the bone wins
             if (i >= world->k.size())
@@ -680,8 +966,76 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                     // into the joint).
                     boneLocal = it->second;
                 }
+                else if (it != solvedBoneWorld.end() && parentBone != -1 &&
+                         i < world->jointPaths.size() && world->jointPaths[i].isValid())
+                {
+                    // Parent bone has NO body — its world is not in
+                    // solvedBoneWorld (no solver entry).  Express the solved
+                    // bone world relative to the parent joint's CURRENT world
+                    // instead of writing the raw solved WORLD pose as the
+                    // joint-local pose: the raw pose, composed through the
+                    // parent chain, doubled the skeleton offset and launched
+                    // these bones meters above the character (Endmin's
+                    // shengzi / jianjia / piaodai chains at y≈14-16 landed at
+                    // y≈33).
+                    //
+                    // The parent's world is reconstructed WITHOUT any DG
+                    // pull: walk up from the parent to the nearest bone whose
+                    // world IS solver-known (in solvedBoneWorld — the pass-1
+                    // solved worlds, which include kinematic anchors), and
+                    // compose the gap bones' LOCAL matrices.  Maya
+                    // row-vector: world(child) = local(child) * world(parent),
+                    // so world(P) = local(P)*...*local(A-child)*world(A).
+                    // Gap bones have no body, so reading their LOCAL
+                    // matrices (MFnTransform::transformationMatrix — a direct
+                    // DAG read) never pulls the solver and cannot cycle, even
+                    // when a dynamic ancestor exists.
+                    MDagPath parentPath = world->jointPaths[i];
+                    if (parentPath.pop() == MS::kSuccess)
+                    {
+                        btTransform base = btTransform::getIdentity();
+                        bool foundBase = false;
+                        std::vector<btTransform> locals; // parent-up order
+                        MDagPath p = parentPath;
+                        for (size_t steps = 0; steps < 256 && p.isValid(); ++steps)
+                        {
+                            const auto anc = solvedBoneWorld.find(mmd::maya::jointPmxBoneIndex(p));
+                            if (anc != solvedBoneWorld.end())
+                            {
+                                base = anc->second;
+                                foundBase = true;
+                                break;
+                            }
+                            MFnTransform tf(p);
+                            locals.push_back(mayaMatrixToBtTransform(tf.transformationMatrix()));
+                            if (p.pop() != MS::kSuccess)
+                                break;
+                        }
+                        if (foundBase)
+                        {
+                            btTransform parentWorld = base;
+                            for (auto lit = locals.rbegin(); lit != locals.rend(); ++lit)
+                            {
+                                // The locals are stored as btTransforms, i.e.
+                                // TRANSPOSED Maya matrices (column-vector):
+                                // btWorld(child) = btWorld(parent) * btLocal(child),
+                                // so each gap bone must be POST-multiplied
+                                // (parentWorld = parentWorld * local).  The
+                                // pre-multiply (local * parentWorld) computes
+                                // world(parent) * local instead — identical at
+                                // rest (translation-only locals commute) but
+                                // wildly wrong once the chain rotates, which
+                                // launched the parentless bones meters away
+                                // during animation (Endmin shengzi chain).
+                                parentWorld = parentWorld * (*lit);
+                            }
+                            boneLocal = parentWorld.inverse() * it->second;
+                        }
+                    }
+                }
             }
-            // Parent bone without a body -> boneLocal stays the raw solved world pose.
+            // (No other fallback: a body with no related bone keeps the raw
+            // solved world pose — its joint has no bone to be local to.)
 
             const btVector3& o = boneLocal.getOrigin();
             Double3 rot;

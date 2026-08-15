@@ -155,6 +155,49 @@ TEST_CASE("resetDynamicBodies places bodies at the current skeleton pose", "[sim
     REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
 }
 
+TEST_CASE("reset captures an anchor registered later in body order", "[sim]")
+{
+    // A dynamic body whose reset-anchor kinematic body appears LATER in body
+    // order (Endmin's skirt — anchored to a bone whose kinematic body follows
+    // it).  The reset offset must still be captured so a rewind rebuild pins
+    // the body to the CURRENT skeleton pose; previously the in-loop capture
+    // saw an mAnchorRest too small to hold the anchor and silently skipped
+    // the body, which sat at its fresh-world rest pose on every rewind.
+    RigidBodySimulation::Definition def;
+    def.gravity = Double3(0.0, 0.0, 0.0);
+
+    // Body 0: dynamic, anchored to kinematic-order anchor 0 (body 1 below).
+    RigidBodySimulation::BodyDefinition dynamic;
+    dynamic.colliderType = RigidBodySimulation::ColliderType::eSphere;
+    dynamic.radius = 0.5;
+    dynamic.physicsMode = RigidBodySimulation::PhysicsMode::ePhysics;
+    dynamic.restPos = Double3(0.0, 1.0, 0.0);
+    dynamic.resetAnchorIndex = 0; // kinematic order 0 = body index 1
+    def.bodies.push_back(dynamic);
+
+    // Body 1: the kinematic anchor, registered AFTER the dynamic body.
+    RigidBodySimulation::BodyDefinition anchor;
+    anchor.colliderType = RigidBodySimulation::ColliderType::eSphere;
+    anchor.radius = 0.5;
+    anchor.physicsMode = RigidBodySimulation::PhysicsMode::eFollowBone;
+    def.bodies.push_back(anchor);
+
+    RigidBodySimulation sim;
+    REQUIRE(sim.initialize(def));
+
+    // Raw reset with the anchor moved from (0,0,0) to (0,1,0): the dynamic
+    // body must be pinned to anchorCurrent * (anchorRest^-1 * bodyRest)
+    // = (0,1,0) * (0,1,0) = (0,2,0).
+    std::vector<RigidBodySimulation::Pose> rawRest(1);
+    rawRest[0].pos = Double3(0.0, 0.0, 0.0);
+    std::vector<RigidBodySimulation::Pose> rawCurrent(1);
+    rawCurrent[0].pos = Double3(0.0, 1.0, 0.0);
+    sim.resetDynamicBodies(rawRest, rawCurrent);
+
+    RigidBodySimulation::Pose p = sim.bodyPose(0);
+    REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
+}
+
 TEST_CASE("Disabled bodies are skipped and bodyPose returns rest", "[sim]")
 {
     RigidBodySimulation::Definition def = weldDefinition();
@@ -180,6 +223,76 @@ TEST_CASE("clear() tears the world down and resets state", "[sim]")
     // bodyPose falls back to the default rest pose (no bodies).
     RigidBodySimulation::Pose p = sim.bodyPose(0);
     REQUIRE(p.pos.y == Catch::Approx(0.0));
+}
+
+TEST_CASE("rideDynamicBodiesAlong moves dynamic bodies by a rigid world move without stepping", "[sim]")
+{
+    // weldDefinition: kinematic anchor at origin + dynamic body at y=1, welded.
+    // A whole-skeleton drag at a paused frame must ride the dynamic chain
+    // along by the same rigid move — no physics step, no velocity impulse.
+    RigidBodySimulation sim;
+    REQUIRE(sim.initialize(weldDefinition()));
+
+    // Anchor teleported to y=2 (the kinematic body follows its bone).
+    RigidBodySimulation::Pose anchor;
+    anchor.pos = Double3(0.0, 2.0, 0.0);
+    REQUIRE(sim.setKinematicPose(0, anchor));
+
+    // The dynamic body is still at rest (y=1) until a step happens.
+    RigidBodySimulation::Pose before = sim.bodyPose(1);
+    REQUIRE(before.pos.y == Catch::Approx(1.0).margin(1e-3));
+
+    // Whole-skeleton ride-along: translate everything by +3 on Y.
+    RigidBodySimulation::Pose move;
+    move.pos = Double3(0.0, 3.0, 0.0);
+    sim.rideDynamicBodiesAlong(move);
+
+    // The dynamic body rode along to y=4 (1 + 3), WITHOUT a physics step.
+    RigidBodySimulation::Pose after = sim.bodyPose(1);
+    REQUIRE(after.pos.y == Catch::Approx(4.0).margin(1e-3));
+    REQUIRE(after.pos.x == Catch::Approx(0.0).margin(1e-3));
+    REQUIRE(after.pos.z == Catch::Approx(0.0).margin(1e-3));
+}
+
+TEST_CASE("rideDynamicBodiesAlong also carries rotation", "[sim]")
+{
+    RigidBodySimulation sim;
+    REQUIRE(sim.initialize(weldDefinition()));
+
+    // 90-degree rotation about Z: the welded body at (0,1,0) lands at
+    // (-1,0,0) (right-handed rotation: +Z turns +Y toward -X).
+    RigidBodySimulation::Pose move;
+    move.quat = eulerDegreesToQuat(0.0, 0.0, 90.0);
+    sim.rideDynamicBodiesAlong(move);
+
+    RigidBodySimulation::Pose after = sim.bodyPose(1);
+    REQUIRE(after.pos.x == Catch::Approx(-1.0).margin(1e-2));
+    REQUIRE(after.pos.y == Catch::Approx(0.0).margin(1e-2));
+}
+
+TEST_CASE("rideDynamicBodiesAlong leaves velocities at zero for a clean resume", "[sim]")
+{
+    // A coherent whole-skeleton move: anchor 0 -> 3 AND body 1 -> 4 by the
+    // SAME +3 translate (weld keeps body 1 unit above the anchor).  After the
+    // ride-along, subsequent REAL steps must not inherit a teleport velocity:
+    // the body should stay at 4, not fly off or sag because its anchor jumped.
+    RigidBodySimulation sim;
+    REQUIRE(sim.initialize(weldDefinition()));
+
+    RigidBodySimulation::Pose anchor;
+    anchor.pos = Double3(0.0, 3.0, 0.0);
+    (void) sim.setKinematicPose(0, anchor);
+
+    RigidBodySimulation::Pose move;
+    move.pos = Double3(0.0, 3.0, 0.0);
+    sim.rideDynamicBodiesAlong(move);
+
+    for (int i = 0; i < 5; ++i)
+    {
+        sim.step(RigidBodySimulation::kFixedDt);
+    }
+    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    REQUIRE(p.pos.y == Catch::Approx(4.0).margin(0.25));
 }
 
 // A static (mass 0) ground sphere at the origin + a dynamic ball dropped from

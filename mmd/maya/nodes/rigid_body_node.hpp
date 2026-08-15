@@ -22,6 +22,7 @@
 #pragma once
 
 #include <maya/MEvaluationNode.h>
+#include <maya/MDagPath.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>
@@ -177,6 +178,26 @@ class RigidBodyNode : public MPxLocatorNode
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
+        // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
+        // K^-1 rest offset) from the previous evaluation, in kinematic order.
+        // Used to detect a whole-skeleton rigid drag at a paused frame: when
+        // every moved anchor shares the same world move, the character was
+        // repositioned (not animated) and the dynamic chains ride along.
+        std::vector<MMatrix> lastAnchorWorld;
+        // The kinematic anchors' REST worlds (the joint's composed rest world
+        // from the stamped pmxRest* attributes, or the body's own rest world
+        // for a boneless pin), in kinematic order — the model-constant "rest"
+        // reference for the whole-skeleton-move detector on a REBUILD and for
+        // the raw reset / raw kinematic placement.  Persisted across
+        // scrub-back rebuilds (see frame()); re-captured on a config change or
+        // first build.
+        std::vector<MMatrix> originalAnchorWorld;
+        // The related joint's DAG path per body (resolved at build), used by
+        // the write-back fallback: when a dynamic body's parent bone has no
+        // body, the parent joint's CURRENT world is needed to express the
+        // solved bone world as a joint-local pose.  Invalid for bodies with no
+        // connected joint (static colliders).
+        std::vector<MDagPath> jointPaths;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };

@@ -109,6 +109,10 @@ struct RigidBodySimulation::RigidBodySimulationImpl
     bool setKinematicPose(size_t anchorIndex, const Pose& pose);
     void step(double dt);
     void resetDynamicBodies();
+    void resetDynamicBodies(const std::vector<Pose>& rawRestAnchors,
+                            const std::vector<Pose>& rawCurrentAnchors);
+    void rideDynamicBodiesAlong(const Pose& move);
+    void rideUnanchoredBodiesFromRest(const Pose& move);
     Pose bodyPose(size_t bodyIndex) const;
 
   private:
@@ -289,30 +293,6 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
             body->activate();
         }
 
-        // Scrub-back reset: capture the constant offset bodyRest = anchorRest *
-        // offset, where the anchor is the kinematic body whose bone is this
-        // body's nearest kinematic ancestor (mapped by the node's Python).  On
-        // rewind the body is teleported to anchorCurrent * offset — i.e. its
-        // rest pose transformed by the CURRENT skeleton pose, instead of
-        // rebuilding at the PMX rest pose while the skeleton is at another frame.
-        if (!b.def.isKinematic() && b.def.resetAnchorIndex >= 0 &&
-            b.def.resetAnchorIndex < static_cast<int>(mAnchorRest.size()))
-        {
-            const btTransform anchorRest = poseToTransform(
-                mAnchorRest[b.def.resetAnchorIndex].pos, mAnchorRest[b.def.resetAnchorIndex].quat);
-            const btTransform offset = anchorRest.inverse() * start;
-            b.hasBoneReset = true;
-            const btVector3& o = offset.getOrigin();
-            const btQuaternion& q = offset.getRotation();
-            b.resetOffsetPos.x = o.x();
-            b.resetOffsetPos.y = o.y();
-            b.resetOffsetPos.z = o.z();
-            b.resetOffsetQuat.x = q.x();
-            b.resetOffsetQuat.y = q.y();
-            b.resetOffsetQuat.z = q.z();
-            b.resetOffsetQuat.w = q.w();
-        }
-
         // Bullet group bit from the raw PMX group id (legacy scenes without
         // it keep the default group 0); b.def.mask is the collision filter
         // mask passed verbatim to Bullet.  addRigidBody takes shorts; group 15
@@ -323,6 +303,26 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
             static_cast<short>(1 << ((b.def.groupId >= 0 ? b.def.groupId : 0) & 0x0F));
         mWorld->addRigidBody(body.get(), group, static_cast<short>(b.def.mask));
         mRigidBodies[i] = std::move(body);
+    }
+
+    // Scrub-back reset flag — SECOND pass, AFTER every kinematic anchor is
+    // registered.  A dynamic body's reset anchor is its NEAREST KINEMATIC
+    // ANCESTOR bone, and that kinematic body can appear LATER in body order
+    // (e.g. Endmin's skirt is anchored to a bone whose kinematic body follows
+    // it), so setting the flag inside the body loop sees an mAnchorRest that
+    // is still too small and silently skips the body (no reset — the body sat
+    // at its fresh-world rest pose on every rewind).  The reset offset itself
+    // is derived fresh in resetDynamicBodies from the RAW anchor worlds
+    // (anchorCurrent * anchorRest^-1 * bodyRest), so nothing is stored here.
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        Body& b = mBodies[i];
+        if (b.def.isKinematic() || !b.def.enabled || b.def.resetAnchorIndex < 0 ||
+            b.def.resetAnchorIndex >= static_cast<int>(mAnchorRest.size()))
+        {
+            continue;
+        }
+        b.hasBoneReset = true;
     }
 }
 
@@ -505,13 +505,49 @@ void RigidBodySimulation::RigidBodySimulationImpl::step(double dt)
 
 void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
 {
+    resetDynamicBodies(std::vector<Pose>(), std::vector<Pose>());
+}
+
+void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies(
+    const std::vector<Pose>& rawRestAnchors, const std::vector<Pose>& rawCurrentAnchors)
+{
     if (!mWorld)
     {
         return;
     }
-    // Teleport every dynamic body (that has a reset anchor) to its rest pose
-    // transformed by the CURRENT skeleton pose, zeroing velocities.  Uses the
-    // anchor CURRENT poses captured by setKinematicPose.
+    // The RAW-anchor path (both vectors non-empty and the same size) pins each
+    // dynamic body to rawCurrent * (rawRest^-1 * bodyRest) — its rest pose
+    // rigidly attached to its reset-anchor bone at the bone's CURRENT world
+    // pose.  Using the UNCONJUGATED anchor worlds keeps a whole-skeleton move
+    // M exact (rawCurrent = M·rawRest ⇒ M·bodyRest); the internally stored
+    // K^-1-conjugated anchors would instead give K^-1·M·K·bodyRest (rotated —
+    // the "character move is baked into the sim" rewind jump).  The formula is
+    // ALSO exact for an animation-posed skeleton (rawCurrent is the posed bone
+    // world), so a rewind into a moving/posed scene pins correctly too.
+    const bool useRaw = !rawRestAnchors.empty() && !rawCurrentAnchors.empty() &&
+                        rawRestAnchors.size() == rawCurrentAnchors.size();
+
+    // The kinematic bodies were just teleported to their current poses by
+    // setKinematicPose; reset their interpolation so the teleport is NOT read
+    // back as a huge implied velocity on the next real step (exactly what
+    // rideDynamicBodiesAlong does for a detected whole-skeleton move).
+    for (size_t i = 0; i < mRigidBodies.size(); ++i)
+    {
+        btRigidBody* kin = mRigidBodies[i].get();
+        if (kin == nullptr)
+        {
+            continue;
+        }
+        const Body& kb = mBodies[i];
+        if (!kb.def.isKinematic() || !kb.def.enabled)
+        {
+            continue;
+        }
+        kin->setInterpolationWorldTransform(kin->getWorldTransform());
+        kin->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+        kin->setInterpolationAngularVelocity(btVector3(0, 0, 0));
+    }
+
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         const Body& b = mBodies[i];
@@ -525,15 +561,29 @@ void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
             continue;
         }
 
-        const btTransform anchorCurrent =
-            poseToTransform(mAnchorCurrent[anchorIdx].pos, mAnchorCurrent[anchorIdx].quat);
-        btTransform offset;
-        offset.setIdentity();
-        offset.setOrigin(btVector3(btScalar(b.resetOffsetPos.x), btScalar(b.resetOffsetPos.y),
-                                   btScalar(b.resetOffsetPos.z)));
-        offset.setRotation(
-            btQuaternion(btScalar(b.resetOffsetQuat.x), btScalar(b.resetOffsetQuat.y),
-                         btScalar(b.resetOffsetQuat.z), btScalar(b.resetOffsetQuat.w)));
+        btTransform anchorRest;
+        btTransform anchorCurrent;
+        if (useRaw && anchorIdx < static_cast<int>(rawRestAnchors.size()) &&
+            anchorIdx < static_cast<int>(rawCurrentAnchors.size()))
+        {
+            anchorRest = poseToTransform(rawRestAnchors[anchorIdx].pos,
+                                         rawRestAnchors[anchorIdx].quat);
+            anchorCurrent = poseToTransform(rawCurrentAnchors[anchorIdx].pos,
+                                            rawCurrentAnchors[anchorIdx].quat);
+        }
+        else
+        {
+            // Legacy fallback: the internally stored (K-conjugated) anchors.
+            anchorRest = poseToTransform(mAnchorRest[anchorIdx].pos, mAnchorRest[anchorIdx].quat);
+            anchorCurrent =
+                poseToTransform(mAnchorCurrent[anchorIdx].pos, mAnchorCurrent[anchorIdx].quat);
+        }
+
+        // bodyRest = anchorRest * offset  =>  offset = anchorRest^-1 * bodyRest.
+        // Rewind target = anchorCurrent * offset — the body's rest pose
+        // transformed by the CURRENT skeleton pose.
+        const btTransform start = transformFromRest(b.def.restPos, b.def.restRot);
+        const btTransform offset = anchorRest.inverse() * start;
         const btTransform target = anchorCurrent * offset;
 
         btRigidBody* body = mRigidBodies[i].get();
@@ -541,6 +591,82 @@ void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()
         {
             continue;
         }
+        body->setWorldTransform(target);
+        body->getMotionState()->setWorldTransform(target);
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->setActivationState(DISABLE_DEACTIVATION);
+        body->activate();
+    }
+}
+
+void RigidBodySimulation::RigidBodySimulationImpl::rideDynamicBodiesAlong(const Pose& move)
+{
+    if (!mWorld)
+    {
+        return;
+    }
+    const btTransform m = poseToTransform(move.pos, move.quat);
+    for (size_t i = 0; i < mRigidBodies.size(); ++i)
+    {
+        btRigidBody* body = mRigidBodies[i].get();
+        if (body == nullptr)
+        {
+            continue;
+        }
+        const Body& b = mBodies[i];
+        if (b.def.isKinematic())
+        {
+            // The kinematic body's transform was already updated by
+            // setKinematicPose; reset its interpolation so the teleport is
+            // NOT read back as a huge implied velocity on the next real step.
+            body->setInterpolationWorldTransform(body->getWorldTransform());
+            body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
+            continue;
+        }
+        if (!b.def.enabled)
+        {
+            continue;
+        }
+        // Ride the dynamic body along by the same rigid world move (the
+        // character was dragged as a unit — a bone-by-bone drag would not
+        // produce one shared transform).  Zero velocities: the move is a
+        // teleport, not a force.
+        const btTransform target = m * body->getWorldTransform();
+        body->setWorldTransform(target);
+        body->getMotionState()->setWorldTransform(target);
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->setActivationState(DISABLE_DEACTIVATION);
+        body->activate();
+    }
+}
+
+void RigidBodySimulation::RigidBodySimulationImpl::rideUnanchoredBodiesFromRest(const Pose& move)
+{
+    if (!mWorld)
+    {
+        return;
+    }
+    const btTransform m = poseToTransform(move.pos, move.quat);
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        const Body& b = mBodies[i];
+        if (b.def.isKinematic() || !b.def.enabled || b.hasBoneReset)
+        {
+            continue;
+        }
+        btRigidBody* body = mRigidBodies[i].get();
+        if (body == nullptr)
+        {
+            continue;
+        }
+        // Unanchored dynamic body (no kinematic ancestor to pin to): ride it
+        // from its REST pose by the move.  Anchored bodies are handled by the
+        // raw-anchor reset (curRaw * (restRaw^-1 * bodyRest) = M·bodyRest
+        // under a move), so they are NOT touched here.
+        const btTransform target = m * transformFromRest(b.def.restPos, b.def.restRot);
         body->setWorldTransform(target);
         body->getMotionState()->setWorldTransform(target);
         body->setLinearVelocity(btVector3(0, 0, 0));
@@ -610,6 +736,22 @@ void RigidBodySimulation::step(double dt)
 void RigidBodySimulation::resetDynamicBodies()
 {
     mImpl->resetDynamicBodies();
+}
+
+void RigidBodySimulation::resetDynamicBodies(const std::vector<Pose>& rawRestAnchors,
+                                             const std::vector<Pose>& rawCurrentAnchors)
+{
+    mImpl->resetDynamicBodies(rawRestAnchors, rawCurrentAnchors);
+}
+
+void RigidBodySimulation::rideDynamicBodiesAlong(const Pose& move)
+{
+    mImpl->rideDynamicBodiesAlong(move);
+}
+
+void RigidBodySimulation::rideUnanchoredBodiesFromRest(const Pose& move)
+{
+    mImpl->rideUnanchoredBodiesFromRest(move);
 }
 
 RigidBodySimulation::Pose RigidBodySimulation::bodyPose(size_t bodyIndex) const

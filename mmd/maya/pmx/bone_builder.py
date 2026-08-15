@@ -840,6 +840,32 @@ def _pass4_create_inheritance_constraints(
                     f"{ctrl}.translate", child_trans[0], child_trans[1], child_trans[2]
                 )
 
+                # Stamp pmxRest* on the controller like a joint.  The controller
+                # is a plain transform (NOT a joint) but it carries a real local
+                # translate in the DAG chain; the solver's jointRestWorldMatrix
+                # composes rest worlds by walking the DAG and reading pmxRest*
+                # from every node — without these attributes the controller was
+                # treated as identity and its offset was SKIPPED, making K (and
+                # the write-back rest pose) wrong for every bone below the
+                # InheritCtrl (Endmin shengzi_0/1 landed ~1.17 units off PMX).
+                # Rest local = its own translate, identity rotation (the
+                # multiplyDivide drives .rotate during animation only).
+                for axis, value in zip(("X", "Y", "Z"), child_trans):
+                    cmds.addAttr(
+                        ctrl,
+                        longName=f"pmxRestTranslate{axis}",
+                        attributeType="float",
+                        defaultValue=0.0,
+                    )
+                    cmds.setAttr(f"{ctrl}.pmxRestTranslate{axis}", value)
+                    cmds.addAttr(
+                        ctrl,
+                        longName=f"pmxRestRotate{axis}",
+                        attributeType="float",
+                        defaultValue=0.0,
+                    )
+                    cmds.setAttr(f"{ctrl}.pmxRestRotate{axis}", 0.0)
+
                 # Parent under the child's current parent with relative=True.
                 # This keeps the controller's local transform intact
                 # (translate = joint offset, rotate = identity).
