@@ -881,6 +881,117 @@ def test_parentless_body_write_back_survives_rotated_parent_chain():
     return True
 
 
+def test_rewind_rebuild_pins_body_with_later_reset_anchor():
+    """A dynamic body whose reset-anchor kinematic body appears LATER in body
+    order must re-pin to the CURRENT skeleton pose on a rewind rebuild.
+
+    Regression: Endmin's skirt bones are anchored to a bone whose kinematic
+    body FOLLOWS them in body order.  The reset offset was captured inside the
+    body-creation loop, where mAnchorRest only held the kinematic bodies seen
+    SO FAR — so such a body silently failed the resetAnchorIndex <
+    mAnchorRest.size() check, got NO reset, and sat at the freshly-built
+    world's rest pose (the origin) on every rewind after the character was
+    moved, until the next forward step re-dragged it.  (The existing rewind
+    tests put the anchor FIRST, so they never exercised this ordering.)
+    """
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    # DAG: joint_child (bone 1) is a CHILD of joint_anchor (bone 0).  Body 0
+    # (dynamic) drives joint_child; its reset anchor is bone 0 = body 1 (the
+    # kinematic body), which is registered LATER in body order.
+    cmds.select(clear=True)
+    joint_anchor = cmds.joint(name="laterAnchorJoint", p=(0, 0, 0))
+    cmds.addAttr(
+        joint_anchor, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_anchor}.pmxBoneIndex", 0)
+    _stamp_joint_rest(joint_anchor, 0.0, 0.0, 0.0)
+    cmds.select(clear=True)
+    joint_child = cmds.joint(name="laterAnchorChildJoint", p=(0, 1, 0))
+    cmds.addAttr(
+        joint_child, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_child}.pmxBoneIndex", 1)
+    _stamp_joint_rest(joint_child, 0.0, 1.0, 0.0)
+    cmds.parent(joint_child, joint_anchor)
+
+    # Body 0: DYNAMIC on bone 1 (joint_child) — appears BEFORE its anchor body.
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyMass", 1.0)
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p0}.bodyMaskGroup0", False)  # fall through the anchor
+    cmds.connectAttr(f"{joint_child}.message", f"{p0}.bodyJoint")
+
+    # Body 1: KINEMATIC anchor on bone 0 (joint_anchor) — LATER in body order.
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_anchor}.message", f"{p1}.bodyJoint")
+    cmds.connectAttr(
+        f"{joint_anchor}.worldMatrix[0]", f"{node}.bodies[1].bodyAnchorWorld"
+    )
+
+    # Rigid weld between the anchor and the dynamic body.
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Settle at frame 1: the welded dynamic body hangs 1 unit above the anchor
+    # -> joint_child's world is at y≈1.
+    cmds.currentTime(1)
+    cmds.dgeval(f"{node}.outTranslate")
+    settled = tuple(
+        cmds.xform(joint_child, query=True, worldSpace=True, translation=True)
+    )
+    assert_true(
+        abs(settled[1] - 1.0) < 0.05,
+        f"settled at y≈1 (got {settled[1]:.3f})",
+    )
+
+    # Move the whole character up by 5 -> the dynamic body rides along.
+    cmds.setAttr(f"{joint_anchor}.translateY", 5)
+    cmds.dgeval(f"{node}.outTranslate")
+    moved = tuple(
+        cmds.xform(joint_child, query=True, worldSpace=True, translation=True)
+    )
+    assert_true(
+        abs(moved[1] - 6.0) < 0.1,
+        f"ride-along at y≈6 (got {moved[1]:.3f})",
+    )
+
+    # Rewind to frame 0 (scrub-back -> rebuild).  The rebuild must re-pin the
+    # dynamic body to the CURRENT skeleton pose (y≈6), NOT leave it at the
+    # fresh-world rest pose (y≈1, the origin-drop regression).
+    cmds.currentTime(0)
+    cmds.dgeval(f"{node}.outTranslate")
+    rewind = tuple(
+        cmds.xform(joint_child, query=True, worldSpace=True, translation=True)
+    )
+    assert_true(
+        abs(rewind[1] - 6.0) < 0.1,
+        f"rewind rebuild must keep the body at the moved skeleton (got "
+        f"y={rewind[1]:.3f}, expected y≈6)",
+    )
+    print(
+        f"✓ rewind rebuild pinned a later-registered-anchor body: "
+        f"y={settled[1]:.3f} settled, y={moved[1]:.3f} moved, "
+        f"y={rewind[1]:.3f} rewind"
+    )
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -911,5 +1022,9 @@ _TESTS = [
     (
         "Parentless-Body Write-Back Survives Rotated Parent Chain",
         test_parentless_body_write_back_survives_rotated_parent_chain,
+    ),
+    (
+        "Rewind Rebuild Pins Body With Later-Registered Reset Anchor",
+        test_rewind_rebuild_pins_body_with_later_reset_anchor,
     ),
 ]
