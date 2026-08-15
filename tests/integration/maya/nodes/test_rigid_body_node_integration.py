@@ -645,6 +645,105 @@ def test_rewind_rebuild_keeps_character_move():
     return True
 
 
+def test_rewind_rebuild_pins_posed_skeleton():
+    """A POSED (animated) skeleton must pin identically across a rewind
+    rebuild — the rebuild must NOT snap the chains to rest nor bake the pose
+    into the reset offset.
+
+    Regression: with a VMD motion applied, the skeleton was POSED BEFORE the
+    first solver evaluation.  The first build then used the posed anchors as
+    its "rest" reference, so on first play the bodies sat at REST while the
+    skeleton was posed (the 51° mismatch); a rewind rebuild read the anchors
+    fresh, so rewind frame 1 ≠ first-play frame 1 — the persistent rewind
+    jump.  The reset reference must be the joints' REST worlds (model
+    constants), so first build and rewind rebuild pin identically to the
+    posed skeleton, and both are move-invariant.
+    """
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="posedAnchorJoint", p=(0, 0, 0))
+    cmds.addAttr(
+        joint_a, longName="pmxBoneIndex", attributeType="long", defaultValue=-1
+    )
+    cmds.setAttr(f"{joint_a}.pmxBoneIndex", 0)
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
+    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{node}.bodies[0].bodyAnchorWorld")
+
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Pose the skeleton BEFORE the first evaluation — as a VMD motion would
+    # (rotate the anchor 30° about Z + move it up by 5).  The FIRST build must
+    # see this posed skeleton, not an un-posed one.
+    cmds.currentTime(1)
+    cmds.setAttr(f"{joint_a}.rotate", 0.0, 0.0, 30.0)
+    cmds.setAttr(f"{joint_a}.translateY", 5)
+    cmds.dgdirty(joint_a)
+
+    # First play: the welded body hangs 1 unit above the posed anchor, in the
+    # anchor's rotated frame: Rz(30°)·(0,1,0) + (0,5,0) = (-0.5, 5.866, 0).
+    # Under the old (posed-as-rest) reference it would sit at the un-posed
+    # (0, 6, 0) — the 51°-class mismatch.
+    first = _read_output(node, 1)
+    assert_true(
+        abs(first[0] - (-0.5)) < 0.1 and abs(first[1] - 5.866) < 0.1,
+        f"first play pins to the posed skeleton (got ({first[0]:.3f}, "
+        f"{first[1]:.3f}, {first[2]:.3f}), expected ≈(-0.5, 5.866, 0))",
+    )
+
+    # Rewind to frame 0 (scrub-back -> rebuild).  The rebuild must pin to the
+    # SAME posed skeleton — identical to first play, NOT snapping back to rest
+    # (0,1,0) or the un-posed (0,6,0).
+    cmds.currentTime(0)
+    rewind = _read_output(node, 1)
+    assert_true(
+        abs(rewind[0] - first[0]) < 0.05 and abs(rewind[1] - first[1]) < 0.05,
+        f"rewind rebuild pins identically to first play (got "
+        f"({rewind[0]:.3f}, {rewind[1]:.3f}, {rewind[2]:.3f}), first was "
+        f"({first[0]:.3f}, {first[1]:.3f}, {first[2]:.3f}))",
+    )
+
+    # Replay to frame 2: still pinned to the posed skeleton — no jump.
+    cmds.currentTime(2)
+    replay = _read_output(node, 1)
+    assert_true(
+        abs(replay[0] - first[0]) < 0.15 and abs(replay[1] - first[1]) < 0.15,
+        f"replay after rewind stays pinned to the posed skeleton (got "
+        f"({replay[0]:.3f}, {replay[1]:.3f}, {replay[2]:.3f}))",
+    )
+    print(
+        f"✓ rewind rebuild pinned to the posed skeleton: "
+        f"({first[0]:.3f}, {first[1]:.3f}) first, "
+        f"({rewind[0]:.3f}, {rewind[1]:.3f}) rewind, "
+        f"({replay[0]:.3f}, {replay[1]:.3f}) replay"
+    )
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -667,5 +766,9 @@ _TESTS = [
     (
         "Rewind Rebuild Keeps Character Move (no persistent jump)",
         test_rewind_rebuild_keeps_character_move,
+    ),
+    (
+        "Rewind Rebuild Pins Posed (Animated) Skeleton",
+        test_rewind_rebuild_pins_posed_skeleton,
     ),
 ]

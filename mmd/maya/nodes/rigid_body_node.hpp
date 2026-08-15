@@ -177,6 +177,12 @@ class RigidBodyNode : public MPxLocatorNode
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
+        // Per-body RAW anchor-rest matrix (the ORIGINAL import-time joint world
+        // for a bone-attached kinematic body; identity otherwise), body-indexed.
+        // The raw kinematic placement (anchorWorld * anchorRest^-1 * bodyRest)
+        // and its write-back (bodyPose * bodyRest^-1 * anchorRest = joint world)
+        // need it per body.
+        std::vector<MMatrix> anchorRestByBody;
         // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.
         // Used to detect a whole-skeleton rigid drag at a paused frame: when

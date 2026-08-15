@@ -176,6 +176,20 @@ class RigidBodySimulation
     /// zeroing velocities.  Called when time is scrubbed backwards.
     void resetDynamicBodies();
 
+    /// Scrub-back reset with RAW (unconjugated) anchor worlds, in kinematic
+    /// order: `rawRestAnchors` = the import-time anchor worlds, `rawCurrentAnchors`
+    /// = the current anchor worlds.  Each dynamic body is placed at
+    /// rawCurrent * (rawRest^-1 * bodyRest) — its rest pose rigidly attached
+    /// to its reset-anchor bone at the bone's CURRENT world pose.  This is
+    /// exact for BOTH a whole-skeleton move M (rawCurrent = M·rawRest ⇒
+    /// M·bodyRest) and an animation-posed skeleton, whereas the conjugated
+    /// reset (resetDynamicBodies()) yields K^-1·M·K·bodyRest under a move
+    /// (rotated — the persistent rewind jump).  Falls back to the conjugated
+    /// formula when the raw vectors are empty or mis-sized (legacy unit-test
+    /// path).
+    void resetDynamicBodies(const std::vector<Pose>& rawRestAnchors,
+                            const std::vector<Pose>& rawCurrentAnchors);
+
     /// Apply a rigid WORLD-space move to every dynamic body, zeroing
     /// velocities, WITHOUT stepping.  Used when the whole skeleton was moved
     /// as a rigid unit at a paused frame (a character drag): the dynamic
@@ -184,6 +198,14 @@ class RigidBodySimulation
     /// implied teleport velocity (interpolation reset) so the next real step
     /// does not read the jump as a huge velocity.
     void rideDynamicBodiesAlong(const Pose& move);
+
+    /// Ride every dynamic body WITHOUT a scrub-back reset anchor (no
+    /// kinematic ancestor) from its REST pose by a rigid WORLD-space move.
+    /// The raw-anchor reset handles anchored bodies exactly; unanchored
+    /// bodies have no anchor to pin to, so on a whole-skeleton move (e.g. a
+    /// rewind rebuild after the character was dragged) they must be placed at
+    /// move * bodyRest instead of being left at rest.  Zeroes velocities.
+    void rideUnanchoredBodiesFromRest(const Pose& move);
 
     /// Solved world-space pose of `bodyIndex` — body-indexed, matching
     /// Definition::bodies.  Falls back to the body's REST pose when the body
