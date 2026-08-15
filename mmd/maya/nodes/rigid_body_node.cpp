@@ -1047,7 +1047,18 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
                             for (auto lit = locals.rbegin();
                                  lit != locals.rend(); ++lit)
                             {
-                                parentWorld = *lit * parentWorld;
+                                // The locals are stored as btTransforms, i.e.
+                                // TRANSPOSED Maya matrices (column-vector):
+                                // btWorld(child) = btWorld(parent) * btLocal(child),
+                                // so each gap bone must be POST-multiplied
+                                // (parentWorld = parentWorld * local).  The
+                                // pre-multiply (local * parentWorld) computes
+                                // world(parent) * local instead — identical at
+                                // rest (translation-only locals commute) but
+                                // wildly wrong once the chain rotates, which
+                                // launched the parentless bones meters away
+                                // during animation (Endmin shengzi chain).
+                                parentWorld = parentWorld * (*lit);
                             }
                             boneLocal = parentWorld.inverse() * it->second;
                         }

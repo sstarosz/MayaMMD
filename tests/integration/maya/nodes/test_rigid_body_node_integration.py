@@ -744,6 +744,143 @@ def test_rewind_rebuild_pins_posed_skeleton():
     return True
 
 
+def test_parentless_body_write_back_survives_rotated_parent_chain():
+    """A dynamic body whose PARENT bone has no body must land at the correct
+    pose even when the gap bones between it and the solver-known ancestor are
+    ROTATED (a posed / animated skeleton).
+
+    Regression: the write-back fallback reconstructs the parent joint's world
+    by composing the gap bones' LOCAL matrices on the nearest solver-known
+    ancestor.  The locals are stored as btTransforms (TRANSPOSED Maya matrices,
+    column-vector), so each must be POST-multiplied (parentWorld = parentWorld
+    * local).  The old pre-multiply (local * parentWorld) was exact at rest —
+    translation-only locals commute — but once the chain rotates it computes
+    world(parent)*local instead of local*world(parent) and launched the
+    parentless bones meters away during animation (Endmin shengzi_0_skin_jnt).
+    """
+    import maya.api.OpenMaya as om  # noqa: PLC0415
+
+    setup_test_environment()
+    node = _create_node()
+    _connect_time(node)
+
+    # Chain: joint_a (bone 0, kinematic anchor) -> joint_b (bone 1, NO body)
+    # -> joint_c (bone 2, dynamic body 1).  joint_b is the "gap" bone with no
+    # body, so body 1's write-back must reconstruct joint_b's world.
+    cmds.select(clear=True)
+    joint_a = cmds.joint(name="reconAnchorJoint", p=(0, 0, 0))
+    cmds.select(clear=True)
+    joint_b = cmds.joint(name="reconGapJoint", p=(0, 1, 0))
+    cmds.select(clear=True)
+    joint_c = cmds.joint(name="reconDynJoint", p=(0, 1, 0))
+    cmds.parent(joint_b, joint_a)
+    cmds.parent(joint_c, joint_b)
+    for j, bone_idx in ((joint_a, 0), (joint_b, 1), (joint_c, 2)):
+        cmds.addAttr(j, longName="pmxBoneIndex", attributeType="long", defaultValue=-1)
+        cmds.setAttr(f"{j}.pmxBoneIndex", bone_idx)
+    # Local rest offsets: b is 1 above a, c is 1 above b => c rests at (0,2,0)
+    # in a's frame.  Stamped so the node's derived K is exact.
+    _stamp_joint_rest(joint_a, 0.0, 0.0, 0.0)
+    _stamp_joint_rest(joint_b, 0.0, 1.0, 0.0)
+    _stamp_joint_rest(joint_c, 0.0, 1.0, 0.0)
+
+    # Body 0: kinematic anchor (followBone) on bone 0.
+    p0 = _set_body_common(node, 0)
+    cmds.setAttr(f"{p0}.bodyRestTranslate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
+    cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
+
+    # Body 1: dynamic on bone 2 (joint_c) — its parent bone 1 (joint_b) has
+    # NO body, so the write-back fallback reconstructs joint_b's world from
+    # joint_a's solved world + the gap local.  Rest 2 above the anchor.
+    p1 = _set_body_common(node, 1)
+    cmds.setAttr(f"{p1}.bodyRestTranslate", 0.0, 2.0, 0.0, type="double3")
+    cmds.setAttr(f"{p1}.bodyMass", 1.0)
+    cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+    cmds.connectAttr(f"{joint_c}.message", f"{p1}.bodyJoint")
+
+    # Rigid weld between the anchor and the dynamic body.
+    j = f"{node}.joints[0]"
+    cmds.setAttr(f"{j}.jointBodyA", 0)
+    cmds.setAttr(f"{j}.jointBodyB", 1)
+    cmds.setAttr(f"{j}.jointType", 0)
+    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+
+    # Pose the skeleton BEFORE the first evaluation: rotate the anchor 30° Z
+    # and move it up by 5 — the gap bone joint_b rotates WITH the chain.
+    cmds.currentTime(1)
+    cmds.setAttr(f"{joint_a}.rotate", 0.0, 0.0, 30.0)
+    cmds.setAttr(f"{joint_a}.translateY", 5)
+    cmds.dgdirty(joint_a)
+
+    # Build and read the dynamic body's write-back local pose.
+    out_t = _read_output(node, 1)
+    out_r = tuple(cmds.getAttr(f"{node}.outRotate[1]")[0])
+
+    # Expected: the body's solved WORLD pose (2 units above the posed anchor,
+    # rotated 30° Z with the chain) expressed as joint_c's LOCAL pose relative
+    # to joint_b's ACTUAL world.  Reconstruct that world and verify the body
+    # actually landed at the expected world position.
+    #
+    # Expected world = body rest offset rigidly attached to the posed anchor:
+    # Rz(30°)·(0,2,0) + (0,5,0).  Compute via Maya matrices so the convention
+    # is exactly Maya's.
+    def _world_matrix(name: str) -> om.MMatrix:
+        raw = cmds.getAttr(f"{name}.worldMatrix[0]")
+        # getAttr returns a list containing one 16-float list, or the flat
+        # list directly depending on context — normalize to 16 floats.
+        if isinstance(raw, (list, tuple)) and raw and isinstance(raw[0], (list, tuple)):
+            raw = raw[0]
+        return om.MMatrix(raw)
+
+    anchor_world = _world_matrix(joint_a)
+    body_rest = om.MTransformationMatrix()
+    body_rest.setTranslation(om.MVector(0, 2, 0), om.MSpace.kTransform)
+    expected_world = body_rest.asMatrix() * anchor_world  # row-vector
+    expected = om.MTransformationMatrix(expected_world).translation(
+        om.MSpace.kTransform
+    )
+
+    # Reconstruct the body's ACTUAL world from the write-back: the body's
+    # local pose (outT/outR) composed with joint_b's real world.
+    local = om.MTransformationMatrix()
+    local.setTranslation(om.MVector(*out_t), om.MSpace.kTransform)
+    import math  # noqa: PLC0415
+
+    local.setRotation(
+        om.MEulerRotation(
+            math.radians(out_r[0]), math.radians(out_r[1]), math.radians(out_r[2])
+        )
+    )
+    joint_b_world = _world_matrix(joint_b)
+    actual_world = local.asMatrix() * joint_b_world
+    actual = om.MTransformationMatrix(actual_world).translation(om.MSpace.kTransform)
+
+    assert_true(
+        abs(actual.x - expected.x) < 0.2
+        and abs(actual.y - expected.y) < 0.2
+        and abs(actual.z - expected.z) < 0.2,
+        f"parentless body must land at the posed world pose (got "
+        f"({actual.x:.3f}, {actual.y:.3f}, {actual.z:.3f}), expected "
+        f"({expected.x:.3f}, {expected.y:.3f}, {expected.z:.3f}); the "
+        f"pre-multiply bug launched it meters away under chain rotation)",
+    )
+    print(
+        f"✓ parentless-body write-back survived a rotated parent chain: "
+        f"landed at ({actual.x:.3f}, {actual.y:.3f}, {actual.z:.3f}) vs expected "
+        f"({expected.x:.3f}, {expected.y:.3f}, {expected.z:.3f})"
+    )
+    return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
@@ -770,5 +907,9 @@ _TESTS = [
     (
         "Rewind Rebuild Pins Posed (Animated) Skeleton",
         test_rewind_rebuild_pins_posed_skeleton,
+    ),
+    (
+        "Parentless-Body Write-Back Survives Rotated Parent Chain",
+        test_parentless_body_write_back_survives_rotated_parent_chain,
     ),
 ]
