@@ -875,7 +875,9 @@ def apply_vmd_to_scene(
                 frame_scale=frame_scale,
             )
 
-    # Set playback range to match animation
+    # Set playback range to match animation — EXTEND-ONLY.  apply_vmd_to_scene
+    # runs once per model, and a second (shorter) animation must never shrink
+    # the timeline and clip a longer animation that is already applied.
     if vmd_data.bone_keyframes or vmd_data.morph_keyframes:
         max_frame = 0
         if vmd_data.bone_keyframes:
@@ -889,14 +891,46 @@ def apply_vmd_to_scene(
 
         end_frame = start_frame + (max_frame * frame_scale)
         try:
-            cmds.playbackOptions(
-                minTime=start_frame,
-                maxTime=int(end_frame),
-                animationStartTime=start_frame,
-                animationEndTime=int(end_frame),
+            current_min = cmds.playbackOptions(query=True, minTime=True)
+            current_max = cmds.playbackOptions(query=True, maxTime=True)
+            new_min, new_max = _extend_playback_range(
+                current_min, current_max, start_frame, end_frame
             )
-            log.debug("Set playback range: %d - %d", start_frame, int(end_frame))
+            cmds.playbackOptions(
+                minTime=new_min,
+                maxTime=int(new_max),
+                animationStartTime=new_min,
+                animationEndTime=int(new_max),
+            )
+            log.debug(
+                "Extended playback range: %d - %d (was %d - %d)",
+                new_min,
+                int(new_max),
+                int(current_min),
+                int(current_max),
+            )
         except Exception as e:
             log.warning("Failed to set playback range: %s", e)
 
     log.debug("VMD animation applied successfully!")
+
+
+def _extend_playback_range(
+    current_min: float,
+    current_max: float,
+    start_frame: int,
+    end_frame: float,
+) -> tuple[int, float]:
+    """Extend a playback range to also cover ``[start_frame, end_frame]``.
+
+    Pure function (no Maya calls) so the extend-only semantics are unit
+    testable: the returned range is the union of the current range and the
+    requested one — it never shrinks the current range.  ``end_frame`` is the
+    *inclusive* last frame of the newly applied animation.
+
+    Returns ``(new_min, new_max)``.
+    """
+    return (
+        min(int(current_min), start_frame),
+        max(float(current_max), end_frame),
+    )
