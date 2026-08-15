@@ -108,6 +108,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`parentWorld = parentWorld * local`, the transpose of the row-vector
   `world(child) = local(child) * world(parent)`), keeping parentless bones at
   their solved pose through the whole animation.
+- **Bones below an `_InheritCtrl` controller now rest at their true PMX
+  position** — the solver's write-back offset K is derived from each joint's
+  rest WORLD, which the node composes by walking the DAG and reading the
+  captured `pmxRest*` attributes.  The hidden `_InheritCtrl` transforms
+  (plain DAG nodes inserted by the bone builder for INHERIT_ROTATION) carry
+  a real local translate but no `pmxRest*`, so the composition treated them
+  as identity and the offset was skipped — K was wrong for every bone below
+  them and the write-back moved those joints off their PMX rest (Endmin's
+  `shengzi_0/1_skin_jnt` landed ~1.17 units from the model's true rest).  The
+  bone builder now stamps `pmxRest*` on each `_InheritCtrl` controller at
+  creation (its own local translate, identity rotation), so the rest-world
+  composition — and therefore K, the rewind re-pin and the whole-skeleton
+  move detector — is exact for these chains.  The bone suite's "Joint World
+  Positions" / "Rest Pose Attributes" tests now pass 578/578.
+- **Rewinding after a whole-character move no longer drops some chains at
+  the origin** — the scrub-back reset offset (bodyRest relative to the
+  reset-anchor bone) was captured inside the body-creation loop, where
+  `mAnchorRest` was only as large as the kinematic bodies seen so far.  A
+  dynamic body whose anchor bone's kinematic body appears LATER in body order
+  (Endmin's skirt anchors to a bone whose kinematic body follows it) silently
+  failed the `resetAnchorIndex < mAnchorRest.size()` check and got NO reset —
+  on every rewind it sat at the freshly-built world's rest pose (x≈0) while
+  the skeleton was at x≈16, until the next forward step re-dragged it.  The
+  offsets are now captured in a second pass AFTER every kinematic anchor is
+  registered, so every anchored body re-pins to the CURRENT skeleton pose on
+  rewind regardless of body ordering.
 - **`pmxRigidBody` write-back on a shared bone now replaces correctly** —
   when a later dynamic body drives a joint an earlier body already drives, the
   later body takes over the connection ("last wins") instead of silently

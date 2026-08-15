@@ -155,6 +155,49 @@ TEST_CASE("resetDynamicBodies places bodies at the current skeleton pose", "[sim
     REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
 }
 
+TEST_CASE("reset captures an anchor registered later in body order", "[sim]")
+{
+    // A dynamic body whose reset-anchor kinematic body appears LATER in body
+    // order (Endmin's skirt — anchored to a bone whose kinematic body follows
+    // it).  The reset offset must still be captured so a rewind rebuild pins
+    // the body to the CURRENT skeleton pose; previously the in-loop capture
+    // saw an mAnchorRest too small to hold the anchor and silently skipped
+    // the body, which sat at its fresh-world rest pose on every rewind.
+    RigidBodySimulation::Definition def;
+    def.gravity = Double3(0.0, 0.0, 0.0);
+
+    // Body 0: dynamic, anchored to kinematic-order anchor 0 (body 1 below).
+    RigidBodySimulation::BodyDefinition dynamic;
+    dynamic.colliderType = RigidBodySimulation::ColliderType::eSphere;
+    dynamic.radius = 0.5;
+    dynamic.physicsMode = RigidBodySimulation::PhysicsMode::ePhysics;
+    dynamic.restPos = Double3(0.0, 1.0, 0.0);
+    dynamic.resetAnchorIndex = 0; // kinematic order 0 = body index 1
+    def.bodies.push_back(dynamic);
+
+    // Body 1: the kinematic anchor, registered AFTER the dynamic body.
+    RigidBodySimulation::BodyDefinition anchor;
+    anchor.colliderType = RigidBodySimulation::ColliderType::eSphere;
+    anchor.radius = 0.5;
+    anchor.physicsMode = RigidBodySimulation::PhysicsMode::eFollowBone;
+    def.bodies.push_back(anchor);
+
+    RigidBodySimulation sim;
+    REQUIRE(sim.initialize(def));
+
+    // Raw reset with the anchor moved from (0,0,0) to (0,1,0): the dynamic
+    // body must be pinned to anchorCurrent * (anchorRest^-1 * bodyRest)
+    // = (0,1,0) * (0,1,0) = (0,2,0).
+    std::vector<RigidBodySimulation::Pose> rawRest(1);
+    rawRest[0].pos = Double3(0.0, 0.0, 0.0);
+    std::vector<RigidBodySimulation::Pose> rawCurrent(1);
+    rawCurrent[0].pos = Double3(0.0, 1.0, 0.0);
+    sim.resetDynamicBodies(rawRest, rawCurrent);
+
+    RigidBodySimulation::Pose p = sim.bodyPose(0);
+    REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
+}
+
 TEST_CASE("Disabled bodies are skipped and bodyPose returns rest", "[sim]")
 {
     RigidBodySimulation::Definition def = weldDefinition();

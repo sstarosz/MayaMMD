@@ -293,30 +293,6 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
             body->activate();
         }
 
-        // Scrub-back reset: capture the constant offset bodyRest = anchorRest *
-        // offset, where the anchor is the kinematic body whose bone is this
-        // body's nearest kinematic ancestor (mapped by the node's Python).  On
-        // rewind the body is teleported to anchorCurrent * offset — i.e. its
-        // rest pose transformed by the CURRENT skeleton pose, instead of
-        // rebuilding at the PMX rest pose while the skeleton is at another frame.
-        if (!b.def.isKinematic() && b.def.resetAnchorIndex >= 0 &&
-            b.def.resetAnchorIndex < static_cast<int>(mAnchorRest.size()))
-        {
-            const btTransform anchorRest = poseToTransform(
-                mAnchorRest[b.def.resetAnchorIndex].pos, mAnchorRest[b.def.resetAnchorIndex].quat);
-            const btTransform offset = anchorRest.inverse() * start;
-            b.hasBoneReset = true;
-            const btVector3& o = offset.getOrigin();
-            const btQuaternion& q = offset.getRotation();
-            b.resetOffsetPos.x = o.x();
-            b.resetOffsetPos.y = o.y();
-            b.resetOffsetPos.z = o.z();
-            b.resetOffsetQuat.x = q.x();
-            b.resetOffsetQuat.y = q.y();
-            b.resetOffsetQuat.z = q.z();
-            b.resetOffsetQuat.w = q.w();
-        }
-
         // Bullet group bit from the raw PMX group id (legacy scenes without
         // it keep the default group 0); b.def.mask is the collision filter
         // mask passed verbatim to Bullet.  addRigidBody takes shorts; group 15
@@ -327,6 +303,40 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
             static_cast<short>(1 << ((b.def.groupId >= 0 ? b.def.groupId : 0) & 0x0F));
         mWorld->addRigidBody(body.get(), group, static_cast<short>(b.def.mask));
         mRigidBodies[i] = std::move(body);
+    }
+
+    // Scrub-back reset offsets — SECOND pass, AFTER every kinematic anchor is
+    // registered.  A dynamic body's reset anchor is its NEAREST KINEMATIC
+    // ANCESTOR bone, and that kinematic body can appear LATER in body order
+    // (e.g. Endmin's skirt is anchored to a bone whose kinematic body follows
+    // it), so computing the offset inside the body loop sees an mAnchorRest
+    // that is still too small and silently skips the body (no reset — the
+    // body sat at its fresh-world rest pose on every rewind).  On rewind the
+    // body is teleported to anchorCurrent * offset — i.e. its rest pose
+    // transformed by the CURRENT skeleton pose, instead of rebuilding at the
+    // PMX rest pose while the skeleton is at another frame.
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        Body& b = mBodies[i];
+        if (b.def.isKinematic() || !b.def.enabled || b.def.resetAnchorIndex < 0 ||
+            b.def.resetAnchorIndex >= static_cast<int>(mAnchorRest.size()))
+        {
+            continue;
+        }
+        const btTransform anchorRest = poseToTransform(
+            mAnchorRest[b.def.resetAnchorIndex].pos, mAnchorRest[b.def.resetAnchorIndex].quat);
+        const btTransform start = transformFromRest(b.def.restPos, b.def.restRot);
+        const btTransform offset = anchorRest.inverse() * start;
+        b.hasBoneReset = true;
+        const btVector3& o = offset.getOrigin();
+        const btQuaternion& q = offset.getRotation();
+        b.resetOffsetPos.x = o.x();
+        b.resetOffsetPos.y = o.y();
+        b.resetOffsetPos.z = o.z();
+        b.resetOffsetQuat.x = q.x();
+        b.resetOffsetQuat.y = q.y();
+        b.resetOffsetQuat.z = q.z();
+        b.resetOffsetQuat.w = q.w();
     }
 }
 
