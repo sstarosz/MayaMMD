@@ -86,6 +86,25 @@ jobs:
         run: pip install PySide6
         shell: bash
 
+      - name: Install system dependencies (Qt runtime + OpenGL/X11 dev headers)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libxi-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxt-dev \
+            libxmu-dev
+        shell: bash
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:

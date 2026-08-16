@@ -54,11 +54,10 @@
 
 #pragma once
 
+#include <maya/MArgList.h>
 #include <maya/MPxCommand.h>
 #include <maya/MString.h>
-
-class MSyntax;
-class MArgList;
+#include <maya/MSyntax.h>
 
 class RigidBodyConstraintCmd : public MPxCommand
 {

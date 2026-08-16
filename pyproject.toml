@@ -6,7 +6,7 @@ license = {text = "MIT"}
 name = "mayammd" 
 readme = "README.md" 
 requires-python = ">=3.10.11" 
-version = "0.1.0" # Release version is managed by git tags + CMake GitVersion.cmake; update here on release
+version = "0.2.0" # Release version is managed by git tags + CMake GitVersion.cmake; update here on release
 
 [project.optional-dependencies]
 dev = [

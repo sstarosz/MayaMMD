@@ -51,7 +51,7 @@ body:
     attributes:
       label: Plugin version
       description: Run `MayaMMD()` in the Script Editor.
-      placeholder: "v0.1.0"
+      placeholder: "v0.2.0"
 
   - type: input
     id: os
