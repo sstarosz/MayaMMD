@@ -22,7 +22,7 @@ endif()
 
 # ── Resolve project version from git tags ────────────────────────────
 # Git is the single source of truth (replaces hatch-vcs).
-set(MMD_PROJECT_VERSION "0.1.0")  # last-resort fallback
+set(MMD_PROJECT_VERSION "0.2.0")  # last-resort fallback
 include("${CMAKE_SOURCE_DIR}/cmake/GitVersion.cmake")
 get_git_version(MMD_PROJECT_VERSION)
 
@@ -38,7 +38,7 @@ if(NOT MMD_PROJECT_VERSION)
 endif()
 
 if(NOT MMD_PROJECT_VERSION)
-    set(MMD_PROJECT_VERSION "0.1.0")
+    set(MMD_PROJECT_VERSION "0.2.0")
 endif()
 message(STATUS "MayaMMD version: ${MMD_PROJECT_VERSION}")
 

@@ -1,6 +1,6 @@
 {
   "name": "mayammd",
-  "version-string": "0.1.0",
+  "version-string": "0.2.0",
   "description": "An MMD toolkit for Autodesk Maya — PMX/VMD/VPD import, playback, and native Bullet physics",
   "license": "MIT",
   "builtin-baseline": "40f3c709db80acf154ac4b17a1f83c564ebd022e",

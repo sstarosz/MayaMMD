@@ -191,8 +191,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     derived from the scene's time unit via `MTime`) is gone.
   - Scenes saved with the old schema need a re-import.
 
-### Changed
-
 - **`pmxPhysicsNode` bone attachment is now a message inside the `bodies`
   compound** (breaking schema change — re-import required).  The per-body
   wiring inputs `bodyRelatedBoneIndex` and the top-level `boneParentIndices`
@@ -240,6 +238,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **VMD playback range no longer shrinks** — applying a second (shorter)
+  animation no longer truncates the timeline and clips a longer animation
+  that is already applied; the playback range is now extended only.
 - **`pmxRigidBodyNode` first evaluation could pop a posed skeleton to rest** —
   the first `compute()` built the Bullet world at the PMX rest pose and never
   applied the kinematic anchors / dynamic-body reset, so when the node first
