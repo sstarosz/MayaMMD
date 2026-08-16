@@ -29,11 +29,16 @@ from __future__ import annotations
 import os
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.cmds as cmds  # noqa: E402
+from maya import cmds
+
+# ── PMX/VMD/VPD pipeline imports (used by real-model tests) ────────────────
+from mmd.core.pmx_importer import parse_pmx
+from mmd.core.vmd_importer import parse_vmd_file
+from mmd.core.vpd_importer import parse_vpd_file
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from mmd.maya.model_context import ModelContext  # noqa: E402
-from mmd.maya.pmx_model_utils import (  # noqa: E402
+from mmd.maya.model_context import ModelContext
+from mmd.maya.pmx_model_utils import (
     build_bone_map_from_scene,
     build_morph_map_from_scene,
     discover_model_roots_in_scene,
@@ -43,21 +48,16 @@ from mmd.maya.pmx_model_utils import (  # noqa: E402
     find_ik_handles,
     find_model_root_from_selection,
 )
-
-# ── PMX/VMD/VPD pipeline imports (used by real-model tests) ────────────────
-from mmd.core.pmx_importer import parse_pmx  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
-from mmd.core.vmd_importer import parse_vmd_file  # noqa: E402
-from mmd.core.vpd_importer import parse_vpd_file  # noqa: E402
-from mmd.maya.vmd_scene_builder import apply_vmd_to_scene  # noqa: E402
-from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene  # noqa: E402
+from mmd.maya.pmx_scene_builder import build_pmx_scene
+from mmd.maya.vmd_scene_builder import apply_vmd_to_scene
+from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene
 
 # ── Local test infrastructure ───────────────────────────────────────────────
-from tests.integration.test_helpers import (  # noqa: E402
-    assert_true,
+from tests.integration.test_helpers import (
     assert_eq,
-    skip_test,
+    assert_true,
     setup_test_environment,
+    skip_test,
 )
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -187,7 +187,7 @@ def _create_bone_morph_for_model(root: str) -> None:
     joint_parents = cmds.listRelatives(target_joint, parent=True, fullPath=True) or []
     ctrl = cmds.createNode(
         "transform",
-        name=f"MORPH_J_Bip001_Pelvis_MorphCtrl",
+        name="MORPH_J_Bip001_Pelvis_MorphCtrl",
         parent=joint_parents[0] if joint_parents else root,
     )
     # Reparent joint under controller (preserving local transform)
@@ -1060,7 +1060,7 @@ def test_discover_model_roots_in_scene() -> bool:
     )
 
     # 1 model → single root
-    root_a = _create_minimal_model_scene("DiscoveryScene_Root")
+    _root_a = _create_minimal_model_scene("DiscoveryScene_Root")
     roots = discover_model_roots_in_scene()
     assert_eq(
         len(roots),
@@ -1073,7 +1073,7 @@ def test_discover_model_roots_in_scene() -> bool:
     )
 
     # 2 models → two roots
-    root_b = _create_minimal_model_scene("SecondModel_Root")
+    _root_b = _create_minimal_model_scene("SecondModel_Root")
     roots = discover_model_roots_in_scene()
     assert_eq(
         len(roots),

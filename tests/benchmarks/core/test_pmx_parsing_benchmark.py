@@ -30,12 +30,11 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import pytest  # noqa: E402
+import pytest
 
-from assets.assets_utils import get_all_pmx_model_paths  # noqa: E402
-from mmd.core.pmx_importer import parse_pmx  # noqa: E402
-
-from tests.benchmarks.core.benchmark_helpers import (  # noqa: E402
+from assets.assets_utils import get_all_pmx_model_paths
+from mmd.core.pmx_importer import parse_pmx
+from tests.benchmarks.core.benchmark_helpers import (
     BenchmarkReport,
     run_benchmarks,
 )

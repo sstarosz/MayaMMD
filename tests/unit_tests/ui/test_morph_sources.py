@@ -18,7 +18,7 @@ from tests.unit_tests.maya.maya_stub import install_maya_stub
 install_maya_stub(profile="headless")
 
 # We import the module under test, then reference classes via it.
-from mmd.ui import morph_tree_widget as _mod  # noqa: E402
+from mmd.ui import morph_tree_widget as _mod
 
 
 class TestBlendShapeMorphSource(unittest.TestCase):

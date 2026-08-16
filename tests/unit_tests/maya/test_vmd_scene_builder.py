@@ -63,7 +63,7 @@ sys.modules["maya.api.OpenMaya"] = _mock_om
 sys.modules["maya.api.OpenMayaAnim"] = _mock_oma
 sys.modules["maya.cmds"] = _mock_cmds
 
-from mmd.maya.vmd_scene_builder import (  # noqa: E402
+from mmd.maya.vmd_scene_builder import (
     _convert_vmd_quaternion_to_maya_components,
     _ensure_quaternion_continuity,
     _normalize_quaternion_components,

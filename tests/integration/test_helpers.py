@@ -20,13 +20,13 @@ import traceback
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stdout
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Self
 
 # ---------------------------------------------------------------------------
 # Maya imports – safe because every caller initialises standalone first
 # ---------------------------------------------------------------------------
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
+from maya import cmds
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -39,14 +39,14 @@ class TestResult:
     """Outcome of a single test against a single model."""
 
     __slots__ = (
+        "errors",
         "model_name",
-        "test_name",
+        "output",
         "passed",
         "skipped",
-        "output",
-        "warnings",
-        "errors",
         "strict_fail",
+        "test_name",
+        "warnings",
     )
 
     def __init__(
@@ -372,7 +372,7 @@ class WarningCollector(logging.Handler):
 
     # -- context manager ----------------------------------------------------
 
-    def __enter__(self) -> "WarningCollector":
+    def __enter__(self) -> Self:
         self.install()
         return self
 
@@ -509,7 +509,7 @@ def print_suite_report(
         all_warnings.extend(r.errors)
 
     # Print report header
-    header = f" Suite Report" if not suite_name else f" Suite Report: {suite_name}"
+    header = " Suite Report" if not suite_name else f" Suite Report: {suite_name}"
     print(color_text(f"\n{'─' * 60}", "cyan"))
     print(color_text(header, "bold"))
     print(color_text(f"{'─' * 60}", "cyan"))
@@ -849,7 +849,7 @@ def run_test_suite(
 
 def run_standalone_suite(
     suite_name: str,
-    tests: List[TestEntry],
+    tests: list[TestEntry],
     strict: bool = False,
 ) -> bool:
     """Run a list of zero-argument test functions with standardized output.

@@ -17,14 +17,13 @@ Tests cover:
 
 # ── Maya standalone initialised by the test runner ───────────────────────
 
-from maya import cmds  # noqa: E402
+from maya import cmds
 
-from tests.integration.test_helpers import (  # noqa: E402
-    setup_test_environment,
-    assert_true,
+from tests.integration.test_helpers import (
     assert_eq,
+    assert_true,
+    setup_test_environment,
 )
-
 
 _NODE_TYPE = "pmxRigidBodyNode"
 
@@ -758,7 +757,7 @@ def test_parentless_body_write_back_survives_rotated_parent_chain():
     world(parent)*local instead of local*world(parent) and launched the
     parentless bones meters away during animation (Endmin shengzi_0_skin_jnt).
     """
-    import maya.api.OpenMaya as om  # noqa: PLC0415
+    import maya.api.OpenMaya as om
 
     setup_test_environment()
     node = _create_node()
@@ -853,7 +852,7 @@ def test_parentless_body_write_back_survives_rotated_parent_chain():
     # local pose (outT/outR) composed with joint_b's real world.
     local = om.MTransformationMatrix()
     local.setTranslation(om.MVector(*out_t), om.MSpace.kTransform)
-    import math  # noqa: PLC0415
+    import math
 
     local.setRotation(
         om.MEulerRotation(

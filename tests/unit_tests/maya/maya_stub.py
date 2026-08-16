@@ -28,9 +28,7 @@ Usage (at the top of the test module, BEFORE the import under test)::
 
 import sys
 from types import ModuleType
-from typing import Optional
 from unittest.mock import MagicMock
-
 
 # ── Module names registered by install_maya_stub ───────────────────────────
 _STUBBED_NAMES = (
@@ -149,12 +147,10 @@ def _is_real_maya_present() -> bool:
     if maya_mod is None:
         return False
     cmds = getattr(maya_mod, "cmds", None)
-    if cmds is None or isinstance(cmds, MagicMock):
-        return False
-    return True
+    return not (cmds is None or isinstance(cmds, MagicMock))
 
 
-def install_maya_stub(profile: Optional[str] = None) -> bool:
+def install_maya_stub(profile: str | None = None) -> bool:
     """Register stub ``maya`` modules in ``sys.modules``.
 
     Args:

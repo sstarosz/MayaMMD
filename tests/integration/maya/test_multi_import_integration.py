@@ -22,22 +22,21 @@ Running
 from __future__ import annotations
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.cmds as cmds  # noqa: E402
+from maya import cmds
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from mmd.core.data_types import PmxModel  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
-from mmd.maya.pmx_naming_manager import PMXNamingManager  # noqa: E402
-from mmd.maya.scene_audit import SceneSnapshot, diff_after_import  # noqa: E402
+from mmd.core.data_types import PmxModel
+from mmd.maya.pmx_naming_manager import PMXNamingManager
+from mmd.maya.pmx_scene_builder import build_pmx_scene
+from mmd.maya.scene_audit import SceneSnapshot, diff_after_import
 
 # ── Local test infrastructure ───────────────────────────────────────────────
-from tests.integration.test_helpers import (  # noqa: E402
-    assert_true,
+from tests.integration.test_helpers import (
     assert_eq,
-    skip_test,
+    assert_true,
     setup_test_environment,
+    skip_test,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,10 +101,7 @@ def test_same_model_twice_no_name_collision(pmx_data: PmxModel, _unused) -> bool
     setup_test_environment()
 
     # ── First import ──────────────────────────────────────────────────
-    before_1 = SceneSnapshot.take()
     maya_data_1 = build_pmx_scene(pmx_data)
-    after_1 = SceneSnapshot.take()
-    diff_1 = after_1 - before_1
 
     first_root = maya_data_1.root_name
     assert_true(
@@ -206,7 +202,7 @@ def test_two_different_models_no_collision(pmx_a, pmx_b) -> bool:
 
     # ── Import Model A ─────────────────────────────────────────────────
     build_pmx_scene(pmx_a)
-    roots_after_a = _count_pmx_roots()
+    _roots_after_a = _count_pmx_roots()
     joints_after_a = _count_joints()
     mats_after_a = _count_materials()
     meshes_after_a = _count_meshes()
@@ -358,9 +354,9 @@ def test_same_model_three_times_scalability(pmx_data, _unused) -> bool:
 
     assert_true(
         len(errors) == 0,
-        f"3× import increments inconsistent:\n" + "\n".join(errors),
+        "3× import increments inconsistent:\n" + "\n".join(errors),
     )
-    print(f"PASS: 3× imports produce consistent increments for all node types")
+    print("PASS: 3× imports produce consistent increments for all node types")
     return True
 
 
@@ -445,7 +441,7 @@ def test_diff_after_import_convenience(pmx_data, _unused) -> bool:
 
 def test_naming_manager_make_unique(_unused1, _unused2) -> bool:
     """Test PMXNamingManager.make_unique() directly without Maya scene."""
-    from mmd.core.data_types import PmxModel, PmxHeader
+    from mmd.core.data_types import PmxHeader, PmxModel
 
     # Create a proper minimal PmxModel using the dataclass directly,
     # rather than a fragile mock subclass that could diverge from PmxModel.

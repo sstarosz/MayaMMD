@@ -566,8 +566,8 @@ void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies(
         if (useRaw && anchorIdx < static_cast<int>(rawRestAnchors.size()) &&
             anchorIdx < static_cast<int>(rawCurrentAnchors.size()))
         {
-            anchorRest = poseToTransform(rawRestAnchors[anchorIdx].pos,
-                                         rawRestAnchors[anchorIdx].quat);
+            anchorRest =
+                poseToTransform(rawRestAnchors[anchorIdx].pos, rawRestAnchors[anchorIdx].quat);
             anchorCurrent = poseToTransform(rawCurrentAnchors[anchorIdx].pos,
                                             rawCurrentAnchors[anchorIdx].quat);
         }
