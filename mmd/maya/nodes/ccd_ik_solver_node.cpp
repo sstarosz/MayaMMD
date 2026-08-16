@@ -93,11 +93,11 @@ MStatus CCDIKSolverNode::doSolve()
     MFnDependencyNode fnDep(thisObj);
 
     MPlug maxItersPlug = fnDep.findPlug("maxIterations", true);
-    int maxIters = maxItersPlug.asInt();
+    int const maxIters = maxItersPlug.asInt();
 
     MPlug limitPlug = fnDep.findPlug(aLimitRadian, true);
-    double limitRadian = limitPlug.asDouble();
-    double maxAngleRad = (limitRadian > 0.0) ? limitRadian : M_PI / 2.0;
+    double const limitRadian = limitPlug.asDouble();
+    double const maxAngleRad = (limitRadian > 0.0) ? limitRadian : M_PI / 2.0;
 
     // ── Get handle group ─────────────────────────────────────────────
     MIkHandleGroup* handleGroup = this->handleGroup();
@@ -147,7 +147,7 @@ MStatus CCDIKSolverNode::doSolve()
     std::unordered_map<std::string, int> boneIdxCache;
     for (auto& jp : jointPaths)
     {
-        int bi = mmd::maya::jointPmxBoneIndex(jp);
+        int const bi = mmd::maya::jointPmxBoneIndex(jp);
         boneIdxCache[jp.partialPathName().asChar()] = bi;
     }
 
@@ -169,7 +169,7 @@ MStatus CCDIKSolverNode::doSolve()
             bi = itBI->second;
         auto limitsIt = limitsMap.find(bi);
         const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
-        int limitAxis = getSingleAxisIndex(limits);
+        int const limitAxis = getSingleAxisIndex(limits);
         if (limitAxis >= 0)
         {
             MFnIkJoint jfn(jp);
@@ -186,7 +186,7 @@ MStatus CCDIKSolverNode::doSolve()
     {
         MPoint effectorPos = effectorFn.rotatePivot(MSpace::kWorld);
         MVector toTarget = handlePos - effectorPos;
-        double currDist = toTarget.length();
+        double const currDist = toTarget.length();
         if (currDist < tolerance)
             break;
 
@@ -198,15 +198,15 @@ MStatus CCDIKSolverNode::doSolve()
             MVector toEff = effectorPos - jpos;
             MVector toTgt = handlePos - jpos;
 
-            double lenEff = toEff.length();
-            double lenTgt = toTgt.length();
+            double const lenEff = toEff.length();
+            double const lenTgt = toTgt.length();
             if (lenEff < eps || lenTgt < eps)
                 continue;
 
             MVector dEff = toEff / lenEff;
             MVector dTgt = toTgt / lenTgt;
 
-            double dotEffTgt = dEff * dTgt;
+            double const dotEffTgt = dEff * dTgt;
             if (dotEffTgt > 1.0 - eps)
                 continue;
 
@@ -218,7 +218,7 @@ MStatus CCDIKSolverNode::doSolve()
 
             auto limitsIt = limitsMap.find(bi);
             const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
-            int limitAxis = getSingleAxisIndex(limits);
+            int const limitAxis = getSingleAxisIndex(limits);
 
             if (limitAxis >= 0)
             {
@@ -257,11 +257,11 @@ MStatus CCDIKSolverNode::doSolve()
                 // Straight-leg stability bias
                 if (angle < M_PI / 180.0 && limits != nullptr)
                 {
-                    double loMmd = limits->lo[limitAxis];
-                    double hiMmd = limits->hi[limitAxis];
-                    double loMaya = -hiMmd;
-                    double hiMaya = -loMmd;
-                    double half = (loMaya + hiMaya) * 0.5;
+                    double const loMmd = limits->lo[limitAxis];
+                    double const hiMmd = limits->hi[limitAxis];
+                    double const loMaya = -hiMmd;
+                    double const hiMaya = -loMmd;
+                    double const half = (loMaya + hiMaya) * 0.5;
                     if (fabs(half - signedAngle) > fabs(half + signedAngle))
                         signedAngle = -signedAngle;
                 }
@@ -274,18 +274,18 @@ MStatus CCDIKSolverNode::doSolve()
                 // the effector at the target's radius from the chain root so
                 // the chain can start folding; normal CCD takes over once the
                 // geometry opens up (angle grows past the threshold).
-                std::string jpName = jointPath.partialPathName().asChar();
-                double prevAngle = planeAngleState[jpName];
+                std::string const jpName = jointPath.partialPathName().asChar();
+                double const prevAngle = planeAngleState[jpName];
 
                 if (angle < kFoldBoostThreshold && limits != nullptr)
                 {
                     MVector distErrVec = effectorPos - handlePos;
                     if (distErrVec.length() > kFoldMinDistErr)
                     {
-                        double loMmd = limits->lo[limitAxis];
-                        double hiMmd = limits->hi[limitAxis];
-                        double loMaya = -hiMmd;
-                        double hiMaya = -loMmd;
+                        double const loMmd = limits->lo[limitAxis];
+                        double const hiMmd = limits->hi[limitAxis];
+                        double const loMaya = -hiMmd;
+                        double const hiMaya = -loMmd;
                         double tReq = computeFoldAngle(startJointPos, jpos, effectorPos, handlePos);
                         tReq = std::max(loMaya, std::min(hiMaya, tReq));
                         signedAngle = (tReq - prevAngle) * kFoldBoostFraction;
@@ -298,10 +298,10 @@ MStatus CCDIKSolverNode::doSolve()
                 // Resolve sign ambiguity on first iteration
                 if (it == 0 && prevAngle == 0.0 && limits != nullptr)
                 {
-                    double loMmd = limits->lo[limitAxis];
-                    double hiMmd = limits->hi[limitAxis];
-                    double loMaya = -hiMmd;
-                    double hiMaya = -loMmd;
+                    double const loMmd = limits->lo[limitAxis];
+                    double const hiMmd = limits->hi[limitAxis];
+                    double const loMaya = -hiMmd;
+                    double const hiMaya = -loMmd;
                     if (newAngle < loMaya || newAngle > hiMaya)
                     {
                         if (-newAngle > loMaya && -newAngle < hiMaya)
@@ -310,7 +310,7 @@ MStatus CCDIKSolverNode::doSolve()
                         }
                         else
                         {
-                            double half = (loMaya + hiMaya) * 0.5;
+                            double const half = (loMaya + hiMaya) * 0.5;
                             if (fabs(half - newAngle) > fabs(half + newAngle))
                                 newAngle = -newAngle;
                         }
@@ -320,14 +320,14 @@ MStatus CCDIKSolverNode::doSolve()
                 // Clamp to limits
                 if (limits != nullptr)
                 {
-                    double loMmd = limits->lo[limitAxis];
-                    double hiMmd = limits->hi[limitAxis];
-                    double loMaya = -hiMmd;
-                    double hiMaya = -loMmd;
+                    double const loMmd = limits->lo[limitAxis];
+                    double const hiMmd = limits->hi[limitAxis];
+                    double const loMaya = -hiMmd;
+                    double const hiMaya = -loMmd;
                     newAngle = std::max(loMaya, std::min(hiMaya, newAngle));
                 }
 
-                double deltaAngle = newAngle - prevAngle;
+                double const deltaAngle = newAngle - prevAngle;
                 planeAngleState[jpName] = newAngle;
 
                 if (fabs(deltaAngle) < 1.0e-8)
@@ -341,7 +341,7 @@ MStatus CCDIKSolverNode::doSolve()
             {
                 // Standard world-space CCD (no constraint)
                 MVector axis = dEff ^ dTgt;
-                double axisLen = axis.length();
+                double const axisLen = axis.length();
                 if (axisLen < eps)
                 {
                     // Antiparallel case
@@ -355,8 +355,8 @@ MStatus CCDIKSolverNode::doSolve()
                 {
                     axis.normalize();
                 }
-                double angle = dEff.angle(dTgt);
-                double clampedAngle = std::min(angle, maxAngleRad);
+                double const angle = dEff.angle(dTgt);
+                double const clampedAngle = std::min(angle, maxAngleRad);
                 MQuaternion quat(clampedAngle, axis);
                 jfn.rotateBy(quat, MSpace::kWorld);
             }
@@ -367,7 +367,7 @@ MStatus CCDIKSolverNode::doSolve()
 
         // ── Best-distance tracking ───────────────────────────────────
         MVector postDistVec = effectorPos - handlePos;
-        double postDist = postDistVec.length();
+        double const postDist = postDistVec.length();
         if (postDist < bestDistance - 1.0e-10)
         {
             bestDistance = postDist;
@@ -401,8 +401,8 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
             try
             {
                 MPlug elem = limitsPlug.elementByPhysicalIndex(i);
-                int boneIdx = elem.child(0).asInt();
-                bool enabled = elem.child(1).asBool();
+                int const boneIdx = elem.child(0).asInt();
+                bool const enabled = elem.child(1).asBool();
                 if (!enabled)
                     continue;
 
@@ -451,7 +451,7 @@ int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
 
     if (nzCount == 1)
     {
-        int ax = singleAxis;
+        int const ax = singleAxis;
         // Verify other axes are zero
         for (int j = 0; j < 3; ++j)
         {
@@ -519,12 +519,12 @@ double CCDIKSolverNode::computeFoldAngle(const MPoint& root, const MPoint& joint
     const double eps = 1.0e-10;
     MVector vJoint = joint - root;
     MVector vShin = effector - joint;
-    double lf = vJoint.length();
-    double ls = vShin.length();
+    double const lf = vJoint.length();
+    double const ls = vShin.length();
     if (lf < eps || ls < eps)
         return 0.0;
     MVector vTarget = target - root;
-    double dt = vTarget.length();
+    double const dt = vTarget.length();
     double c = ((dt * dt) - (lf * lf) - (ls * ls)) / (2.0 * lf * ls);
     c = std::max(-1.0, std::min(1.0, c));
     return acos(c);

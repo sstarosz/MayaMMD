@@ -16,6 +16,16 @@
 #                                          value types — public members are the point.
 #   - readability-identifier-length:         x/y/z/w/i are idiomatic for math + indexing.
 #
+# Re-enabled checks whose findings were fixed in the code (2026-08):
+#   - cppcoreguidelines-avoid-c-arrays:     raw C arrays replaced with
+#                                          std::array / Double3.
+#   - cppcoreguidelines-avoid-do-while:      no do-while loops remain.
+#   - cppcoreguidelines-pro-bounds-pointer-arithmetic: Maya-SDK boundary reads
+#                                          now use std::copy_n / std::string_view.
+#   - misc-const-correctness:               const added throughout the nodes.
+#   - misc-use-anonymous-namespace / misc-use-internal-linkage: file-local
+#                                          helpers moved into anonymous namespaces.
+#
 # The remaining relaxations serve the Catch2 unit tests
 # (tests/unit_tests/core), which are full of frame-count loops, epsilon
 # margins and brace-less one-liners that would otherwise be flagged as
@@ -39,14 +49,8 @@ Checks: >-
   -cppcoreguidelines-owning-memory,
   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
   -bugprone-throwing-static-initialization,
-  -cppcoreguidelines-avoid-c-arrays,
-  -cppcoreguidelines-avoid-do-while,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-avoid-non-const-global-variables,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-  -misc-const-correctness,
-  -misc-use-anonymous-namespace,
-  -misc-use-internal-linkage,
   -readability-braces-around-statements,
   -readability-function-cognitive-complexity,
   -readability-magic-numbers

@@ -19,6 +19,9 @@
 
 #include "maya_utils.hpp"
 
+#include <algorithm>
+#include <array>
+
 #include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
@@ -120,22 +123,20 @@ MObject RigidBodyNode::aOutRotateY;
 MObject RigidBodyNode::aOutRotateZ;
 
 // ===========================================================================
-// Per-evaluation inputs (transient — not part of the node's state)
+// File-local helpers (pure attribute/plugin reading — no node state)
 // ===========================================================================
-// The PMX-verbatim inputs for one evaluation; World (RigidBodyNode::World,
-// see the header) is the built state derived from them.
+namespace
+{
+
+// Per-evaluation inputs (transient — not part of the node's state).  The
+// PMX-verbatim inputs for one evaluation; World (RigidBodyNode::World, see the
+// header) is the built state derived from them.
 struct Inputs
 {
     std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies;
     std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
     mmd::core::Double3 gravity;
 };
-
-// ===========================================================================
-// File-local helpers (pure attribute/plugin reading — no node state)
-// ===========================================================================
-namespace
-{
 
 // Maya matrices are ROW-vector (p' = p * M): row r holds the image of the r-th
 // basis vector and m(3, 0..2) is the translation.  Bullet uses COLUMN-vector
@@ -159,9 +160,10 @@ namespace
 // inside the Maya SDK header — hence the NOLINT on that single line.
 [[nodiscard]] Double3 readDouble3(const MDataHandle& hd)
 {
+    Double3 out;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = hd.asDouble3();
-    return Double3(v[0], v[1], v[2]);
+    std::copy_n(hd.asDouble3(), 3, out.data());
+    return out;
 }
 
 // The joint's rest LOCAL matrix, reconstructed from the bone builder's
@@ -190,8 +192,8 @@ namespace
     tm.setTranslation(MVector(tx, ty, tz), MSpace::kTransform);
     tm.setRotationOrientation(MEulerRotation(ox, oy, oz).asQuaternion());
     // Rotation order kXYZ matches the joints' default rotateOrder (0).
-    const double rot[3] = {rx, ry, rz};
-    tm.setRotation(&rot[0], MTransformationMatrix::kXYZ);
+    const std::array<double, 3> rot = {rx, ry, rz};
+    tm.setRotation(rot.data(), MTransformationMatrix::kXYZ);
     return tm.asMatrix();
 }
 
