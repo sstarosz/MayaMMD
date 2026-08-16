@@ -1,7 +1,6 @@
 import os
 import re
 from collections import defaultdict
-from typing import Optional
 
 from mmd.core.data_types import PmxModel
 
@@ -139,7 +138,7 @@ class PMXNamingManager:
         Gracefully handles cases where Maya is not available (unit tests).
         """
         try:
-            import maya.cmds as cmds
+            from maya import cmds
 
             return cmds.objExists(name)
         except ImportError:
@@ -253,7 +252,6 @@ class PMXNamingManager:
     def _preprocess_model_names(self):
         """Pre-process model-level names."""
         # These will be registered when requested
-        pass
 
     def _preprocess_material_names(self):
         """Pre-process all material names to handle duplicates and special characters."""

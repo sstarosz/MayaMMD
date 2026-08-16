@@ -26,12 +26,12 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # ── Maya standalone MUST be initialised BEFORE any maya.* imports ───────────
-import maya.standalone  # noqa: E402
+import maya.standalone
 
 maya.standalone.initialize()
 
 # ── Project / benchmark imports ─────────────────────────────────────────────
-from tests.integration.test_helpers import load_plugin  # noqa: E402
+from tests.integration.test_helpers import load_plugin
 
 _SUITE_CHOICES = ["pmx-load", "vmd-load", "vpd-load"]
 
@@ -57,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> int:
     # Import mel after standalone initialisation
-    import maya.mel as mel  # noqa: E402
+    from maya import mel
 
     args = parse_args()
 
@@ -71,7 +71,7 @@ def main() -> int:
 
     # ── Route to the correct benchmark suite ─────────────────────────────
     if args.suite == "pmx-load":
-        from tests.benchmarks.maya.pmx_loading_benchmark import (  # noqa: E402
+        from tests.benchmarks.maya.pmx_loading_benchmark import (
             run_pmx_loading_benchmarks,
         )
 
@@ -79,7 +79,7 @@ def main() -> int:
             model_filter=args.model,
         )
     elif args.suite == "vmd-load":
-        from tests.benchmarks.maya.vmd_loading_benchmark import (  # noqa: E402
+        from tests.benchmarks.maya.vmd_loading_benchmark import (
             run_vmd_loading_benchmarks,
         )
 
@@ -87,7 +87,7 @@ def main() -> int:
             model_filter=args.model,
         )
     elif args.suite == "vpd-load":
-        from tests.benchmarks.maya.vpd_loading_benchmark import (  # noqa: E402
+        from tests.benchmarks.maya.vpd_loading_benchmark import (
             run_vpd_loading_benchmarks,
         )
 

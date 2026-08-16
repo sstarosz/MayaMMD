@@ -19,6 +19,9 @@
 
 #include "maya_utils.hpp"
 
+#include <algorithm>
+#include <array>
+
 #include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
 #include <maya/MArrayDataHandle.h>
@@ -120,22 +123,20 @@ MObject RigidBodyNode::aOutRotateY;
 MObject RigidBodyNode::aOutRotateZ;
 
 // ===========================================================================
-// Per-evaluation inputs (transient — not part of the node's state)
+// File-local helpers (pure attribute/plugin reading — no node state)
 // ===========================================================================
-// The PMX-verbatim inputs for one evaluation; World (RigidBodyNode::World,
-// see the header) is the built state derived from them.
+namespace
+{
+
+// Per-evaluation inputs (transient — not part of the node's state).  The
+// PMX-verbatim inputs for one evaluation; World (RigidBodyNode::World, see the
+// header) is the built state derived from them.
 struct Inputs
 {
     std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies;
     std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
     mmd::core::Double3 gravity;
 };
-
-// ===========================================================================
-// File-local helpers (pure attribute/plugin reading — no node state)
-// ===========================================================================
-namespace
-{
 
 // Maya matrices are ROW-vector (p' = p * M): row r holds the image of the r-th
 // basis vector and m(3, 0..2) is the translation.  Bullet uses COLUMN-vector
@@ -159,9 +160,10 @@ namespace
 // inside the Maya SDK header — hence the NOLINT on that single line.
 [[nodiscard]] Double3 readDouble3(const MDataHandle& hd)
 {
+    Double3 out;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = hd.asDouble3();
-    return Double3(v[0], v[1], v[2]);
+    std::copy_n(hd.asDouble3(), 3, out.data());
+    return out;
 }
 
 // The joint's rest LOCAL matrix, reconstructed from the bone builder's
@@ -190,8 +192,8 @@ namespace
     tm.setTranslation(MVector(tx, ty, tz), MSpace::kTransform);
     tm.setRotationOrientation(MEulerRotation(ox, oy, oz).asQuaternion());
     // Rotation order kXYZ matches the joints' default rotateOrder (0).
-    const double rot[3] = {rx, ry, rz};
-    tm.setRotation(&rot[0], MTransformationMatrix::kXYZ);
+    const std::array<double, 3> rot = {rx, ry, rz};
+    tm.setRotation(rot.data(), MTransformationMatrix::kXYZ);
     return tm.asMatrix();
 }
 
@@ -665,7 +667,13 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     if (in.bodies.empty())
         return std::nullopt;
 
-    std::optional<World> result(std::in_place);
+    // Note: use default-construct + emplace() rather than
+    // std::optional<World>(std::in_place): clang-cl's MSVC-STL handling of
+    // _SMF_control misreports World as not default-constructible when the
+    // enclosing node also owns a std::optional<World> member, so the
+    // in_place ctor is SFINAE'd out under clang-tidy.  MSVC accepts both.
+    std::optional<World> result;
+    result.emplace();
     World& world = *result;
     world.bodies = in.bodies;
     world.joints = in.joints;
@@ -697,7 +705,6 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     originalAnchors.reserve(curAnchors.size());
     {
         std::map<int, MMatrix> restWorldCache;
-        size_t i = 0;
         for (size_t body = 0; body < world.bodies.size(); ++body)
         {
             const RigidBodySimulation::BodyDefinition& b = world.bodies[body];
@@ -712,7 +719,6 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
                 // Boneless pin: the anchor is the body's own rest world.
                 originalAnchors.push_back(mmd::maya::matrixFromTR(b.restPos, b.restRot));
             }
-            ++i;
         }
     }
     world.originalAnchorWorld = originalAnchors;
@@ -821,7 +827,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     {
         return world; // nothing moved — the anchor history is still current
     }
-    world.lastAnchorWorld = std::move(curAnchors);
+    world.lastAnchorWorld = curAnchors;
     world.lastTime = now.value();
     world.lastTimeUnit = now.unit();
     return world;
@@ -872,7 +878,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // An empty world (no bodies) writes empty arrays.
 MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
 {
-    const unsigned int bodyCount = world ? static_cast<unsigned int>(world->bodies.size()) : 0u;
+    const unsigned int bodyCount = world ? static_cast<unsigned int>(world->bodies.size()) : 0U;
     MArrayDataBuilder tBuilder(&dataBlock, RigidBodyNode::aOutTranslate, bodyCount);
     MArrayDataBuilder rBuilder(&dataBlock, RigidBodyNode::aOutRotate, bodyCount);
 

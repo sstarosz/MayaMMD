@@ -612,7 +612,7 @@ def test_rest_pose_conversion():
 
 def test_kinematic_anchor_ordering():
     """Kinematic anchors are indexed in FOLLOW_BONE body order (not PMX order)."""
-    group, solver, joint_a, joint_b = _make_physics_scene()
+    _group, solver, joint_a, joint_b = _make_physics_scene()
 
     # B0: dynamic, B1: follow-bone, B2: dynamic, B3: follow-bone.
     cmds.pmxRigidBody(solver, name="Dyn0", bone=joint_a, physicsMode="physics")

@@ -14,8 +14,8 @@ import dataclasses
 import json
 import os
 import time
-from datetime import datetime
-from typing import Callable, Optional
+from collections.abc import Callable
+from datetime import datetime, timezone
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Data types
@@ -70,7 +70,7 @@ class Timer:
     """Simple wall-clock stopwatch."""
 
     def __init__(self) -> None:
-        self._start: Optional[float] = None
+        self._start: float | None = None
         self.elapsed: float = 0.0
 
     def start(self) -> None:
@@ -231,7 +231,7 @@ def save_benchmark_report(
     os.makedirs(output_dir, exist_ok=True)
 
     # Build a filename-friendly timestamp
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
     safe_name = report.suite_name.lower().replace(" ", "_").replace(":", "")
     filename = f"benchmark_{safe_name}_{ts}.json"
     filepath = os.path.join(output_dir, filename)
@@ -318,7 +318,7 @@ def run_benchmarks(
 
     report = BenchmarkReport(
         suite_name=suite_name,
-        timestamp=datetime.now().isoformat(timespec="seconds"),
+        timestamp=datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
         results=results,
     )
 

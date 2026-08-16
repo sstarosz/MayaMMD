@@ -4,7 +4,7 @@ import logging
 import os
 import re
 
-from mmd.core.data_types import VPDFile, VPDBonePose, Vec3, Vec4
+from mmd.core.data_types import Vec3, Vec4, VPDBonePose, VPDFile
 
 log = logging.getLogger(__name__)
 
@@ -81,8 +81,7 @@ def _parse_header(data: str) -> dict[str, str | int]:
     try:
         # Remove ';' at the end of bone count if present
         line = lines[2].strip()
-        if line.endswith(";"):
-            line = line[:-1]
+        line = line.removesuffix(";")
         header_info["bone_count"] = int(line)
     except ValueError:
         raise VPDHeaderParseError("Bone count in VPD header is not a valid integer.")

@@ -16,20 +16,15 @@ Tests cover:
 import math
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-
 # Maya imports (safe after standalone.initialize())
-from maya import cmds  # noqa: E402
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.api.OpenMayaAnim as oma  # noqa: E402
+from maya import cmds
 
 # Test framework imports
-from tests.integration.test_helpers import (  # noqa: E402
-    setup_test_environment,
-    assert_true,
-    assert_eq,
-    skip_test,
+from tests.integration.test_helpers import (
     approx_equal,
-    approx_equal_tuple,
+    assert_eq,
+    assert_true,
+    setup_test_environment,
 )
 
 
@@ -180,7 +175,7 @@ def test_ik_handle_creation_with_ccd_solver():
     setup_test_environment()
 
     # Build a simple 2-joint chain
-    root, mid, effector = _build_two_joint_chain("test_ik")
+    root, _mid, effector = _build_two_joint_chain("test_ik")
 
     # Create the solver node first
     solver = cmds.createNode("ccdIKSolverNode", name="test_ik_ccdSolver")
@@ -188,7 +183,7 @@ def test_ik_handle_creation_with_ccd_solver():
     cmds.setAttr(f"{solver}.limitRadian", math.radians(90.0))
 
     # Create IK handle with the CCD solver
-    ik_handle, effector_result = cmds.ikHandle(
+    ik_handle, _ = cmds.ikHandle(
         startJoint=root,
         endEffector=effector,
         solver=solver,
@@ -304,7 +299,7 @@ def test_ik_handle_priority_attribute():
     """Test that IK handle priority can be set."""
     setup_test_environment()
 
-    root, mid, effector = _build_two_joint_chain("priority")
+    root, _mid, effector = _build_two_joint_chain("priority")
 
     solver = cmds.createNode("ccdIKSolverNode", name="priority_ccdSolver")
     cmds.setAttr(f"{solver}.maxIterations", 50)

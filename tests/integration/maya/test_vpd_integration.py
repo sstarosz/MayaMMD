@@ -8,28 +8,28 @@ IK handle translations, and special bone flags (FIXED_AXIS, LOCAL_COORDINATE).
 from __future__ import annotations
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
+import maya.api.OpenMaya as om
+from maya import cmds
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from mmd.core.data_types import (  # noqa: E402
+from mmd.core.data_types import (
     PMXBoneFlagBits,
     PmxModel,
     VPDFile,
 )
-from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
-from mmd.maya.vpd_scene_builder import (  # noqa: E402
-    apply_vpd_pose_to_scene,
+from mmd.maya.maya_data_types import MayaPmxData
+from mmd.maya.pmx_scene_builder import build_pmx_scene
+from mmd.maya.vpd_scene_builder import (
     _rotation_degrees_from_vpd_quaternion,
+    apply_vpd_pose_to_scene,
 )
-from tests.integration.test_helpers import (  # noqa: E402
+from tests.integration.test_helpers import (
     assert_true,
+    euler_degrees_to_quat,
     matrix,
+    quat_dot,
     skip_test,
     suppressed_undo,
-    euler_degrees_to_quat,
-    quat_dot,
 )
 
 # ── Helpers

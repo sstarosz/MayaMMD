@@ -44,6 +44,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
@@ -94,18 +95,12 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
         return out;
 
     // Numeric string ⇒ PMX bone index: scan the model root's joints.
-    const char* boneStr =
-        bone.asChar(); // NOLINT(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const unsigned int boneLen = static_cast<unsigned int>(std::strlen(boneStr));
-    bool numeric = true;
-    for (unsigned int i = 0; i < boneLen; ++i)
-    {
-        if (boneStr[i] < '0' || boneStr[i] > '9')
-        {
-            numeric = false;
-            break;
-        }
-    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    const char* boneStr = bone.asChar();
+    const std::string_view boneView(boneStr);
+    const bool numeric =
+        std::all_of(boneView.begin(), boneView.end(),
+                    [](char c) { return c >= '0' && c <= '9'; });
     if (numeric)
     {
         // The string was verified to contain only digits above, so the

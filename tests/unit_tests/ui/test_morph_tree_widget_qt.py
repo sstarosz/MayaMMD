@@ -31,19 +31,17 @@ from PySide6.QtWidgets import (
 )
 
 # Import the module under test
-from mmd.ui import morph_tree_widget as _mod  # noqa: E402
-from mmd.ui.morph_tree_widget import (  # noqa: E402
-    KeyframeState,
-    MorphTreeWidget,
-    MayaStyleTreeDelegate,
-    _CircleIndicator,
+from mmd.ui import morph_tree_widget as _mod
+from mmd.ui.morph_tree_widget import (
     _C,
-    _MorphRow,
-    _create_round_toggle,
+    KeyframeState,
+    MayaStyleTreeDelegate,
+    MorphTreeWidget,
+    _CircleIndicator,
     _create_keyframe_dot,
-    _wrap_centered,
+    _create_round_toggle,
+    _MorphRow,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Global QApplication (shared across all test classes in this module)
@@ -276,7 +274,6 @@ class TestMayaStyleTreeDelegate(unittest.TestCase):
         click_pos = QPoint(12, 20)
 
         # Create a mouse release event
-        event = QtCore.QEvent(QtCore.QEvent.Type.MouseButtonRelease)
         # We need to patch the event to have a pos() method
         # Instead, use a QMouseEvent
         from PySide6.QtGui import QMouseEvent
@@ -601,8 +598,8 @@ class TestOnWeightChangedLogic(unittest.TestCase):
         mock_cmds.objExists.return_value = True
         mock_cmds.getAttr.return_value = 0.0
 
-        container, slider, spinbox = MorphTreeWidget._create_weight_widget()
-        row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
+        _, slider, spinbox = MorphTreeWidget._create_weight_widget()
+        _row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
         mock_cmds.setAttr.reset_mock()
         slider.setValue(800)
         mock_cmds.setAttr.assert_called_with("node.attr", 0.8)
@@ -613,8 +610,8 @@ class TestOnWeightChangedLogic(unittest.TestCase):
         mock_cmds.objExists.return_value = True
         mock_cmds.getAttr.return_value = 0.0
 
-        container, slider, spinbox = MorphTreeWidget._create_weight_widget()
-        row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
+        _, slider, spinbox = MorphTreeWidget._create_weight_widget()
+        _row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
         mock_cmds.setAttr.reset_mock()
         spinbox.setValue(0.42)
         mock_cmds.setAttr.assert_called_with("node.attr", 0.42)
@@ -630,7 +627,7 @@ class TestOnWeightChangedLogic(unittest.TestCase):
         mock_cmds.currentTime.return_value = 7.0
         mock_cmds.keyframe.return_value = [1.0, 10.0]
 
-        container, slider, spinbox = MorphTreeWidget._create_weight_widget()
+        _, slider, spinbox = MorphTreeWidget._create_weight_widget()
         row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
         row.set_keyframe_style(KeyframeState.BETWEEN)
         self.assertIn(_C["red_between"].name(), spinbox.styleSheet())
@@ -654,7 +651,7 @@ class TestOnWeightChangedLogic(unittest.TestCase):
         mock_cmds.currentTime.return_value = 5.0
         mock_cmds.keyframe.return_value = [1.0, 5.0, 10.0]
 
-        container, slider, spinbox = MorphTreeWidget._create_weight_widget()
+        _, slider, spinbox = MorphTreeWidget._create_weight_widget()
         row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
         row.set_keyframe_style(KeyframeState.AT_CURRENT)
         self.assertIn(_C["red_accent"].name(), spinbox.styleSheet())
@@ -674,7 +671,7 @@ class TestOnWeightChangedLogic(unittest.TestCase):
         mock_cmds.getAttr.return_value = 0.0
         mock_cmds.listConnections.return_value = None
 
-        container, slider, spinbox = MorphTreeWidget._create_weight_widget()
+        _, slider, spinbox = MorphTreeWidget._create_weight_widget()
         row = _MorphRow("node.attr", slider, spinbox, None, _CircleIndicator())
         row.set_keyframe_style(KeyframeState.BETWEEN)
         self.assertIn(_C["red_between"].name(), spinbox.styleSheet())

@@ -24,12 +24,11 @@ set weights — DG propagation handles the rest.
 
 import logging
 import re
-import sys
+
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
+from maya import cmds
 
 from mmd.maya.pmx_naming_manager import (
-    INHERIT_ROTATION_CONTROLLER_SUFFIX,
     MORPH_CONTROLLER_SUFFIX,
 )
 
@@ -38,7 +37,6 @@ log = logging.getLogger(__name__)
 
 def maya_useNewAPI():
     """Tell Maya to use the Python API 2.0."""
-    pass
 
 
 # ----------------------------------------------------------------------
@@ -187,9 +185,7 @@ class BoneBlendShapeCmd(om.MPxCommand):
     # MPxCommand overrides
     def isUndoable(self):
         # Undo only for operations that modify the node (add/remove)
-        if self._isQuery:
-            return False
-        return True
+        return not self._isQuery
 
     def doIt(self, args):
         """Execute the command."""
@@ -374,7 +370,7 @@ class BoneBlendShapeCmd(om.MPxCommand):
         """
         created_controllers: dict[str, str] = {}
 
-        for joint_name in affected_joints.keys():
+        for joint_name in affected_joints:
             # Validate joint exists
             if not cmds.objExists(joint_name):
                 log.warning("Affected joint '%s' does not exist, skipping", joint_name)
@@ -741,10 +737,3 @@ class BoneBlendShapeCmd(om.MPxCommand):
             len(helper_joints_created),
         )
         self._modifier = None
-
-
-# Note: This command is registered via the main MayaMMD plugin (mmd/plugin.py).
-# It should NOT be loaded as a standalone Maya plugin.
-def maya_useNewAPI():
-    """Disable standalone plugin loading - this command is registered via MayaMMD.mll"""
-    pass

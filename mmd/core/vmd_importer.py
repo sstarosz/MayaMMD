@@ -1,7 +1,7 @@
 import enum
+import json
 import logging
 import os
-import json
 
 from mmd.core.binary_reader import BinaryReader
 from mmd.core.data_types import (

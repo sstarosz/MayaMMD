@@ -15,7 +15,7 @@ from tests.unit_tests.maya.maya_stub import install_maya_stub
 
 install_maya_stub(profile="headless")
 
-from mmd.ui.morph_tree_widget import KeyframeState, MorphTreeWidget, _get_keyframe_state  # noqa: E402
+from mmd.ui.morph_tree_widget import KeyframeState, _get_keyframe_state
 
 
 class TestGetKeyframeState(unittest.TestCase):

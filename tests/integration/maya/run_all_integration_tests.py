@@ -37,7 +37,7 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.fonts.warning=false")
 # Create QApplication before Maya standalone so Qt uses it as the singleton.
 # Only do this in mayapy (standalone) mode — Maya's interactive session
 # already has a full QApplication.
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
 
 _qt_app: QApplication | None = None
 if QApplication.instance() is None:
@@ -60,19 +60,17 @@ import maya.standalone
 
 maya.standalone.initialize()
 
-import maya.mel as mel  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from assets.assets_utils import (  # noqa: E402
+from assets.assets_utils import (
     get_all_pmx_model_paths,
     get_all_vmd_paths,
     get_all_vpd_paths,
 )
-from mmd.core.pmx_importer import parse_pmx as _uncached_parse_pmx  # noqa: E402
-from mmd.core.vmd_importer import parse_vmd_file  # noqa: E402
-from mmd.core.vpd_importer import parse_vpd_file  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
+from mmd.core.pmx_importer import parse_pmx as _uncached_parse_pmx
+from mmd.core.vmd_importer import parse_vmd_file
+from mmd.core.vpd_importer import parse_vpd_file
+from mmd.maya.pmx_scene_builder import build_pmx_scene
 
 # Cache parsed PMX data: across suites (import → bone → morph) the same
 # model is loaded 3×.  parse_pmx is pure (no Maya deps), so caching is safe.
@@ -86,7 +84,7 @@ def parse_pmx(path: str) -> object:
     return _parse_cache[path]
 
 
-from tests.integration.test_helpers import (  # noqa: E402
+from tests.integration.test_helpers import (
     _run_single_test,
     color_text,
     load_plugin,
@@ -201,8 +199,10 @@ def get_morph_tests():
 
 def get_node_tests():
     """Import the no-PMX node suites and return their combined test list."""
-    from tests.integration.maya.nodes import test_bone_morph_node_integration
-    from tests.integration.maya.nodes import test_rigid_body_node_integration
+    from tests.integration.maya.nodes import (
+        test_bone_morph_node_integration,
+        test_rigid_body_node_integration,
+    )
 
     return [
         *test_bone_morph_node_integration._TESTS,
@@ -223,9 +223,9 @@ def get_cmd_tests():
     boneMorphNode/boneBlendShape and pmxRigidBody are all registered by
     MayaMMD.mll.
     """
-    from tests.integration.maya.cmds import test_bone_blend_shape_cmd_integration
-    from tests.integration.maya.cmds import test_pmx_rigid_body_cmd_integration
     from tests.integration.maya.cmds import (
+        test_bone_blend_shape_cmd_integration,
+        test_pmx_rigid_body_cmd_integration,
         test_pmx_rigid_body_constraint_cmd_integration,
     )
 
@@ -1017,15 +1017,18 @@ def run_all_integration_tests(args: argparse.Namespace) -> bool:
                             _ctx_mod, "_MUTATING_CONTEXT_TESTS", set()
                         )
                         _CTX_TEST_KWARGS: dict[str, dict] = {
-                            "Real Model - ModelContext discovery": dict(
-                                pmx_a=pmx_a, maya_a=maya_a
-                            ),
-                            "Real Model - ModelContext → VMD builder": dict(
-                                maya_a=maya_a, vmd_data=_vmd
-                            ),
-                            "Real Model - ModelContext → VPD builder": dict(
-                                maya_a=maya_a, vpd_data=_vpd
-                            ),
+                            "Real Model - ModelContext discovery": {
+                                "pmx_a": pmx_a,
+                                "maya_a": maya_a,
+                            },
+                            "Real Model - ModelContext → VMD builder": {
+                                "maya_a": maya_a,
+                                "vmd_data": _vmd,
+                            },
+                            "Real Model - ModelContext → VPD builder": {
+                                "maya_a": maya_a,
+                                "vpd_data": _vpd,
+                            },
                         }
 
                         for test_name, test_func in real_tests:
@@ -1041,17 +1044,21 @@ def run_all_integration_tests(args: argparse.Namespace) -> bool:
                             if test_name in _CTX_TEST_KWARGS:
                                 kwargs = _CTX_TEST_KWARGS[test_name]
                             elif "VMD" in test_name and "multi-model" in test_name:
-                                kwargs = dict(
-                                    maya_a=maya_a, maya_b=maya_b, vmd_data=_vmd
-                                )
+                                kwargs = {
+                                    "maya_a": maya_a,
+                                    "maya_b": maya_b,
+                                    "vmd_data": _vmd,
+                                }
                             elif "VPD" in test_name and "multi-model" in test_name:
-                                kwargs = dict(
-                                    maya_a=maya_a, maya_b=maya_b, vpd_data=_vpd
-                                )
+                                kwargs = {
+                                    "maya_a": maya_a,
+                                    "maya_b": maya_b,
+                                    "vpd_data": _vpd,
+                                }
                             elif "multi-model" in test_name:
-                                kwargs = dict(maya_a=maya_a, maya_b=maya_b)
+                                kwargs = {"maya_a": maya_a, "maya_b": maya_b}
                             else:
-                                kwargs = dict(maya_a=maya_a, pmx_a=pmx_a)
+                                kwargs = {"maya_a": maya_a, "pmx_a": pmx_a}
 
                             wrapped = functools.partial(test_func, **kwargs)
                             use_undo = test_name in _ctx_mutating

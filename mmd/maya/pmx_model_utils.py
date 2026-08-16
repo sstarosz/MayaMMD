@@ -4,13 +4,12 @@ This module provides general-purpose utilities for working with imported PMX mod
 such as pose resets, transformations, and other model-level operations.
 """
 
-import json
 import logging
 import re
-from typing import Dict, List, Optional
 
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
+from maya import cmds
+
 from mmd.maya.maya_data_types import ResolvedModelData
 
 log = logging.getLogger(__name__)
@@ -56,7 +55,7 @@ def _is_pmx_root(node_name: str) -> bool:
     )
 
 
-def find_model_root_from_selection() -> Optional[str]:
+def find_model_root_from_selection() -> str | None:
     """Walk up the DAG from the current selection to find a PMX model root.
 
     If the selection is empty, or the selected object does not belong to any
@@ -81,7 +80,7 @@ def find_model_root_from_selection() -> Optional[str]:
     return None
 
 
-def find_all_model_roots_from_selection() -> List[str]:
+def find_all_model_roots_from_selection() -> list[str]:
     """Return the full DAG paths of ALL unique PMX model roots spanned by the
     current Maya selection.
 
@@ -100,7 +99,7 @@ def find_all_model_roots_from_selection() -> List[str]:
     if not sel:
         return []
 
-    roots: List[str] = []
+    roots: list[str] = []
     for obj in sel:
         parent = obj
         while parent is not None:
@@ -114,7 +113,7 @@ def find_all_model_roots_from_selection() -> List[str]:
     return roots
 
 
-def discover_model_roots_in_scene() -> List[str]:
+def discover_model_roots_in_scene() -> list[str]:
     """Return the full DAG paths of all PMX model roots in the current scene.
 
     A node is a PMX root if it carries the ``pmxModelName`` custom attribute
@@ -126,7 +125,7 @@ def discover_model_roots_in_scene() -> List[str]:
     return [t for t in (cmds.ls(type="transform", long=True) or []) if _is_pmx_root(t)]
 
 
-def build_bone_map_from_scene(root_name: str) -> Dict[str, str]:
+def build_bone_map_from_scene(root_name: str) -> dict[str, str]:
     """Reconstruct a PMX-name→Maya-joint-name mapping from scene attributes.
 
     Reads ``pmxNameLocal`` and ``pmxNameUniversal`` from every joint
@@ -149,7 +148,7 @@ def build_bone_map_from_scene(root_name: str) -> Dict[str, str]:
     except Exception:
         log.warning("Root '%s' does not exist — cannot build bone map", root_name)
         return {}
-    bone_map: Dict[str, str] = {}
+    bone_map: dict[str, str] = {}
     for joint in joints:
         if cmds.attributeQuery("pmxNameLocal", node=joint, exists=True):
             name_local = cmds.getAttr(f"{joint}.pmxNameLocal")
@@ -162,7 +161,7 @@ def build_bone_map_from_scene(root_name: str) -> Dict[str, str]:
     return bone_map
 
 
-def build_morph_map_from_scene(root_name: str) -> Dict[str, str]:
+def build_morph_map_from_scene(root_name: str) -> dict[str, str]:
     """Reconstruct a PMX-morph-name→Maya-alias mapping from the blendShape node.
 
     Reads the self-describing ``pmxMorphMapping`` compound multi-attribute
@@ -186,7 +185,7 @@ def build_morph_map_from_scene(root_name: str) -> Dict[str, str]:
         try:
             size = cmds.getAttr(f"{blend_shape}.pmxMorphMapping", size=True) or 0
             if size > 0:
-                result: Dict[str, str] = {}
+                result: dict[str, str] = {}
                 for i in range(size):
                     pmx_name = cmds.getAttr(
                         f"{blend_shape}.pmxMorphMapping[{i}].pmxName"
@@ -212,7 +211,7 @@ def build_morph_map_from_scene(root_name: str) -> Dict[str, str]:
     return {n: n for n in names}
 
 
-def _find_blend_shape_node(root_name: str) -> Optional[str]:
+def _find_blend_shape_node(root_name: str) -> str | None:
     """Find the blendShape deformer node for a PMX model.
 
     Finds the mesh transform and scans its deformation history for a
@@ -235,7 +234,7 @@ def _find_blend_shape_node(root_name: str) -> Optional[str]:
     return None
 
 
-def _find_mesh_node(root_name: str) -> Optional[str]:
+def _find_mesh_node(root_name: str) -> str | None:
     """Find the mesh transform node under a PMX root.
 
     The mesh is expected to be named ``{model}_Mesh`` and sit under
@@ -250,7 +249,7 @@ def _find_mesh_node(root_name: str) -> Optional[str]:
     """
     # Try naming convention first (fast path)
     base = root_name.split("|")[-1]
-    if base.endswith("_Root") or base.endswith("_Root_"):
+    if base.endswith(("_Root", "_Root_")):
         # Strip suffix to get model name prefix
         import re
 
@@ -270,12 +269,12 @@ def _find_mesh_node(root_name: str) -> Optional[str]:
     return None
 
 
-def find_blend_shape_node(root_name: str) -> Optional[str]:
+def find_blend_shape_node(root_name: str) -> str | None:
     """Public wrapper for :func:`_find_blend_shape_node`."""
     return _find_blend_shape_node(root_name)
 
 
-def find_bone_morph_node(root_name: str) -> Optional[str]:
+def find_bone_morph_node(root_name: str) -> str | None:
     """Find the ``boneMorphNode`` DG node associated with a PMX model.
 
     Scans all ``boneMorphNode`` nodes and traces their ``outputRotate``
@@ -339,7 +338,7 @@ def find_bone_morph_node(root_name: str) -> Optional[str]:
     return None
 
 
-def find_ik_handles(root_name: str) -> List[str]:
+def find_ik_handles(root_name: str) -> list[str]:
     """Return all IK handle names that are descendants of a PMX model root.
 
     Args:
@@ -442,7 +441,7 @@ def set_joint_translate_safe(
         return False
 
 
-def collect_ik_chain_joints(ik_handles: Optional[list[str]] = None) -> set[str]:
+def collect_ik_chain_joints(ik_handles: list[str] | None = None) -> set[str]:
     """Return Maya joint names whose rotation is DIRECTLY controlled by an IK solver.
 
     In Maya's ikSCsolver, the solver rotates the link joints (from startJoint to
@@ -569,7 +568,7 @@ def reset_all_bones_to_rest_pose(bone_map: dict[str, str]) -> None:
     )
 
 
-def reset_ik_handles_to_rest_pose(ik_handles: Optional[list[str]] = None) -> None:
+def reset_ik_handles_to_rest_pose(ik_handles: list[str] | None = None) -> None:
     """Reset IK handles to their rest pose.
 
     IK handles receive transformations during VPD pose application and must be
@@ -624,8 +623,8 @@ def reset_ik_handles_to_rest_pose(ik_handles: Optional[list[str]] = None) -> Non
 
 
 def _reset_bone_morphs(
-    bone_morph_node_name: Optional[str] = None,
-    pmx_root_name: Optional[str] = None,
+    bone_morph_node_name: str | None = None,
+    pmx_root_name: str | None = None,
 ) -> None:
     """Reset bone morph weights to zero and clear MORPH_ controller transforms.
 

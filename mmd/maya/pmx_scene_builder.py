@@ -4,7 +4,7 @@ import traceback
 
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
-import maya.cmds as cmds
+from maya import cmds
 
 # Import after path is set
 from mmd.core.data_types import PmxModel
@@ -41,10 +41,7 @@ def is_valid_pmx_model_name(name: str) -> bool:
 
     # Check for special characters not allowed in Maya names
     invalid_chars = set(r'\/:*?"<>|')
-    if any(char in invalid_chars for char in name):
-        return False
-
-    return True
+    return not any(char in invalid_chars for char in name)
 
 
 def create_root_node_for_pmx_model(
@@ -139,7 +136,7 @@ def create_mesh_nodes_from_pmx_data(
     # Create face counts array (all triangles)
     face_counts = []
     for _ in range(num_faces):
-        face_counts.append(int(3))
+        face_counts.append(3)
 
     # Create the mesh
     mesh_fn = om.MFnMesh()

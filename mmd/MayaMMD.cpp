@@ -34,7 +34,10 @@
 // We inject the project root into sys.path before importing mmd.plugin
 // so Python can locate the mmd/ package.  PYTHONPATH is NOT set globally
 // (that would crash Maya by loading Maya-API imports too early).
-static MStatus run_python_initialization()
+namespace
+{
+
+MStatus run_python_initialization()
 {
     // importlib.reload ensures plugin.py source changes take effect
     // when the .mll is reloaded without restarting Maya (the bare
@@ -53,7 +56,7 @@ static MStatus run_python_initialization()
     return stat;
 }
 
-static MStatus run_python_uninitialization()
+MStatus run_python_uninitialization()
 {
     MGlobal::executePythonCommand("import sys; "
                                   "sys.path.insert(0, '" PROJECT_ROOT_DIR "'); "
@@ -62,6 +65,8 @@ static MStatus run_python_uninitialization()
                                   "mmd.plugin.uninitializePlugin()");
     return MS::kSuccess;
 }
+
+} // namespace
 
 // ===========================================================================
 // Plugin entry points

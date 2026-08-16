@@ -3,9 +3,9 @@ PMX validation functions.
 """
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Optional
 
 from mmd.core.data_types import PmxModel, WeightType
 
@@ -39,9 +39,9 @@ class ValidationIssue:
     severity: IssueSeverity
     category: IssueCategory
     message: str
-    details: Optional[str] = None
-    autofix: Optional[Callable[[PmxModel], PmxModel]] = None
-    proposed_fix: Optional[str] = None
+    details: str | None = None
+    autofix: Callable[[PmxModel], PmxModel] | None = None
+    proposed_fix: str | None = None
     affected_items: list[str] = field(default_factory=list[str])
 
     def __str__(self) -> str:

@@ -77,7 +77,7 @@ _SUITE_CHOICES = [
 def _run_core_script(script_name: str) -> bool:
     """Run a core benchmark script (pure Python, no Maya)."""
     cmd = [sys.executable, os.path.join(_HERE, "core", script_name)]
-    result = subprocess.run(cmd, cwd=_PROJECT_ROOT)
+    result = subprocess.run(cmd, cwd=_PROJECT_ROOT, check=False)
     return result.returncode == 0
 
 
@@ -126,6 +126,7 @@ def _run_maya_suite(
             cmd,
             cwd=_PROJECT_ROOT,
             capture_output=False,  # let output flow through
+            check=False,
         )
         return result.returncode == 0
     except FileNotFoundError:
