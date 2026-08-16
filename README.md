@@ -32,7 +32,7 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 - ✅ Bone morphs — custom DG node with quaternion SLERP
 - 🔄 SDEF/QDEF skinning — falls back to BDEF2
 - 🔄 Fixed axis / local coordinate — enforced during VMD/VPD apply, not interactively in the viewport
-- ✅ Rigid-body physics — MMD rigid bodies and joints simulated with Bullet via the native `pmxRigidBodyNode` solver
+- 🔄 Rigid-body physics — experimental: rigid bodies and joints are simulated with Bullet via the native `pmxRigidBodyNode` solver (no longer visual guides only)
 - ❌ Soft bodies
 - ❌ Sphere, toon, edge materials and ambient color
 - ❌ UV, group, and material morphs
