@@ -665,7 +665,13 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     if (in.bodies.empty())
         return std::nullopt;
 
-    std::optional<World> result(std::in_place);
+    // Note: use default-construct + emplace() rather than
+    // std::optional<World>(std::in_place): clang-cl's MSVC-STL handling of
+    // _SMF_control misreports World as not default-constructible when the
+    // enclosing node also owns a std::optional<World> member, so the
+    // in_place ctor is SFINAE'd out under clang-tidy.  MSVC accepts both.
+    std::optional<World> result;
+    result.emplace();
     World& world = *result;
     world.bodies = in.bodies;
     world.joints = in.joints;
@@ -697,7 +703,6 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     originalAnchors.reserve(curAnchors.size());
     {
         std::map<int, MMatrix> restWorldCache;
-        size_t i = 0;
         for (size_t body = 0; body < world.bodies.size(); ++body)
         {
             const RigidBodySimulation::BodyDefinition& b = world.bodies[body];
@@ -712,7 +717,6 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
                 // Boneless pin: the anchor is the body's own rest world.
                 originalAnchors.push_back(mmd::maya::matrixFromTR(b.restPos, b.restRot));
             }
-            ++i;
         }
     }
     world.originalAnchorWorld = originalAnchors;
@@ -821,7 +825,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     {
         return world; // nothing moved — the anchor history is still current
     }
-    world.lastAnchorWorld = std::move(curAnchors);
+    world.lastAnchorWorld = curAnchors;
     world.lastTime = now.value();
     world.lastTimeUnit = now.unit();
     return world;
@@ -872,7 +876,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // An empty world (no bodies) writes empty arrays.
 MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
 {
-    const unsigned int bodyCount = world ? static_cast<unsigned int>(world->bodies.size()) : 0u;
+    const unsigned int bodyCount = world ? static_cast<unsigned int>(world->bodies.size()) : 0U;
     MArrayDataBuilder tBuilder(&dataBlock, RigidBodyNode::aOutTranslate, bodyCount);
     MArrayDataBuilder rBuilder(&dataBlock, RigidBodyNode::aOutRotate, bodyCount);
 
