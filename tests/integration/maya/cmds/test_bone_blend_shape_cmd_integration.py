@@ -15,20 +15,18 @@ Tests cover:
 import math
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-
 # Maya imports (safe after standalone.initialize())
-from maya import cmds  # noqa: E402
+from maya import cmds
 
 # Test framework imports
-from tests.integration.test_helpers import (  # noqa: E402
-    setup_test_environment,
-    suppressed_undo,
-    suppressed_redo,
-    assert_true,
-    assert_eq,
-    skip_test,
+from tests.integration.test_helpers import (
     approx_equal,
     approx_equal_tuple,
+    assert_eq,
+    assert_true,
+    setup_test_environment,
+    suppressed_redo,
+    suppressed_undo,
 )
 
 # NOTE: boneMorphNode and boneBlendShape are already registered by
@@ -1107,7 +1105,7 @@ def test_translation_connection_with_position_offset():
         f"Weight=1: Expected outputTranslate[0]≈(10,0,0), got {out_trans_1}",
     )
 
-    print(f"  ✓ Weight control affects outputTranslate (0→10 on X axis)")
+    print("  ✓ Weight control affects outputTranslate (0→10 on X axis)")
 
     print("✓ Translation connections properly made when position offsets exist")
     return True
@@ -1137,10 +1135,10 @@ def test_jointorient_preserved_after_morph_controller_insertion():
     # Set a non-trivial jointOrient (30 degrees around Y-axis)
     # This simulates what PMX bone_builder does for FIXED_AXIS bones
     original_orient = (0.0, 30.0, 0.0)
-    cmds.setAttr(f"test_joint.jointOrient", *original_orient)
+    cmds.setAttr("test_joint.jointOrient", *original_orient)
 
     # Get the initial jointOrient values for comparison
-    orient_before = cmds.getAttr(f"test_joint.jointOrient")[0]
+    orient_before = cmds.getAttr("test_joint.jointOrient")[0]
 
     print(f"  Initial jointOrient: {orient_before}")
 
@@ -1166,7 +1164,7 @@ def test_jointorient_preserved_after_morph_controller_insertion():
     )
 
     # CRITICAL: Verify jointOrient is preserved
-    orient_after = cmds.getAttr(f"test_joint.jointOrient")[0]
+    orient_after = cmds.getAttr("test_joint.jointOrient")[0]
 
     print(f"  jointOrient after controller insertion: {orient_after}")
 

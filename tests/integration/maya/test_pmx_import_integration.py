@@ -448,6 +448,19 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
         "node.time is not connected (simulation not time-driven)",
     )
 
+    # Last-wins write-back: when several dynamic bodies share a related bone
+    # (a normal PMX pattern — e.g. two colliders on one bone), connectOrReplace
+    # keeps only the LAST body's outRotate/outTranslate wired to the joint (all
+    # bodies on a bone produce the same bone-world pose, so one connection
+    # suffices); the earlier bodies' outputs are intentionally disconnected.
+    # bodyJoint is a per-body MESSAGE and is wired for every body.
+    last_body_on_bone: dict[int, int] = {}
+    for i, rb in enumerate(pmx_data.rigid_bodies):
+        if rb.physics_mode.value == follow_bone or rb.related_bone_index < 0:
+            continue
+        if rb.related_bone_index in joint_names:
+            last_body_on_bone[rb.related_bone_index] = i
+
     dynamic = 0
     out_translate = 0
     for rb_idx, rb in enumerate(pmx_data.rigid_bodies):
@@ -473,6 +486,9 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
             and any(str(s).rpartition("|")[2] == short for s in joint_srcs),
             f"body {rb_idx} bodyJoint not connected to {jpath} ({joint_srcs})",
         )
+        # Only the last body on a bone owns the write-back connection.
+        if last_body_on_bone[bone] != rb_idx:
+            continue
         # pmxRigidBody ALWAYS wires a dynamic body on a bone: outRotate (and
         # outTranslate unless PHYSICS_BONE, which is rotation-only) connect
         # STRAIGHT into the joint.  The node's outputs are unit-typed

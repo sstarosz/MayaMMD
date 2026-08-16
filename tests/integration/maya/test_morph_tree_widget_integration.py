@@ -43,15 +43,14 @@ if _app is None or not isinstance(_app, QApplication):
 from mmd.core.data_types import PmxModel
 from mmd.core.vmd_importer import parse_vmd_file
 from mmd.maya.pmx_model_utils import (
-    discover_model_roots_in_scene,
     find_blend_shape_node,
     find_bone_morph_node,
 )
 from mmd.maya.vmd_scene_builder import apply_vmd_to_scene
 from mmd.ui.morph_tree_widget import KeyframeState, MorphTreeWidget, _get_keyframe_state
 from tests.integration.test_helpers import (
-    assert_true,
     assert_eq,
+    assert_true,
     skip_test,
 )
 

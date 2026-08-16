@@ -15,6 +15,7 @@ from mmd.core.pmx_importer import dump_pmx_to_json, parse_pmx
 from mmd.core.pmx_validate import validate_pmx_model
 from mmd.core.vmd_importer import parse_vmd_file
 from mmd.core.vpd_importer import parse_vpd_file
+from mmd.maya.maya_data_types import ResolvedModelData
 from mmd.maya.model_context import ModelContext
 from mmd.maya.pmx_model_utils import (
     discover_model_roots_in_scene,

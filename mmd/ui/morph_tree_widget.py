@@ -396,7 +396,7 @@ class _CircleIndicator(QWidget):
         self._border_color = color
         self.update()
 
-    def paintEvent(self, _event):  # noqa: N802
+    def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QBrush(self._color))
@@ -661,16 +661,16 @@ class _MorphRow:
     """
 
     __slots__ = (
-        "weight_attr",
+        "__weakref__",
+        "_edit_button",
+        "_edit_supported",
+        "key_dot",
         "node_name",
+        "saved_weight",
         "slider",
         "spinbox",
         "vis_btn",
-        "key_dot",
-        "saved_weight",
-        "_edit_button",
-        "_edit_supported",
-        "__weakref__",
+        "weight_attr",
     )
 
     def __init__(

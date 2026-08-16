@@ -26,20 +26,19 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from assets.assets_utils import get_all_pmx_model_paths, get_all_vpd_paths  # noqa: E402
-from mmd.core.pmx_importer import parse_pmx  # noqa: E402
-from mmd.core.vpd_importer import parse_vpd_file  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
-from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene  # noqa: E402
+from maya import cmds
 
-from tests.benchmarks.core.benchmark_helpers import (  # noqa: E402
+from assets.assets_utils import get_all_pmx_model_paths, get_all_vpd_paths
+from mmd.core.pmx_importer import parse_pmx
+from mmd.core.vpd_importer import parse_vpd_file
+from mmd.maya.pmx_scene_builder import build_pmx_scene
+from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene
+from tests.benchmarks.core.benchmark_helpers import (
     BenchmarkReport,
     BenchmarkResult,
     print_benchmark_table,
     save_benchmark_report,
 )
-
-import maya.cmds as cmds  # noqa: E402
 
 # ── Globals ───────────────────────────────────────────────────────────────
 
@@ -225,17 +224,17 @@ def run_vpd_loading_benchmarks(
 
 def main() -> int:
     """Run VPD loading benchmarks standalone (initialises Maya)."""
-    import maya.standalone  # noqa: E402
+    import maya.standalone
 
     maya.standalone.initialize()
 
-    from tests.integration.test_helpers import load_plugin  # noqa: E402
+    from tests.integration.test_helpers import load_plugin
 
     if not load_plugin():
         print("ERROR: Failed to load MayaMMD plugin.")
         return 1
 
-    import maya.mel as mel  # noqa: E402
+    from maya import mel
 
     print(f"Maya version: {mel.eval('getApplicationVersionAsFloat()')}")
 

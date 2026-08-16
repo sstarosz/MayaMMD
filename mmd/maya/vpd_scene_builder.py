@@ -6,10 +6,10 @@ were imported into Maya. VPD files contain static pose data for bones.
 
 import logging
 import math
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple
 
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
+from maya import cmds
 
 from mmd.core.data_types import Vec3, Vec4, VPDFile
 from mmd.maya.maya_data_types import ResolvedModelData
@@ -96,8 +96,8 @@ def _extract_local_x_twist_degrees(quat: om.MQuaternion) -> float:
 
 
 def _normalize_quaternion_components(
-    quat: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     """Normalize quaternion components."""
     x, y, z, w = quat
     magnitude = math.sqrt(x * x + y * y + z * z + w * w)
@@ -107,8 +107,8 @@ def _normalize_quaternion_components(
 
 
 def _convert_vpd_quaternion_to_maya_components(
-    quat: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     """Convert a VPD quaternion from MMD space (left-handed, Y-up, Z-forward)
     to Maya space (right-handed, Y-up, Z-forward).
 
@@ -138,9 +138,9 @@ def _get_joint_rotation_order_constant(rot_order: int) -> int:
 def _rotation_degrees_from_vpd_quaternion(
     joint_name: str,
     quat: Vec4,
-    q_world_rest: Optional[om.MQuaternion] = None,
+    q_world_rest: om.MQuaternion | None = None,
     has_fixed_axis: bool = False,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Convert a VPD quaternion into Maya rotate-channel Euler degrees.
 
     VPD rotations appear to be stored as offsets/deltas from the bone's bind pose
@@ -192,7 +192,7 @@ def _rotation_degrees_from_vpd_quaternion(
 def _calculate_local_translation(
     joint_name: str,
     position: Vec3,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Convert VPD translation to Maya local space.
 
     VPD translations appear to be offsets/deltas from bind pose in MMD space.
@@ -261,7 +261,7 @@ def apply_vpd_pose_to_scene(
     auto_key_state = cmds.autoKeyframe(query=True, state=True)
     # Sentinel: holds the saved timeline position while we're away from it;
     # set to None once successfully restored so the finally block is a no-op.
-    orig_time: Optional[float] = None
+    orig_time: float | None = None
 
     # Suspend viewport refresh to prevent T-pose flash during reset/apply.
     # The viewport will only update once at the end with the final pose.
@@ -386,7 +386,6 @@ def apply_vpd_pose_to_scene(
                                 "Failed to set keyframe for rotation on %s",
                                 maya_joint_name,
                             )
-                            pass
 
                 if not (trans_applied or rot_applied):
                     log.debug("Joint attributes locked, skipping: %s", maya_joint_name)

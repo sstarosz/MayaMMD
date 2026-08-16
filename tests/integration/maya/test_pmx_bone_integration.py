@@ -18,23 +18,22 @@ Running
 from __future__ import annotations
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
-from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
+import maya.api.OpenMaya as om
+from maya import cmds
 
 # ── Project imports ─────────────────────────────────────────────────────────
-from mmd.core.data_types import PMXBoneFlagBits, PmxModel, Vec3  # noqa: E402
-from mmd.maya.pmx.bone_builder import (  # noqa: E402
+from mmd.core.data_types import PMXBoneFlagBits, PmxModel
+from mmd.maya.maya_data_types import MayaPmxData
+from mmd.maya.pmx.bone_builder import (
+    ConstraintType,
     build_bone_name_map,
     get_ik_chain_info,
     get_inheritance_constraint_type,
     get_rotation_inherit_info,
-    ConstraintType,
 )
-from tests.integration.test_helpers import (  # noqa: E402
-    assert_true,
+from tests.integration.test_helpers import (
     assert_eq,
-    assert_approx,
+    assert_true,
     skip_test,
 )
 
@@ -533,7 +532,6 @@ def test_pmx_ik_handle_parented_under_control_bone(
     (or falls back to ``cmds.ls(type="ikHandle")``) and verifies each
     handle's parent joint matches the expected PMX IK bone.
     """
-    total_bones = len(pmx_data.bones)
     bone_map = maya_pmx_data.bone_name_map
 
     # Use stored IK handles if available, otherwise query scene
@@ -594,7 +592,6 @@ def test_pmx_ik_handle_priority(pmx_data: PmxModel, maya_pmx_data) -> bool:
     - Root IK chains (parent is not an IK bone) → priority 1
     - Child IK chains (parent is also an IK bone) → priority 2
     """
-    total_bones = len(pmx_data.bones)
     bone_map = maya_pmx_data.bone_name_map
 
     ik_handles = (
@@ -1304,13 +1301,11 @@ _TESTS = [
     # Pass 4 – inherit constraints
     ("Rotation Inherit Constraints", test_pmx_bone_inheritance_constraints),
     ("Inheritance Constraint Types", test_pmx_inheritance_constraint_types),
-    #
     ("Verify zero initial rotaion bones", test_zero_initial_rotation_bones),
     (
         "Inherit rotation preserves jointOrient",
         test_inherit_rotation_preserves_jointorient,
     ),
-    #
     ("Rest Pose Attributes Populated", test_pmx_rest_pose_attributes_populated),
     ("IK Handle Rest Pose Attributes", test_pmx_ik_handle_rest_pose_attributes),
 ]

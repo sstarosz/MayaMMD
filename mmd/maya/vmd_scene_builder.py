@@ -4,14 +4,14 @@ This module applies VMD (Vocaloid Motion Data) animation to PMX models that
 were imported into Maya.
 """
 
-import math
 import logging
+import math
 from collections import defaultdict
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import NamedTuple
 
 import maya.api.OpenMaya as om
 import maya.api.OpenMayaAnim as oma
-import maya.cmds as cmds
+from maya import cmds
 
 from mmd.core.data_types import Vec3, Vec4, VMDFile
 from mmd.maya.maya_data_types import ResolvedModelData
@@ -36,8 +36,8 @@ class _JointRestState(NamedTuple):
 
 
 def _normalize_quaternion_components(
-    quat: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     import math
 
     x, y, z, w = quat
@@ -48,8 +48,8 @@ def _normalize_quaternion_components(
 
 
 def _convert_vmd_quaternion_to_maya_components(
-    quat: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     """Convert a VMD quaternion from MMD space (left-handed, Y-up, Z-forward)
     to Maya space (right-handed, Y-up, Z-forward).
 
@@ -64,9 +64,9 @@ def _convert_vmd_quaternion_to_maya_components(
 def _quaternion_from_vmd(
     joint_name: str,
     quat: Vec4,
-    q_world_rest: Optional[om.MQuaternion] = None,
+    q_world_rest: om.MQuaternion | None = None,
     has_fixed_axis: bool = False,
-) -> Tuple[float, float, float, float]:
+) -> tuple[float, float, float, float]:
     """Convert a VMD quaternion to raw Maya quaternion components (qx, qy, qz, qw).
 
     This applies the similarity transform to convert from world-space to
@@ -181,9 +181,9 @@ def _capture_joint_rest_state(joint_name: str) -> _JointRestState:
 
 def _calculate_local_translation(
     position: Vec3,
-    bind_pose: Optional[Vec3],
+    bind_pose: Vec3 | None,
     parent_world_rest: om.MQuaternion,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Calculate local translation from VMD world-space position.
 
     Returns tuple for direct use with Maya batch keyframe API.
@@ -207,9 +207,9 @@ def _calculate_local_translation(
 def _rotation_degrees_from_vmd_quaternion(
     joint_name: str,
     quat: Vec4,
-    q_world_rest: Optional[om.MQuaternion] = None,
+    q_world_rest: om.MQuaternion | None = None,
     has_fixed_axis: bool = False,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """Convert a VMD quaternion into Maya rotate-channel Euler degrees.
 
     Returns tuple for direct use with Maya batch keyframe API.
@@ -298,8 +298,8 @@ def get_or_create_anim_curve(node_name: str, attribute: str) -> oma.MFnAnimCurve
 
 
 def _ensure_quaternion_continuity(
-    quat_series: List[Tuple[float, float, float, float]],
-) -> List[Tuple[float, float, float, float]]:
+    quat_series: list[tuple[float, float, float, float]],
+) -> list[tuple[float, float, float, float]]:
     """Ensure quaternion sign continuity across keyframes.
 
     Quaternions ``q`` and ``-q`` represent the same rotation.  Maya's
@@ -318,7 +318,7 @@ def _ensure_quaternion_continuity(
     if len(quat_series) <= 1:
         return list(quat_series)
 
-    result: List[Tuple[float, float, float, float]] = [quat_series[0]]
+    result: list[tuple[float, float, float, float]] = [quat_series[0]]
     for i in range(1, len(quat_series)):
         prev = result[-1]
         curr = quat_series[i]
@@ -337,9 +337,9 @@ def _ensure_quaternion_continuity(
 
 def batch_set_quaternion_keyframes(
     joint_name: str,
-    frames: List[int],
-    translate_values: List[Tuple[float, float, float]],
-    quaternion_values: List[Tuple[float, float, float, float]],
+    frames: list[int],
+    translate_values: list[tuple[float, float, float]],
+    quaternion_values: list[tuple[float, float, float, float]],
     skip_translation: bool = False,
     skip_rotation: bool = False,
 ) -> None:
@@ -416,7 +416,7 @@ def batch_set_quaternion_keyframes(
         ]
 
         # Create / get the three rotate curves and switch to quaternion mode.
-        curves: List[oma.MFnAnimCurve] = []
+        curves: list[oma.MFnAnimCurve] = []
         for attr_name, values in rotate_attrs:
             try:
                 anim_curve = get_or_create_anim_curve(joint_name, attr_name)
@@ -493,7 +493,7 @@ def _clear_anim_curve_keys(anim_curve: oma.MFnAnimCurve) -> None:
 
 def apply_bone_animation(
     vmd_data: VMDFile,
-    bone_map: Dict[str, str],
+    bone_map: dict[str, str],
     start_frame: int = 1,
     frame_scale: float = 1.0,
 ) -> None:
@@ -530,7 +530,7 @@ def apply_bone_animation(
 
         cmds.currentTime(0)
 
-        joint_rest_states: Dict[str, _JointRestState] = {}
+        joint_rest_states: dict[str, _JointRestState] = {}
         for maya_joint_name in set(bone_map.values()):
             try:
                 joint_rest_states[maya_joint_name] = _capture_joint_rest_state(
@@ -712,7 +712,7 @@ def apply_morph_animation(
 
                 # Determine which node drives this morph target
                 # Check if it's a blend shape target or bone morph weight
-                node_name: Optional[str] = None
+                node_name: str | None = None
 
                 if blend_shape_node and cmds.objExists(blend_shape_node):
                     # For blend shapes, check if target exists using aliasAttr

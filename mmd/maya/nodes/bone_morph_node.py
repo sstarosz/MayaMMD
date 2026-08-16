@@ -7,8 +7,7 @@ Custom Maya dependency graph node for bone morph (pose) interpolation.
 
 import logging
 import math
-import sys
-from typing import Tuple
+
 import maya.api.OpenMaya as om
 
 log = logging.getLogger(__name__)
@@ -248,9 +247,7 @@ class BoneMorphNode(om.MPxNode):
         if plug.attribute() == BoneMorphNode.aOutputRotate:
             # Read morph targets and build bone mapping from attributes (stateless)
             targets = self._read_morph_targets_from_attributes(dataBlock)
-            bone_to_output_index, output_index_to_bone = (
-                self._build_bone_to_output_index_map(dataBlock)
-            )
+            _, output_index_to_bone = self._build_bone_to_output_index_map(dataBlock)
             output_count = len(output_index_to_bone)
 
             # Read entire weight array once; individual elements are accessed inside the loop
@@ -284,9 +281,7 @@ class BoneMorphNode(om.MPxNode):
         elif plug.attribute() == BoneMorphNode.aOutputTranslate:
             # Read morph targets and build bone mapping from attributes (stateless)
             targets = self._read_morph_targets_from_attributes(dataBlock)
-            bone_to_output_index, output_index_to_bone = (
-                self._build_bone_to_output_index_map(dataBlock)
-            )
+            _, output_index_to_bone = self._build_bone_to_output_index_map(dataBlock)
             output_count = len(output_index_to_bone)
 
             # Read entire weight array once
@@ -365,7 +360,7 @@ class BoneMorphNode(om.MPxNode):
         weight_array_handle: om.MArrayDataHandle,
         targets: list,
         output_index_to_bone: dict,
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         """Blend all morph targets that affect the joint at *output_index*.
 
         Strategy (matches Maya blendShape additive blending):
@@ -462,7 +457,7 @@ class BoneMorphNode(om.MPxNode):
         weight_array_handle: om.MArrayDataHandle,
         targets: list,
         output_index_to_bone: dict,
-    ) -> Tuple[float, float, float]:
+    ) -> tuple[float, float, float]:
         """Blend all morph targets' position offsets for the joint at *output_index*.
 
         Strategy (matches Maya blendShape additive blending):

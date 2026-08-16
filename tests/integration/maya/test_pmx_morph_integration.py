@@ -1,13 +1,11 @@
 """Integration tests for PMX morph import in Maya"""
 
 # ── Maya standalone initialised by the test runner ───────────────────────
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
+from maya import cmds
 
 # Dynamically load all PMX model files from the generated list
-from mmd.core.data_types import MorphType, PmxModel  # noqa: E402
-
-from tests.integration.test_helpers import assert_true, assert_eq, skip_test  # noqa: E402
+from mmd.core.data_types import MorphType, PmxModel
+from tests.integration.test_helpers import assert_eq, assert_true, skip_test
 
 # ---------------------------------------------------------------------------
 # Helper functions
