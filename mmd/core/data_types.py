@@ -191,7 +191,7 @@ class PmxMaterial:
     specular_strength: float = 1.0
     ambient_color: Vec3 = field(default_factory=lambda: Vec3(1.0, 1.0, 1.0))
 
-    draw_flag: MaterialFlagBits = MaterialFlagBits(0)
+    draw_flag: MaterialFlagBits = field(default_factory=lambda: MaterialFlagBits(0))
 
     edge_color: Vec4 = field(default_factory=lambda: Vec4(0.0, 0.0, 0.0, 1.0))
     edge_size: float = 1.0

@@ -19,17 +19,14 @@ import logging
 import os
 import sys
 import traceback
-from typing import Any, Callable
 
 import maya.api.OpenMaya as om
-import maya.cmds as cmds
-import maya.mel as mel
+from maya import cmds, mel
 
 # ── UI imports are lazy — only imported when GUI is available ────────────
 # shiboken6, maya.OpenMayaUI, and PySide6.QtWidgets are only needed for
 # the dockable widget.  Deferring imports speeds up plugin loading in
 # headless / batch / CI mode where the UI is never created.
-
 from mmd.maya.cmds.bone_blend_shape_cmd import BoneBlendShapeCmd
 from mmd.maya.nodes.bone_morph_node import BoneMorphNode
 from mmd.ui.tool_main_widget import MMMToolWidget
@@ -393,12 +390,12 @@ def initializePlugin() -> None:
 
         # User-facing summary (always printed, regardless of log level)
         print(f"[OK] MayaMMD v{PLUGIN_VERSION} ready")
-        print(f"  Click the 'MMD' shelf button or run 'MayaMMD()' to open the UI.")
+        print("  Click the 'MMD' shelf button or run 'MayaMMD()' to open the UI.")
 
     except Exception:
         log.error("Failed to initialize %s", PLUGIN_NAME)
         traceback.print_exc()
-        print(f"[FAIL] MayaMMD failed to load — see Script Editor for details.")
+        print("[FAIL] MayaMMD failed to load — see Script Editor for details.")
 
 
 def uninitializePlugin() -> None:

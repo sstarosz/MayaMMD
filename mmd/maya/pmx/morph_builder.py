@@ -2,10 +2,10 @@ import logging
 import traceback
 from typing import cast
 
-import maya.cmds as cmds
 import maya.api.OpenMaya as om
+from maya import cmds
 
-from mmd.core.data_types import MorphType, PmxModel, PMXMorph, MorphBone
+from mmd.core.data_types import MorphBone, MorphType, PmxModel, PMXMorph
 from mmd.maya.pmx_naming_manager import PMXNamingManager
 
 log = logging.getLogger(__name__)

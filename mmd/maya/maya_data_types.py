@@ -18,7 +18,6 @@ Each object should have PMX_ prefix to avoid name clashes.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import maya.api.OpenMaya as om
 
@@ -26,13 +25,13 @@ import maya.api.OpenMaya as om
 @dataclass
 class MayaPmxData:
     root_obj: om.MObject
-    mesh_node: Optional[om.MObject] = None
-    joints: List[om.MObject] = field(default_factory=list)
-    skin_cluster: Optional[om.MObject] = None
-    bone_name_map: Dict[str, str] = field(
+    mesh_node: om.MObject | None = None
+    joints: list[om.MObject] = field(default_factory=list)
+    skin_cluster: om.MObject | None = None
+    bone_name_map: dict[str, str] = field(
         default_factory=dict
     )  # PMX bone name -> Maya joint name
-    morph_name_map: Dict[str, str] = field(
+    morph_name_map: dict[str, str] = field(
         default_factory=dict
     )  # PMX morph name -> Maya blend shape target name
     root_name: str = ""  # Name of the root transform node
@@ -41,7 +40,7 @@ class MayaPmxData:
     blend_shape_node_name: str = (
         ""  # Name of the blendShape node (empty if none created)
     )
-    ik_handles: List[str] = field(
+    ik_handles: list[str] = field(
         default_factory=list
     )  # Maya IK handle names for this model
 
@@ -77,8 +76,8 @@ class ResolvedModelData:
     """
 
     root_name: str = ""
-    bone_map: Dict[str, str] = field(default_factory=dict)
-    morph_map: Dict[str, str] = field(default_factory=dict)
+    bone_map: dict[str, str] = field(default_factory=dict)
+    morph_map: dict[str, str] = field(default_factory=dict)
     blend_shape_node: str = ""
     bone_morph_node: str = ""
-    ik_handles: List[str] = field(default_factory=list)
+    ik_handles: list[str] = field(default_factory=list)

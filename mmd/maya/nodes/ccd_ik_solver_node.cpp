@@ -105,7 +105,10 @@ MStatus CCDIKSolverNode::doSolve()
         return MS::kSuccess;
 
     MObject handle = handleGroup->handle(0);
-    MDagPath handlePath = MDagPath::getAPathTo(handle);
+    MDagPath handlePath;
+    MStatus handlePathStat = MDagPath::getAPathTo(handle, handlePath);
+    if (!handlePathStat)
+        return handlePathStat;
     MFnIkHandle fnHandle(handlePath);
 
     MDagPath endEffector;

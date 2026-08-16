@@ -218,7 +218,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
             $<$<CONFIG:Debug>:_DEBUG>
             _HAS_ITERATOR_DEBUGGING=0
         )
-        target_compile_options(MayaMMD PRIVATE /Zi /wd4996)
+        target_compile_options(MayaMMD PRIVATE /Zi /W4)
     elseif(APPLE)
         # Maya::Maya already provides _BOOL, MAC_PLUGIN
     else()

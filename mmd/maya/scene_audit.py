@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
 
 log = logging.getLogger(__name__)
 
@@ -45,24 +44,24 @@ log = logging.getLogger(__name__)
 class SceneDiff:
     """The set of objects added to a Maya scene between two snapshots."""
 
-    transforms: List[str] = field(default_factory=list)
+    transforms: list[str] = field(default_factory=list)
     """All transform (DAG) nodes that appeared, by full path name."""
 
-    shapes: List[str] = field(default_factory=list)
+    shapes: list[str] = field(default_factory=list)
     """Shape nodes (mesh, nurbs, etc.) that appeared."""
 
-    dag_nodes: List[str] = field(default_factory=list)
+    dag_nodes: list[str] = field(default_factory=list)
     """All DAG nodes (transforms + shapes) that appeared."""
 
-    dg_nodes: List[str] = field(default_factory=list)
+    dg_nodes: list[str] = field(default_factory=list)
     """DG (non-DAG) nodes that appeared (materials, utilities, deformers, …)."""
 
-    all_nodes: Set[str] = field(default_factory=set)
+    all_nodes: set[str] = field(default_factory=set)
     """Every Maya node name that appeared."""
 
-    def nodes_of_type(self, maya_type: str) -> List[str]:
+    def nodes_of_type(self, maya_type: str) -> list[str]:
         """Return created node names that match a Maya object type (e.g. ``"joint"``, ``"mesh"``)."""
-        import maya.cmds as cmds
+        from maya import cmds
 
         return [n for n in sorted(self.all_nodes) if cmds.nodeType(n) == maya_type]
 
@@ -102,10 +101,10 @@ class SceneSnapshot:
 
     def __init__(
         self,
-        transforms: Set[str],
-        shapes: Set[str],
-        dag_nodes: Set[str],
-        dg_nodes: Set[str],
+        transforms: set[str],
+        shapes: set[str],
+        dag_nodes: set[str],
+        dg_nodes: set[str],
     ):
         self.transforms = transforms
         self.shapes = shapes
@@ -120,7 +119,7 @@ class SceneSnapshot:
     @staticmethod
     def take() -> SceneSnapshot:
         """Capture the current state of the Maya scene."""
-        import maya.cmds as cmds
+        from maya import cmds
 
         # All DAG nodes (transforms + shapes)
         dag_all = set(cmds.ls(dagObjects=True, long=True) or [])
