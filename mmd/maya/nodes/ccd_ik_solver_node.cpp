@@ -101,7 +101,7 @@ MStatus CCDIKSolverNode::doSolve()
 
     // ── Get handle group ─────────────────────────────────────────────
     MIkHandleGroup* handleGroup = this->handleGroup();
-    if (!handleGroup)
+    if (handleGroup == nullptr)
         return MS::kSuccess;
 
     MObject handle = handleGroup->handle(0);
@@ -255,7 +255,7 @@ MStatus CCDIKSolverNode::doSolve()
                 double signedAngle = (testPos * dTgtLocal > testNeg * dTgtLocal) ? angle : -angle;
 
                 // Straight-leg stability bias
-                if (angle < M_PI / 180.0 && limits)
+                if (angle < M_PI / 180.0 && limits != nullptr)
                 {
                     double loMmd = limits->lo[limitAxis];
                     double hiMmd = limits->hi[limitAxis];
@@ -277,7 +277,7 @@ MStatus CCDIKSolverNode::doSolve()
                 std::string jpName = jointPath.partialPathName().asChar();
                 double prevAngle = planeAngleState[jpName];
 
-                if (angle < kFoldBoostThreshold && limits)
+                if (angle < kFoldBoostThreshold && limits != nullptr)
                 {
                     MVector distErrVec = effectorPos - handlePos;
                     if (distErrVec.length() > kFoldMinDistErr)
@@ -296,7 +296,7 @@ MStatus CCDIKSolverNode::doSolve()
                 double newAngle = prevAngle + signedAngle;
 
                 // Resolve sign ambiguity on first iteration
-                if (it == 0 && prevAngle == 0.0 && limits)
+                if (it == 0 && prevAngle == 0.0 && limits != nullptr)
                 {
                     double loMmd = limits->lo[limitAxis];
                     double hiMmd = limits->hi[limitAxis];
@@ -305,7 +305,9 @@ MStatus CCDIKSolverNode::doSolve()
                     if (newAngle < loMaya || newAngle > hiMaya)
                     {
                         if (-newAngle > loMaya && -newAngle < hiMaya)
+                        {
                             newAngle = -newAngle;
+                        }
                         else
                         {
                             double half = (loMaya + hiMaya) * 0.5;
@@ -316,7 +318,7 @@ MStatus CCDIKSolverNode::doSolve()
                 }
 
                 // Clamp to limits
-                if (limits)
+                if (limits != nullptr)
                 {
                     double loMmd = limits->lo[limitAxis];
                     double hiMmd = limits->hi[limitAxis];
@@ -393,8 +395,8 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
     try
     {
         MPlug limitsPlug = fnDep.findPlug(aIkLinkLimits, true);
-        int numElems = limitsPlug.numElements();
-        for (int i = 0; i < numElems; ++i)
+        const unsigned int numElems = limitsPlug.numElements();
+        for (unsigned int i = 0; i < numElems; ++i)
         {
             try
             {
@@ -407,7 +409,7 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
                 MPlug minPlug = elem.child(2);
                 MPlug maxPlug = elem.child(3);
 
-                LinkLimit ll;
+                LinkLimit ll{};
                 ll.lo[0] = minPlug.child(0).asDouble();
                 ll.lo[1] = minPlug.child(1).asDouble();
                 ll.lo[2] = minPlug.child(2).asDouble();
@@ -425,29 +427,31 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
     }
     catch (...)
     {
-        // No link limits attribute
+        // No link limits attribute — this is a normal state, not an error.
+        return result;
     }
     return result;
 }
 
 int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
 {
-    if (!limits)
+    if (limits == nullptr)
         return -1;
 
-    int nonzero[3];
+    int singleAxis = -1;
     int nzCount = 0;
     for (int i = 0; i < 3; ++i)
     {
         if (limits->lo[i] != 0.0 || limits->hi[i] != 0.0)
         {
-            nonzero[nzCount++] = i;
+            singleAxis = i;
+            ++nzCount;
         }
     }
 
     if (nzCount == 1)
     {
-        int ax = nonzero[0];
+        int ax = singleAxis;
         // Verify other axes are zero
         for (int j = 0; j < 3; ++j)
         {
@@ -479,7 +483,7 @@ double CCDIKSolverNode::getCurrentAxisAngle(MFnIkJoint& jfn, int axis)
         // its local rotation axis is (anti-)parallel to that axis, and
         // getAxisAngle() gives the rotation angle (radians).
         MVector quatAxis;
-        double quatAngle;
+        double quatAngle = 0.0;
         localQuat.getAxisAngle(quatAxis, quatAngle);
 
         MVector axisDir;
@@ -521,7 +525,7 @@ double CCDIKSolverNode::computeFoldAngle(const MPoint& root, const MPoint& joint
         return 0.0;
     MVector vTarget = target - root;
     double dt = vTarget.length();
-    double c = (dt * dt - lf * lf - ls * ls) / (2.0 * lf * ls);
+    double c = ((dt * dt) - (lf * lf) - (ls * ls)) / (2.0 * lf * ls);
     c = std::max(-1.0, std::min(1.0, c));
     return acos(c);
 }
@@ -548,7 +552,7 @@ MStatus CCDIKSolverNode::initialize()
         addAttribute(aLimitRadian);
 
         // aHasIkLinkLimits
-        aHasIkLinkLimits = nAttr.create("hasIkLinkLimits", "hill", MFnNumericData::kBoolean, false);
+        aHasIkLinkLimits = nAttr.create("hasIkLinkLimits", "hill", MFnNumericData::kBoolean, 0.0);
         nAttr.setKeyable(true);
         nAttr.setStorable(true);
         nAttr.setReadable(true);

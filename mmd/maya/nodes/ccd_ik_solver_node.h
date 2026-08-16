@@ -22,6 +22,8 @@
 #include <maya/MTypeId.h>
 #include <maya/MVector.h>
 
+#include "common.hpp"
+
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -57,11 +59,14 @@ class CCDIKSolverNode : public MPxIkSolverNode
     static MObject aIkLinkLimitMax;
 
   private:
-    // Per-joint limit data
+    // Per-joint limit data.  Double3's operator[] asserts the index is in
+    // 0..2, and the axis is validated by getSingleAxisIndex() before use, so
+    // the runtime-indexed accesses below stay bounds-checked without needing
+    // a clang-tidy suppression.
     struct LinkLimit
     {
-        double lo[3];
-        double hi[3];
+        mmd::core::Double3 lo;
+        mmd::core::Double3 hi;
     };
 
     // Internal helpers
