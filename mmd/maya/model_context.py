@@ -23,9 +23,9 @@ Usage::
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
-import maya.cmds as cmds
+from maya import cmds
 from PySide6.QtCore import QObject, Signal
 
 from mmd.maya.pmx_model_utils import (
@@ -36,6 +36,9 @@ from mmd.maya.pmx_model_utils import (
     find_ik_handles,
     find_model_root_from_selection,
 )
+
+if TYPE_CHECKING:
+    from mmd.maya.maya_data_types import ResolvedModelData
 
 # Sentinel used to distinguish "failed to resolve" from "empty result" in the
 # lazy-getter cache.  If a getter raises, we store this sentinel so we don't
@@ -65,7 +68,7 @@ class ModelContext(QObject):
     def __init__(self, parent: QObject = None) -> None:
         super().__init__(parent=parent)
         self._root_name: str = ""
-        self._cache: Dict[str, Any] = {}
+        self._cache: dict[str, Any] = {}
 
     # ── Public properties ────────────────────────────────────────────────
 
@@ -120,7 +123,7 @@ class ModelContext(QObject):
     #      attribute doesn't take down the whole operation silently.
     #   3. Cache the result (or sentinel on failure) and return.
 
-    def boneMap(self) -> Dict[str, str]:
+    def boneMap(self) -> dict[str, str]:
         """PMX-name → Maya-joint-name mapping for the active model.
 
         Lazily queries scene joints for ``pmxNameLocal`` / ``pmxNameUniversal``.
@@ -135,7 +138,7 @@ class ModelContext(QObject):
         result = self._cache.get("bone_map", {})
         return {} if result is _SENTINEL else result
 
-    def morphMap(self) -> Dict[str, str]:
+    def morphMap(self) -> dict[str, str]:
         """PMX-morph-name → Maya-blendShape-alias mapping for the active model.
 
         Reads the ``pmxMorphMapping`` compound attribute from the blendShape node.
@@ -190,7 +193,7 @@ class ModelContext(QObject):
         result = self._cache.get("blend_shape", "")
         return "" if result is _SENTINEL else result
 
-    def ikHandles(self) -> List[str]:
+    def ikHandles(self) -> list[str]:
         """List of IK handle names belonging to the active model.
 
         Returns ``[]`` if the root has no IK handles or the query fails.
@@ -206,7 +209,7 @@ class ModelContext(QObject):
 
     # ── Resolve ──────────────────────────────────────────────────────────
 
-    def resolve(self) -> "ResolvedModelData":
+    def resolve(self) -> ResolvedModelData:
         """Eagerly evaluate all lazy getters and return a snapshot.
 
         Raises:

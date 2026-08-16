@@ -14,14 +14,12 @@ import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Tuple
 
 from mmd.core.data_types import (
     IKLink,
     PMXBone,
     PMXBoneFlagBits,
     PmxModel,
-    Vec3,
 )
 
 # Maya modules are only available when running inside Maya.
@@ -31,7 +29,7 @@ from mmd.core.data_types import (
 try:
     import maya.api.OpenMaya as om
     import maya.api.OpenMayaAnim as oma
-    import maya.cmds as cmds
+    from maya import cmds
 except ImportError:
     om = None  # type: ignore
     oma = None  # type: ignore
@@ -66,7 +64,7 @@ class IKChainInfo:
 def get_ik_chain_info(
     bone: PMXBone,
     total_bone_count: int,
-) -> Optional[IKChainInfo]:
+) -> IKChainInfo | None:
     """Validate a PMX bone's IK data and return a structured summary.
 
     Performs all bounds-checking so the caller does not have to.  Returns
@@ -116,7 +114,7 @@ def get_rotation_inherit_info(
     bone_idx: int,
     bone: PMXBone,
     total_bone_count: int,
-) -> Optional[RotationInheritInfo]:
+) -> RotationInheritInfo | None:
     """Validate a PMX bone's rotation-inheritance data.
 
     Returns ``None`` when:
@@ -283,10 +281,10 @@ def _add_pmx_bone_attributes(
     # ── Helper closures – add children to the compound, not to the joint ──
     # String attributes need a post-add setString call; collect them here.
     _pending_strings: list[
-        Tuple[str, str]
+        tuple[str, str]
     ] = []  # List of (long_name, value) for string attributes to set after adding to joint.
     # Vector attributes also need post-add value setting (k3Float has no default in create).
-    _pending_vectors: list[Tuple[str, float, float, float]] = []
+    _pending_vectors: list[tuple[str, float, float, float]] = []
 
     def _int(long: str, short: str, value: int) -> None:
         fn = om.MFnNumericAttribute()
@@ -489,7 +487,7 @@ def _pass1_create_joints(
     pmx_data: PmxModel,
     bone_group_obj: om.MObject,
     name_registry: PMXNamingManager,
-) -> Tuple[List[om.MObject], dict[int, om.MObject]]:
+) -> tuple[list[om.MObject], dict[int, om.MObject]]:
     """Pass 1: Create all joints, set positions, add custom attributes, and tail joints.
 
     Args:
@@ -540,42 +538,40 @@ def _pass1_create_joints(
         # inheritance (multiplyDivide) and morph outputs operate in the same
         # coordinate space.  The LOCAL_COORDINATE data is stored in custom
         # attributes for reference.
-        if (bone.flags & PMXBoneFlagBits.LOCAL_COORDINATE) and not (
-            bone.flags & PMXBoneFlagBits.FIXED_AXIS
+        if (
+            (bone.flags & PMXBoneFlagBits.LOCAL_COORDINATE)
+            and not (bone.flags & PMXBoneFlagBits.FIXED_AXIS)
+            and bone.localCoordinate is not None
         ):
-            if bone.localCoordinate is not None:
-                cmds.setAttr(f"{bone_path}.overrideEnabled", 1)
-                cmds.setAttr(f"{bone_path}.overrideColor", 17)
-                log.debug(
-                    "  -> Skipped jointOrient (localCoordinate) for bone %s", bone_path
-                )
+            cmds.setAttr(f"{bone_path}.overrideEnabled", 1)
+            cmds.setAttr(f"{bone_path}.overrideColor", 17)
+            log.debug(
+                "  -> Skipped jointOrient (localCoordinate) for bone %s", bone_path
+            )
 
         # Offset-mode tail joint (Vec3 offset rather than index)
-        if not (bone.flags & PMXBoneFlagBits.INDEXED_TAIL_POSITION):
-            if not isinstance(
-                bone.tailInfo, int
-            ):  # Vec3 — avoid isinstance(Vec3) which breaks after plugin reload
-                try:
-                    tail_joint_fn = oma.MFnIkJoint()
-                    _ = tail_joint_fn.create(joint_obj)
-                    tail_bone_name = name_registry.get_tail_bone_name(bone_idx)
-                    tail_joint_fn.setName(tail_bone_name)
-                    tail_pos = om.MVector(
-                        bone.tailInfo.x, bone.tailInfo.y, -bone.tailInfo.z
-                    )
-                    tail_joint_fn.setTranslation(tail_pos, om.MSpace.kTransform)
-                    _set_bone_radius(tail_joint_fn, 0.08)
-                except Exception as e:
-                    log.warning(
-                        "Could not create tail joint for bone %s: %s", bone_name, e
-                    )
+        if not (bone.flags & PMXBoneFlagBits.INDEXED_TAIL_POSITION) and not isinstance(
+            bone.tailInfo, int
+        ):  # Vec3 — avoid isinstance(Vec3) which breaks after plugin reload
+            try:
+                tail_joint_fn = oma.MFnIkJoint()
+                _ = tail_joint_fn.create(joint_obj)
+                tail_bone_name = name_registry.get_tail_bone_name(bone_idx)
+                tail_joint_fn.setName(tail_bone_name)
+                tail_pos = om.MVector(
+                    bone.tailInfo.x, bone.tailInfo.y, -bone.tailInfo.z
+                )
+                tail_joint_fn.setTranslation(tail_pos, om.MSpace.kTransform)
+                _set_bone_radius(tail_joint_fn, 0.08)
+            except Exception as e:
+                log.warning("Could not create tail joint for bone %s: %s", bone_name, e)
 
     return joints, pmx_bones_to_maya_joints
 
 
 def _pass2_build_hierarchy(
     pmx_data: PmxModel,
-    joints: List[om.MObject],
+    joints: list[om.MObject],
     pmx_bones_to_maya_joints: dict[int, om.MObject],
 ) -> None:
     """Pass 2: Parent joints according to PMX parentIndex.
@@ -625,7 +621,7 @@ def _pass3_create_ik_handles(
     pmx_data: PmxModel,
     pmx_bones_to_maya_joints: dict[int, om.MObject],
     name_registry: PMXNamingManager,
-) -> Tuple[List[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str]]:
     """Pass 3: Create ccdIKSolverNode handles and collect IK-controlled joint names.
 
     Each MMD IK chain gets its own ``ccdIKSolverNode`` with the chain's
@@ -911,7 +907,7 @@ def _pass4_create_inheritance_constraints(
 
 
 def _capture_rest_pose_on_joints(
-    joints: List[om.MObject],
+    joints: list[om.MObject],
 ) -> None:
     """Capture and store rest pose values in custom attributes on all joints.
 
@@ -1050,7 +1046,7 @@ def create_bones_from_pmx_bones(
     pmx_data: PmxModel,
     root_transform_obj: om.MObject,
     name_registry: PMXNamingManager,
-) -> Tuple[list[om.MObject], dict[str, str], List[str], dict[str, str]]:
+) -> tuple[list[om.MObject], dict[str, str], list[str], dict[str, str]]:
     """Create Maya joint hierarchies, IK handles, and constraints from PMX bone data.
 
     Orchestrates four passes over the bone list:
