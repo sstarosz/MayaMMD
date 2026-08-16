@@ -35,13 +35,11 @@ inline btTransform transformFromRest(const Double3& pos, const Double3& rotDeg)
     t.setIdentity();
     // Bullet stays float precision (see vcpkg.json); narrowing from the
     // core's Double3/Double4 value types is intentional.
-    t.setOrigin(btVector3(
-        static_cast<btScalar>(pos.x), static_cast<btScalar>(pos.y),
-        static_cast<btScalar>(pos.z)));
+    t.setOrigin(btVector3(static_cast<btScalar>(pos.x), static_cast<btScalar>(pos.y),
+                          static_cast<btScalar>(pos.z)));
     const Double4 q = eulerDegreesToQuat(rotDeg.x, rotDeg.y, rotDeg.z);
-    t.setBasis(btMatrix3x3(btQuaternion(
-        static_cast<btScalar>(q.x), static_cast<btScalar>(q.y),
-        static_cast<btScalar>(q.z), static_cast<btScalar>(q.w))));
+    t.setBasis(btMatrix3x3(btQuaternion(static_cast<btScalar>(q.x), static_cast<btScalar>(q.y),
+                                        static_cast<btScalar>(q.z), static_cast<btScalar>(q.w))));
     return t;
 }
 
@@ -67,9 +65,8 @@ inline btTransform doubleMatrixToBtTransform(const Matrix4& m)
         }
     }
     t.setBasis(bm);
-    t.setOrigin(btVector3(
-        static_cast<btScalar>(m(3, 0)), static_cast<btScalar>(m(3, 1)),
-        static_cast<btScalar>(m(3, 2))));
+    t.setOrigin(btVector3(static_cast<btScalar>(m(3, 0)), static_cast<btScalar>(m(3, 1)),
+                          static_cast<btScalar>(m(3, 2))));
     return t;
 }
 

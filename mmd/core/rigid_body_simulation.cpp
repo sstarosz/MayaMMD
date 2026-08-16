@@ -211,7 +211,7 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
     mAnchorCurrent.clear();
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
-        Body& b = mBodies[i];
+        Body const& b = mBodies[i];
         if (!b.def.enabled)
         {
             // Disabled (removed): keep the body index ALIGNED so bodyPose() and
