@@ -10,9 +10,9 @@
 
 Import and animate MMD (MikuMikuDance) models in Autodesk Maya.
 
-Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierarchies, IK handles, skinning, materials, morph targets, and more. Runs on **Maya 2024 and later** on Windows, Linux, and macOS.
+Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierarchies, IK handles, skinning, materials, morph targets, rigid-body physics, and more. Runs on **Maya 2024 and later** on Windows, Linux, and macOS.
 
-> **Alpha version:** MayaMMD is in early development. The current focus is **read-only** — importing models, motions, and poses for viewing and animation. Editing, adding, modifying, or deleting models is not yet supported, and several MMD features are still missing (see below).
+> **Alpha version:** MayaMMD is in early development. The current focus is **read-only** — importing models, motions, and poses for viewing, animation, and physics simulation. Editing, adding, modifying, or deleting models is not yet supported, and several MMD features are still missing (see below).
 
 ![MayaMMD — Hatsune Miku model imported and rendered in Autodesk Maya](docs/Miku.png)
 
@@ -32,8 +32,8 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 - ✅ Bone morphs — custom DG node with quaternion SLERP
 - 🔄 SDEF/QDEF skinning — falls back to BDEF2
 - 🔄 Fixed axis / local coordinate — enforced during VMD/VPD apply, not interactively in the viewport
-- 🔄 Rigid bodies — visual guides only
-- ❌ Physics simulation — rigid bodies, joints, soft bodies
+- 🔄 Rigid-body physics — experimental: rigid bodies and joints are simulated with Bullet via the native `pmxRigidBodyNode` solver (no longer visual guides only)
+- ❌ Soft bodies
 - ❌ Sphere, toon, edge materials and ambient color
 - ❌ UV, group, and material morphs
 - ❌ PMX export

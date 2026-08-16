@@ -115,10 +115,15 @@ Only present when the corresponding PMX flag is set:
 
 These attributes make the model self-describing for fast root discovery and UI display.
 
-| Long name        | Type   | Description                                                                  |
-| ---------------- | ------ | ---------------------------------------------------------------------------- |
-| `pmxModelName`   | string | Model display name (local name, falling back to universal name, then ASCII)  |
+| Long name          | Type   | Description                                                                    |
+| ------------------ | ------ | ------------------------------------------------------------------------------ |
+| `pmxModelName`     | string | Model display name (local name, falling back to universal name, then ASCII)    |
 | `pmxRigidBodyNode` | string | Solver node name of the model's `pmxRigidBodyNode` (only when one was created) |
+
+> **Note:** `pmxRigidBodyNode` is the model's native C++ rigid-body physics
+> solver node — it stores the imported rigid bodies and constraints and
+> simulates them with Bullet. The root attribute above simply records which
+> solver node the model uses.
 
 ---
 
