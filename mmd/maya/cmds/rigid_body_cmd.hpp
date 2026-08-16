@@ -46,10 +46,9 @@
 
 #pragma once
 
+#include <maya/MArgList.h>
 #include <maya/MPxCommand.h>
-
-class MSyntax;
-class MArgList;
+#include <maya/MSyntax.h>
 
 class RigidBodyCmd : public MPxCommand
 {

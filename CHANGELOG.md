@@ -54,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cross-platform builds (Linux/macOS)** — the release pipeline now installs
+  the OpenGL/X11 development headers needed to compile against the Maya SDK on
+  Linux, and the `pmxRigidBody`/`pmxRigidBodyConstraint` command headers
+  include `<maya/MSyntax.h>`/`<maya/MArgList.h>` instead of forward-declaring
+  those types (which clang on macOS rejects against Maya 2027's `USING_LATEST_API`
+  namespace aliases). Windows and Maya 2027 builds verified locally.
 - **VMD playback range no longer shrinks** — applying a second (shorter)
   animation no longer truncates the timeline and clips a longer animation
   that is already applied; the playback range is now extended only.
