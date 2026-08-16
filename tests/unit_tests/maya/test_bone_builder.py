@@ -14,22 +14,21 @@ in integration tests that run inside Maya, not here.
 import unittest
 
 from mmd.core.data_types import (
-    PMXBone,
-    PMXBoneFlagBits,
     IK,
     IKLink,
     InheritBone,
+    PMXBone,
+    PMXBoneFlagBits,
     Vec3,
 )
-
 from mmd.maya.pmx.bone_builder import (
-    IKChainInfo,
-    get_ik_chain_info,
-    RotationInheritInfo,
-    get_rotation_inherit_info,
-    build_bone_name_map,
     ConstraintType,
+    IKChainInfo,
+    RotationInheritInfo,
+    build_bone_name_map,
+    get_ik_chain_info,
     get_inheritance_constraint_type,
+    get_rotation_inherit_info,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,14 +77,21 @@ def _make_bone(
 class TestGetIKChainInfo(unittest.TestCase):
     """get_ik_chain_info validates IK data and returns IKChainInfo or None."""
 
-    def _make_ik_bone(self, target_idx, links, flags_extra=PMXBoneFlagBits(0)):
+    def _make_ik_bone(
+        self,
+        target_idx,
+        links,
+        flags_extra: PMXBoneFlagBits | None = None,
+    ):
         ik_data = IK(
             targetBoneIndex=target_idx,
             loopCount=20,
             limitRadian=0.1,
             links=links,
         )
-        flags = PMXBoneFlagBits.IK | PMXBoneFlagBits.ROTATABLE | flags_extra
+        flags = PMXBoneFlagBits.IK | PMXBoneFlagBits.ROTATABLE
+        if flags_extra is not None:
+            flags = flags | flags_extra
         return _make_bone(name_local="ik_bone", flags=flags, ik=ik_data)
 
     def test_valid_chain_returns_ik_chain_info(self):

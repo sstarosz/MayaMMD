@@ -1,33 +1,39 @@
 from __future__ import annotations
 
-# ── Maya standalone initialised by the test runner ───────────────────────
-import maya.api.OpenMaya as om  # noqa: E402
-import maya.api.OpenMayaAnim as oma  # noqa: E402
-import maya.cmds as cmds  # noqa: E402
-from mmd.maya.maya_data_types import MayaPmxData  # noqa: E402
+import logging
 
 # ── Project imports ─────────────────────────────────────────────────────────
-import math  # noqa: E402
-import logging  # noqa: E402
+import math
+
+# ── Maya standalone initialised by the test runner ───────────────────────
+import maya.api.OpenMaya as om
+import maya.api.OpenMayaAnim as oma
+from maya import cmds
+
+from mmd.maya.maya_data_types import MayaPmxData
 
 _log = logging.getLogger(__name__)
-from mmd.core.data_types import PMXBoneFlagBits, PmxModel  # noqa: E402
-from mmd.core.data_types import VMDFile  # noqa: E402
-from mmd.maya.pmx_scene_builder import build_pmx_scene  # noqa: E402
-from mmd.maya.vmd_scene_builder import (  # noqa: E402
-    apply_vmd_to_scene,
+from mmd.core.data_types import (
+    PMXBoneFlagBits,
+    PmxModel,
+    Vec4,
+    VMDFile,
+)
+from mmd.maya.pmx_scene_builder import build_pmx_scene
+from mmd.maya.vmd_scene_builder import (
     _rotation_degrees_from_vmd_quaternion,
     apply_morph_animation,
+    apply_vmd_to_scene,
 )
 
 # ── Local test infrastructure ───────────────────────────────────────────────
-from tests.integration.test_helpers import (  # noqa: E402
+from tests.integration.test_helpers import (
     assert_true,
-    matrix,
-    skip_test,
     color_text,
     euler_degrees_to_quat,
+    matrix,
     quat_dot,
+    skip_test,
 )
 
 
@@ -96,7 +102,7 @@ def test_vmd_bone_animation(
         skip_test("No VMD bone names match any bone in the loaded PMX model")
 
     print(
-        f"  Testing exhaustively for {len(set(k.bone_name for k in sample_keys))} bones with {len(sample_keys)} keyframes."
+        f"  Testing exhaustively for {len({k.bone_name for k in sample_keys})} bones with {len(sample_keys)} keyframes."
     )
 
     missing_bones = set()
@@ -1038,7 +1044,6 @@ def test_quaternion_slerp_curves_applied(
                         src_node = src.node()
                         fn_curve = oma.MFnAnimCurve(src_node)
                         if fn_curve.numKeys > 0:
-                            interp = fn_curve.inTangentType(0)
                             # kTangentLinear = 1, which is used by quaternion curves
                             checked += 1
                 except Exception as exc:

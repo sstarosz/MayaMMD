@@ -21,8 +21,8 @@
 
 #pragma once
 
-#include <maya/MEvaluationNode.h>
 #include <maya/MDagPath.h>
+#include <maya/MEvaluationNode.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPxLocatorNode.h>

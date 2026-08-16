@@ -15,16 +15,15 @@ Tests cover:
 # ── Maya standalone initialised by the test runner ───────────────────────
 
 # Maya imports (safe after standalone.initialize())
-from maya import cmds  # noqa: E402
+from maya import cmds
 
 # Test framework imports
-from tests.integration.test_helpers import (  # noqa: E402
-    setup_test_environment,
-    assert_true,
-    assert_eq,
-    skip_test,
+from tests.integration.test_helpers import (
     approx_equal,
     approx_equal_tuple,
+    assert_eq,
+    assert_true,
+    setup_test_environment,
 )
 
 # NOTE: boneMorphNode is already registered by MayaMMD.mll via

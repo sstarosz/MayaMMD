@@ -29,7 +29,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Regex to strip ANSI escape sequences (color codes used by color_text())
 _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -92,11 +92,13 @@ class _LogFile:
         """Open a timestamped log file in *log_dir* (created if needed)."""
         os.makedirs(log_dir, exist_ok=True)
         self._dir = log_dir
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         basename = f"maya-integration_{timestamp}.log"
         self._path = os.path.join(log_dir, basename)
-        # Use utf-8-sig so Windows tools (Notepad) display Unicode correctly
-        self._file = open(self._path, "w", encoding="utf-8-sig", buffering=1)
+        # Use utf-8-sig so Windows tools (Notepad) display Unicode correctly.
+        # The handle is kept as object state and written across the suite, so a
+        # `with` block (one-shot open/close) does not fit here.
+        self._file = open(self._path, "w", encoding="utf-8-sig", buffering=1)  # noqa: SIM115
 
     def close(self) -> None:
         if self._file is not None:
@@ -133,7 +135,7 @@ def _print_and_log(*args, **kwargs) -> None:
     _LOG_FILE.flush()
 
 
-print = _print_and_log  # noqa: A001 – replace built-in for this module
+print = _print_and_log
 
 
 # ---------------------------------------------------------------------------

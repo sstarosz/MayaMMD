@@ -7,7 +7,6 @@ manipulation and data transformation.
 
 from __future__ import annotations
 
-import sys
 import unittest
 
 # ── Install Maya stub (for import passthrough) ─────────────────────────
@@ -15,7 +14,7 @@ from tests.unit_tests.maya.maya_stub import install_maya_stub
 
 install_maya_stub(profile="headless")
 
-from mmd.ui.morph_tree_widget import KeyframeState, MorphTreeWidget  # noqa: E402
+from mmd.ui.morph_tree_widget import KeyframeState, MorphTreeWidget
 
 
 class TestModelDisplayName(unittest.TestCase):
