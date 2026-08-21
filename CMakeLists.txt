@@ -180,7 +180,7 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/nodes/ccd_ik_solver_node.cpp
         mmd/maya/nodes/rigid_body_node.cpp
         mmd/maya/nodes/rigid_body_shape.cpp
-        mmd/maya/nodes/rigid_body_shape_draw_override.cpp
+        mmd/maya/nodes/rigid_body_shape_geometry_override.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"

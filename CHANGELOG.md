@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `drawMode` attribute per body (Off / Wire / Solid / Wire+Solid) with a
     16-colour collision-group palette, kinematic bodies dimmed, disabled
     bodies greyed, and the selected guide highlighted.
+  - The SOLID surface is rendered **lit** by the viewport lights (stock Blinn
+    shader via an `MPxGeometryOverride` — replaces the old flat-colour
+    `MUIDrawManager` solid), drawn on top of the character mesh so interior
+    colliders stay visible; the wire outline is unchanged.
   - Shape type / size / collision group / mask / physics mode are all editable
     in the Attribute Editor.
 - **Attribute-Editor templates for the rigid-body nodes** — shipped as
