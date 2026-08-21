@@ -24,8 +24,11 @@
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
 #include <maya/MDagPath.h>
+#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnTransform.h>
 #include <maya/MGlobal.h>
 #include <maya/MItDag.h>
 #include <maya/MMatrix.h>
@@ -34,11 +37,16 @@
 #include <maya/MSelectionList.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
+#include <maya/MTypes.h>
 #include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/rigid_body_node.hpp"
+#include "nodes/rigid_body_shape.hpp"
 #include "rigid_body_simulation.hpp"
+
+#include <cmath>
+#include <cstring>
 
 #include <algorithm>
 #include <cstdlib>
@@ -87,6 +95,45 @@ bool flagArgumentDouble3(const MArgParser& parser, const char* flag, Double3& ou
     return true;
 }
 
+// ASCII-safe node-name segment for the per-body guide DAG node: keeps only
+// [A-Za-z0-9_].  Maya cannot store Japanese (or other non-ASCII) object
+// names, and the PMX body names arrive through mayapy -> MArgParser possibly
+// mangled — so the guide's Maya name is built from this segment, falling back
+// to "RB_<n>" when nothing survives.
+[[nodiscard]] std::string sanitizeNodeNameSegment(const MString& name)
+{
+    std::string out;
+    const char* bytes = name.asUTF8();
+    const size_t len = bytes ? std::strlen(bytes) : 0;
+    for (size_t i = 0; i < len; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(bytes[i]);
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
+        {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    return out;
+}
+
+// The per-body guide DAG node name: `{model}_{sanitizedBodyName}` (the PMX
+// rigid-body naming convention), with the model prefix taken from the solver's
+// name ("{model}_RigidBodySolver") and the body segment from the ASCII-safe
+// PMX name_local (or "RB_<n>").  Maya auto-uniquifies the final name.
+[[nodiscard]] MString makeShapeNodeName(const MObject& solverNode, int n, const MString& nameLocal)
+{
+    MFnDependencyNode fn(solverNode);
+    MString prefix = fn.name();
+    const int suffix = prefix.rindexW("_RigidBodySolver");
+    if (suffix >= 0)
+        prefix = prefix.substringW(0, suffix - 1);
+
+    std::string segment = sanitizeNodeNameSegment(nameLocal);
+    if (segment.empty())
+        segment = "RB_" + std::to_string(n);
+    return prefix + "_" + segment.c_str();
+}
+
 // Resolve the -bone argument to a joint dag path (or leave it empty).
 MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 {
@@ -99,8 +146,7 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
     const char* boneStr = bone.asChar();
     const std::string_view boneView(boneStr);
     const bool numeric =
-        std::all_of(boneView.begin(), boneView.end(),
-                    [](char c) { return c >= '0' && c <= '9'; });
+        std::all_of(boneView.begin(), boneView.end(), [](char c) { return c >= '0' && c <= '9'; });
     if (numeric)
     {
         // The string was verified to contain only digits above, so the
@@ -263,13 +309,19 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Solver / group / index ──
     MFnDependencyNode fn(solverNode);
     MStatus plugStat;
-    MPlug bodiesPlug = fn.findPlug(RigidBodyNode::aBodies, true, &plugStat);
-    if (bodiesPlug.isNull())
+    MPlug shapesPlug = fn.findPlug(RigidBodyNode::aBodyShapes, true, &plugStat);
+    if (shapesPlug.isNull())
     {
-        MGlobal::displayError("pmxRigidBody: node has no 'bodies' array");
+        MGlobal::displayError("pmxRigidBody: node has no 'bodyShapes' array");
         return MS::kFailure;
     }
-    const int count = static_cast<int>(bodiesPlug.numElements());
+    // The next free body index is the array's CURRENT logical element count.
+    // evaluateNumElements() (NOT numElements(), which returns 0 for a
+    // non-cached message array) materializes the array's backing store — this
+    // is what makes elementByLogicalIndex(n) below create a DISTINCT element
+    // for each body instead of collapsing every append onto element 0.
+    const unsigned int bodyCount = shapesPlug.evaluateNumElements();
+    const int count = static_cast<int>(bodyCount);
     if (index >= 0 && index != count)
     {
         MString msg = MString("Body index ") + MString(std::to_string(index).c_str()) +
@@ -307,24 +359,73 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     const Double3 worldT = mmd::maya::mmdToMayaTranslate(pos);
     const Double3 worldR = mmd::maya::mmdToMayaRotateDeg(rot);
 
-    // ── Write the body data (simple create) ──
-    MPlug elem = bodiesPlug.elementByLogicalIndex(n);
-    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyRestTranslate), worldT);
-    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyRestRotate), worldR);
-    elem.child(RigidBodyNode::aBodyMass).setDouble(mass);
-    elem.child(RigidBodyNode::aBodyLinearDamping).setDouble(linearDamping);
-    elem.child(RigidBodyNode::aBodyAngularDamping).setDouble(angularDamping);
-    elem.child(RigidBodyNode::aBodyFriction).setDouble(friction);
-    elem.child(RigidBodyNode::aBodyRestitution).setDouble(restitution);
-    elem.child(RigidBodyNode::aBodyColliderType).setShort(colliderType);
-    // PMX shape_size VERBATIM (full size — the node derives the engine
-    // radius/extents/length by collider type via mmd::core::applyShapeSize).
-    mmd::maya::setPlugDouble3(elem.child(RigidBodyNode::aBodyShapeSize), size);
-    elem.child(RigidBodyNode::aBodyGroupId).setShort(static_cast<short>(group));
+    // ── Create the per-body guide (pmxRigidBodyShape) ──
+    // One selectable guide per body: a plain TRANSFORM holding the locator
+    // shape under it, parented under the rigid bodies group.  The transform
+    // is positioned at the REST pose here (so the guide shows the body before
+    // the first evaluation) but is then DRIVEN by the solver's
+    // outGuideTranslate/outGuideRotate outputs to the body's CURRENT pose
+    // each frame (see the Guide driving block below) — the collider follows
+    // the animation.  All PMX-verbatim data — including the rest pose
+    // (bodyRestTranslate/bodyRestRotate) — lives on the shape node; the
+    // solver discovers it via solver.bodyShapes[n].
+    const MString shapeName = makeShapeNodeName(solverNode, n, nameLocal);
+    MObject guideParent = groupPath.node(); // non-const ref param on MFnTransform::create
+    MFnTransform guideTf;
+    MObject guideObj = guideTf.create(guideParent, &plugStat);
+    if (guideObj.isNull())
+    {
+        MGlobal::displayError("pmxRigidBody: could not create the body guide transform");
+        return MS::kFailure;
+    }
+    guideTf.setName(shapeName);
+    const double kDegToRad = 3.14159265358979323846 / 180.0;
+    guideTf.setTranslation(MVector(worldT.x, worldT.y, worldT.z), MSpace::kTransform);
+    // No MEulerRotation overload in this SDK — go through the quaternion.
+    const MEulerRotation euler(worldR.x * kDegToRad, worldR.y * kDegToRad, worldR.z * kDegToRad);
+    guideTf.setRotation(euler.asQuaternion(), MSpace::kTransform);
+
+    // The locator shape (data holder + draw target) lives under the guide
+    // transform; Maya names it `{guideName}Shape` automatically.
+    MFnDagNode shapeDagFn;
+    MObject shapeParent = guideObj;
+    MObject shapeObj =
+        shapeDagFn.create(RigidBodyShape::kNodeName, MString(), shapeParent, &plugStat);
+    if (shapeObj.isNull())
+    {
+        MGlobal::displayError("pmxRigidBody: could not create the pmxRigidBodyShape node");
+        return MS::kFailure;
+    }
+    MFnDependencyNode shapeFn(shapeObj);
+
+    // ── Write the body data (PMX-verbatim fields) ──
+    const auto shapePlug = [&shapeFn, &plugStat](const MObject& a) -> MPlug
+    { return shapeFn.findPlug(a, true, &plugStat); };
+    shapePlug(RigidBodyShape::aBodyMass).setDouble(mass);
+    shapePlug(RigidBodyShape::aBodyLinearDamping).setDouble(linearDamping);
+    shapePlug(RigidBodyShape::aBodyAngularDamping).setDouble(angularDamping);
+    shapePlug(RigidBodyShape::aBodyFriction).setDouble(friction);
+    shapePlug(RigidBodyShape::aBodyRestitution).setDouble(restitution);
+    shapePlug(RigidBodyShape::aBodyColliderType).setShort(colliderType);
+    // PMX shape_size VERBATIM (box shape_size IS the Bullet half-extent — the
+    // node derives the engine radius/extents/length by collider type via
+    // mmd::core::applyShapeSize).
+    mmd::maya::setPlugDouble3(shapePlug(RigidBodyShape::aBodyShapeSize), size);
+    // The REST pose (world space, MMD→Maya) lives on the shape.  The guide
+    // transform is driven to the body's CURRENT pose each frame (see below),
+    // so the rest cannot live on the transform — the solver reads it from
+    // these attributes.
+    mmd::maya::setPlugDouble3(shapePlug(RigidBodyShape::aBodyRestTranslate), worldT);
+    mmd::maya::setPlugDouble3(shapePlug(RigidBodyShape::aBodyRestRotate), worldR);
+    shapePlug(RigidBodyShape::aBodyGroupId).setShort(static_cast<short>(group));
     for (int g = 0; g < 16; ++g)
-        elem.child(RigidBodyNode::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
-    elem.child(RigidBodyNode::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
-    // Wiring: the body's related joint as a MESSAGE (bodies[i].bodyJoint ->
+        shapePlug(RigidBodyShape::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
+    shapePlug(RigidBodyShape::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
+    shapePlug(RigidBodyShape::aBodyNameLocal).setString(nameLocal);
+    shapePlug(RigidBodyShape::aBodyNameUniversal).setString(nameUniversal);
+    shapePlug(RigidBodyShape::aBodyEnabled).setBool(true);
+
+    // Wiring: the body's related joint as a MESSAGE (shape.bodyJoint ->
     // joint.message).  The solver resolves the bone index, the write-back
     // parent and the scrub-back reset anchor from it + the joint DAG — there
     // is no per-body wiring input.  Unconnected = no related joint (a static
@@ -336,35 +437,35 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         const MPlug jointMsg = jointFn.findPlug("message", true, &jointMsgStat);
         if (!jointMsg.isNull())
         {
-            mmd::maya::connectOrReplace(
-                jointMsg, bodiesPlug.elementByLogicalIndex(n).child(RigidBodyNode::aBodyJoint));
+            mmd::maya::connectOrReplace(jointMsg, shapePlug(RigidBodyShape::aBodyJoint));
         }
     }
-    elem.child(RigidBodyNode::aBodyNameLocal).setString(nameLocal);
-    elem.child(RigidBodyNode::aBodyNameUniversal).setString(nameUniversal);
-    elem.child(RigidBodyNode::aBodyEnabled).setBool(true);
+    // Register the shape on the solver: shape.solver -> solver.bodyShapes[n]
+    // (PMX order — the solver pulls each body from its shape in readBodyData).
+    mmd::maya::connectOrReplace(shapePlug(RigidBodyShape::aSolver),
+                                shapesPlug.elementByLogicalIndex(n));
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
-    // kinematic-anchor INPUT (joint.worldMatrix -> bodies[i].bodyAnchorWorld;
-    // the node applies the body<->bone rest offset K^-1, derived internally
-    // at world build) — this is what makes the collider "live on the correct
+    // kinematic-anchor INPUT (joint.worldMatrix -> shape.bodyAnchorWorld; the
+    // node applies the body<->bone rest offset K^-1, derived internally at
+    // world build) — this is what makes the collider "live on the correct
     // bone".  Dynamic bodies are wired for write-back here too (see the
     // Output wiring block below — the command ALWAYS connects them).  Bodies
-    // display from their rest pose — the draw override falls back to reading
-    // the plugs when the world is never built.
+    // display from their rest pose — the draw override draws the collider at
+    // the shape's transform.
     if (kinematic)
     {
-        // The anchor world lives on the body's OWN compound element
-        // (bodies[i].bodyAnchorWorld — a matrix child of the body compound,
-        // not a top-level array), so there is no separate kinematic-order
-        // index to track.  The node applies the body<->joint rest offset
-        // (K^-1, derived internally when the world is built) on top.  The
-        // Bullet world runs in world space, so the anchor is stored as-is.
+        // The anchor world lives on the shape node (bodyAnchorWorld — a
+        // matrix attribute, not an array element), so there is no separate
+        // kinematic-order index to track.  The node applies the
+        // body<->joint rest offset (K^-1, derived internally when the world
+        // is built) on top.  The Bullet world runs in world space, so the
+        // anchor is stored as-is.
         if (jointPath.isValid())
         {
             mmd::maya::connectOrReplace(jointWorldPlug,
-                                        elem.child(RigidBodyNode::aBodyAnchorWorld));
+                                        shapePlug(RigidBodyShape::aBodyAnchorWorld));
         }
         else
         {
@@ -372,7 +473,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             // Pin the body's DIRECT world rest pose — not a round-tripped
             // decomposition, which would drop group scale.
             const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            mmd::maya::setPlugMatrixValue(elem.child(RigidBodyNode::aBodyAnchorWorld), bodyWorld);
+            mmd::maya::setPlugMatrixValue(shapePlug(RigidBodyShape::aBodyAnchorWorld), bodyWorld);
         }
     }
 
@@ -411,6 +512,31 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             MS::kSuccess)
         {
             MGlobal::displayWarning("pmxRigidBody: could not connect rotate output");
+        }
+    }
+
+    // ── Guide driving (the guide follows the body) ──
+    // EVERY body's guide transform is DRIVEN to the body's CURRENT world pose
+    // each frame (solver.outGuideTranslate/outGuideRotate -> guide.translate
+    // /guide.rotate).  Kinematic bodies track their bone; dynamic bodies
+    // track the solved sim pose; disabled bodies sit at rest.  The rest pose
+    // lives in the shape's bodyRestTranslate/Rotate attributes, so the solver
+    // is unaffected by the animated transform.
+    {
+        MPlug outGT = fn.findPlug(RigidBodyNode::aOutGuideTranslate, true, &plugStat)
+                          .elementByLogicalIndex(n);
+        MPlug outGR =
+            fn.findPlug(RigidBodyNode::aOutGuideRotate, true, &plugStat).elementByLogicalIndex(n);
+        MFnDependencyNode guideFn(guideObj);
+        if (mmd::maya::connectOrReplace(outGT, guideFn.findPlug("translate", true, &plugStat)) !=
+            MS::kSuccess)
+        {
+            MGlobal::displayWarning("pmxRigidBody: could not connect guide translate output");
+        }
+        if (mmd::maya::connectOrReplace(outGR, guideFn.findPlug("rotate", true, &plugStat)) !=
+            MS::kSuccess)
+        {
+            MGlobal::displayWarning("pmxRigidBody: could not connect guide rotate output");
         }
     }
 

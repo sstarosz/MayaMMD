@@ -67,8 +67,8 @@ class RigidBodySimulation
         double restitution = 0.0;
         ColliderType colliderType = ColliderType::eBox;
         double radius = 0.5;
-        // HALF-extents, as btBoxShape expects — the adapter halves the PMX
-        // full size before filling this.
+        // HALF-extents, as btBoxShape expects — the PMX box shape_size is
+        // the half-extent VERBATIM (see applyShapeSize).
         Double3 extents = Double3(1.0, 1.0, 1.0);
         double length = 1.0;
         // Bullet collision filter mask, passed VERBATIM to addRigidBody (bit
@@ -235,11 +235,13 @@ class RigidBodySimulation
     std::unique_ptr<RigidBodySimulationImpl> mImpl; // Bullet is an implementation detail
 };
 
-/// Map a PMX `shape_size` (3 doubles, FULL size — box extents are full, not
-/// half) onto a BodyDefinition's radius/extents/length according to its
-/// collider type.  The engine stores box extents as HALF-extents (as
-/// btBoxShape expects), so boxes are halved here.  PMX verbatim in,
-/// engine-ready out.
+/// Map a PMX `shape_size` (3 doubles) onto a BodyDefinition's
+/// radius/extents/length according to its collider type.  For a BOX the PMX
+/// shape_size IS the Bullet half-extent (MMD feeds it verbatim to
+/// `btBoxShape` — nanoem `btBoxShape(shape_size)`; MMDAI "box: half extent")
+/// so it is stored VERBATIM (full span = 2 × shape_size).  Sphere: radius =
+/// shape_size[0].  Capsule: radius = shape_size[0], cylinder length =
+/// shape_size[1].  PMX verbatim in, engine-ready out.
 inline void applyShapeSize(RigidBodySimulation::BodyDefinition& b, const Double3& size)
 {
     switch (b.colliderType)
@@ -248,7 +250,8 @@ inline void applyShapeSize(RigidBodySimulation::BodyDefinition& b, const Double3
         b.radius = size.x; // sphere uses shape_size[0] as its radius
         break;
     case RigidBodySimulation::ColliderType::eBox:
-        b.extents = Double3(size.x * 0.5, size.y * 0.5, size.z * 0.5); // FULL -> half
+        // PMX shape_size IS the half-extent — do NOT halve it.
+        b.extents = size;
         break;
     case RigidBodySimulation::ColliderType::eCapsule:
         b.radius = size.x; // capsule: shape_size[0] = radius

@@ -225,7 +225,8 @@ TEST_CASE("clear() tears the world down and resets state", "[sim]")
     REQUIRE(p.pos.y == Catch::Approx(0.0));
 }
 
-TEST_CASE("rideDynamicBodiesAlong moves dynamic bodies by a rigid world move without stepping", "[sim]")
+TEST_CASE("rideDynamicBodiesAlong moves dynamic bodies by a rigid world move without stepping",
+          "[sim]")
 {
     // weldDefinition: kinematic anchor at origin + dynamic body at y=1, welded.
     // A whole-skeleton drag at a paused frame must ride the dynamic chain
@@ -636,12 +637,13 @@ TEST_CASE("applyShapeSize maps PMX shape_size onto the engine fields", "[sim][sh
         REQUIRE(b.length == Catch::Approx(1.0));
     }
 
-    // Box: PMX shape_size is FULL size â€” the engine stores HALF extents.
+    // Box: PMX shape_size IS the half-extent (MMD feeds it verbatim to
+    // btBoxShape) — the engine stores it VERBATIM, full span = 2 × shape_size.
     {
         RigidBodySimulation::BodyDefinition b;
         b.colliderType = RigidBodySimulation::ColliderType::eBox;
         applyShapeSize(b, Double3(0.15, 0.5, 1.0));
-        requireDouble3(b.extents, Double3(0.075, 0.25, 0.5));
+        requireDouble3(b.extents, Double3(0.15, 0.5, 1.0));
     }
 
     // Capsule: shape_size[0] = radius, shape_size[1] = cylinder length.

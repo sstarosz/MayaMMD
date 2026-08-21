@@ -1,0 +1,167 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+  SPDX-License-Identifier: MIT
+
+  AEpmxRigidBodyShapeTemplate.xml
+
+  Attribute-Editor template for the per-body `pmxRigidBodyShape` node: the
+  PMX body data is shown as the node's primary AE content with proper labels
+  (instead of one flat "Extra Attributes" list).  The Maya AE auto-discovers
+  AE<NodeType>Template.xml from MAYA_CUSTOM_TEMPLATE_PATH or
+  <MAYA_LOCATION>/scripts/AETemplates/ (see showEditor.mel:templateDirs /
+  AEvalidatedTemplateName); the CMake build installs this file into
+  <module>/scripts/AETemplates/ and MayaMMD.mod puts that folder on
+  MAYA_CUSTOM_TEMPLATE_PATH.
+
+  Layout model: the <template> element declares the attributes (the AE's
+  DEFAULT view shows them in declaration order with the labels below), and a
+  named <view> provides the grouped (Body / Rest Pose / Physics / Collision
+  Mask / Display) layout, selectable from the AE's Views menu.
+-->
+<templates>
+  <using package='maya'/>
+  <template name='AEpmxRigidBodyShape'>
+    <attribute name='bodyNameLocal' type='maya.string'>
+      <label>Local Name</label>
+    </attribute>
+    <attribute name='bodyNameUniversal' type='maya.string'>
+      <label>Universal Name</label>
+    </attribute>
+    <attribute name='bodyGroupId' type='maya.enum'>
+      <label>Collision Group</label>
+    </attribute>
+    <attribute name='bodyColliderType' type='maya.enum'>
+      <label>Collider Type</label>
+    </attribute>
+    <attribute name='bodyShapeSize' type='maya.double3'>
+      <label>Shape Size</label>
+    </attribute>
+    <attribute name='bodyEnabled' type='maya.bool'>
+      <label>Enabled</label>
+    </attribute>
+    <attribute name='bodyRestTranslate' type='maya.double3'>
+      <label>Rest Translate</label>
+    </attribute>
+    <attribute name='bodyRestRotate' type='maya.double3'>
+      <label>Rest Rotate</label>
+    </attribute>
+    <attribute name='bodyPhysicsMode' type='maya.enum'>
+      <label>Mode</label>
+    </attribute>
+    <attribute name='bodyMass' type='maya.double'>
+      <label>Mass</label>
+    </attribute>
+    <attribute name='bodyLinearDamping' type='maya.double'>
+      <label>Move Attenuation</label>
+    </attribute>
+    <attribute name='bodyAngularDamping' type='maya.double'>
+      <label>Rotation Damping</label>
+    </attribute>
+    <attribute name='bodyRestitution' type='maya.double'>
+      <label>Repulsion</label>
+    </attribute>
+    <attribute name='bodyFriction' type='maya.double'>
+      <label>Friction</label>
+    </attribute>
+    <attribute name='bodyMaskGroup0' type='maya.bool'>
+      <label>Collides with Group 0</label>
+    </attribute>
+    <attribute name='bodyMaskGroup1' type='maya.bool'>
+      <label>Collides with Group 1</label>
+    </attribute>
+    <attribute name='bodyMaskGroup2' type='maya.bool'>
+      <label>Collides with Group 2</label>
+    </attribute>
+    <attribute name='bodyMaskGroup3' type='maya.bool'>
+      <label>Collides with Group 3</label>
+    </attribute>
+    <attribute name='bodyMaskGroup4' type='maya.bool'>
+      <label>Collides with Group 4</label>
+    </attribute>
+    <attribute name='bodyMaskGroup5' type='maya.bool'>
+      <label>Collides with Group 5</label>
+    </attribute>
+    <attribute name='bodyMaskGroup6' type='maya.bool'>
+      <label>Collides with Group 6</label>
+    </attribute>
+    <attribute name='bodyMaskGroup7' type='maya.bool'>
+      <label>Collides with Group 7</label>
+    </attribute>
+    <attribute name='bodyMaskGroup8' type='maya.bool'>
+      <label>Collides with Group 8</label>
+    </attribute>
+    <attribute name='bodyMaskGroup9' type='maya.bool'>
+      <label>Collides with Group 9</label>
+    </attribute>
+    <attribute name='bodyMaskGroup10' type='maya.bool'>
+      <label>Collides with Group 10</label>
+    </attribute>
+    <attribute name='bodyMaskGroup11' type='maya.bool'>
+      <label>Collides with Group 11</label>
+    </attribute>
+    <attribute name='bodyMaskGroup12' type='maya.bool'>
+      <label>Collides with Group 12</label>
+    </attribute>
+    <attribute name='bodyMaskGroup13' type='maya.bool'>
+      <label>Collides with Group 13</label>
+    </attribute>
+    <attribute name='bodyMaskGroup14' type='maya.bool'>
+      <label>Collides with Group 14</label>
+    </attribute>
+    <attribute name='bodyMaskGroup15' type='maya.bool'>
+      <label>Collides with Group 15</label>
+    </attribute>
+    <attribute name='drawMode' type='maya.enum'>
+      <label>Draw Mode</label>
+    </attribute>
+  </template>
+
+  <view name='Body' template='AEpmxRigidBodyShape'>
+    <group name='body'>
+      <label>Body</label>
+      <property name='bodyNameLocal'/>
+      <property name='bodyNameUniversal'/>
+      <property name='bodyGroupId'/>
+      <property name='bodyColliderType'/>
+      <property name='bodyShapeSize'/>
+      <property name='bodyEnabled'/>
+    </group>
+    <group name='rest_pose'>
+      <label>Rest Pose</label>
+      <property name='bodyRestTranslate'/>
+      <property name='bodyRestRotate'/>
+    </group>
+    <group name='physics'>
+      <label>Physics</label>
+      <property name='bodyPhysicsMode'/>
+      <property name='bodyMass'/>
+      <property name='bodyLinearDamping'/>
+      <property name='bodyAngularDamping'/>
+      <property name='bodyRestitution'/>
+      <property name='bodyFriction'/>
+    </group>
+    <group name='collision_mask'>
+      <label>Collision Mask</label>
+      <property name='bodyMaskGroup0'/>
+      <property name='bodyMaskGroup1'/>
+      <property name='bodyMaskGroup2'/>
+      <property name='bodyMaskGroup3'/>
+      <property name='bodyMaskGroup4'/>
+      <property name='bodyMaskGroup5'/>
+      <property name='bodyMaskGroup6'/>
+      <property name='bodyMaskGroup7'/>
+      <property name='bodyMaskGroup8'/>
+      <property name='bodyMaskGroup9'/>
+      <property name='bodyMaskGroup10'/>
+      <property name='bodyMaskGroup11'/>
+      <property name='bodyMaskGroup12'/>
+      <property name='bodyMaskGroup13'/>
+      <property name='bodyMaskGroup14'/>
+      <property name='bodyMaskGroup15'/>
+    </group>
+    <group name='display'>
+      <label>Display</label>
+      <property name='drawMode'/>
+    </group>
+  </view>
+</templates>

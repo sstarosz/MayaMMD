@@ -15,9 +15,10 @@
  *         -nu, -nameUniversal <string>  PMX body name (universal)
  *         -b, -bone <joint | pmxBoneIdx>  related joint — drives the bone binding
  *         -sh, -shape <sphere|box|capsule>  PMX collider
- *         -sz, -size <x y z>       PMX shape_size VERBATIM (full size — box
- *                                  extents are full, not half; the node derives
- *                                  the engine radius/extents/length by collider
+ *         -sz, -size <x y z>       PMX shape_size VERBATIM (box shape_size
+ *                                  IS the Bullet half-extent — no halving;
+ *                                  the node derives the engine
+ *                                  radius/extents/length by collider
  *                                  type via mmd::core::applyShapeSize)
  *         -p, -position <x y z>    PMX shape position (MMD space; Z-flip applied)
  *         -rot, -rotation <x y z>  PMX shape rotation (MMD radians; handedness flip)

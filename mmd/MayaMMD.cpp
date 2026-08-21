@@ -15,6 +15,7 @@
  * one Plugin Manager entry.
  */
 
+#include <maya/MDrawRegistry.h>
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MObject.h>
@@ -25,6 +26,8 @@
 #include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
 #include "maya/nodes/rigid_body_node.hpp"
+#include "maya/nodes/rigid_body_shape.hpp"
+#include "maya/nodes/rigid_body_shape_draw_override.hpp"
 #include "version.hpp"
 
 // ===========================================================================
@@ -98,12 +101,32 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     //     is planned but intentionally not added yet.)
     {
         MString classification(RigidBodyNode::kNodeClassify);
-        stat =
-            plugin.registerNode(RigidBodyNode::kNodeName, RigidBodyNode::kTypeId, RigidBodyNode::creator,
-                                RigidBodyNode::initialize, MPxNode::kLocatorNode, &classification);
+        stat = plugin.registerNode(RigidBodyNode::kNodeName, RigidBodyNode::kTypeId,
+                                   RigidBodyNode::creator, RigidBodyNode::initialize,
+                                   MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyNode registration failed");
+
+    // 1b2. Register the per-body guide node (pmxRigidBodyShape).  One selectable,
+    //     movable locator per PMX rigid body: the node's transform is the body's
+    //     rest pose (native Move-tool editing -> solver rebuild -> sim impact)
+    //     and the collider is drawn by a draw override under its classification.
+    {
+        MString classification(RigidBodyShape::kNodeClassify);
+        stat = plugin.registerNode(RigidBodyShape::kNodeName, RigidBodyShape::kTypeId,
+                                   RigidBodyShape::creator, RigidBodyShape::initialize,
+                                   MPxNode::kLocatorNode, &classification);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyShape registration failed");
+
+    // 1b3. Register the viewport draw override for the per-body guides.
+    //     (MDrawRegistry, not MFnPlugin — deregistered separately below.)
+    stat = MHWRender::MDrawRegistry::registerDrawOverrideCreator(
+        RigidBodyShape::kNodeClassify, "MayaMMD", RigidBodyShapeDrawOverride::creator);
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyShape draw override registration failed");
 
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
@@ -149,8 +172,15 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     // 1. Deregister Python components first
     run_python_uninitialization();
 
-    // 2. Deregister C++ nodes and commands
+    // 2. Deregister the viewport draw override (registered via MDrawRegistry)
+    //    FIRST — it was registered AFTER the shape node, so LIFO order demands
+    //    it comes down before the node type it draws.
+    MHWRender::MDrawRegistry::deregisterDrawOverrideCreator(RigidBodyShape::kNodeClassify,
+                                                            "MayaMMD");
+
+    // 3. Deregister C++ nodes and commands
     plugin.deregisterNode(RigidBodyNode::kTypeId);
+    plugin.deregisterNode(RigidBodyShape::kTypeId);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
     plugin.deregisterCommand(RigidBodyCmd::kName);
     plugin.deregisterCommand(RigidBodyConstraintCmd::kName);

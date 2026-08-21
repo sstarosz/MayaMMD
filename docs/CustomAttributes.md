@@ -121,9 +121,21 @@ These attributes make the model self-describing for fast root discovery and UI d
 | `pmxRigidBodyNode` | string | Solver node name of the model's `pmxRigidBodyNode` (only when one was created) |
 
 > **Note:** `pmxRigidBodyNode` is the model's native C++ rigid-body physics
-> solver node — it stores the imported rigid bodies and constraints and
-> simulates them with Bullet. The root attribute above simply records which
-> solver node the model uses.
+> solver node — it simulates the imported rigid bodies and constraints with
+> Bullet. The root attribute above simply records which solver node the model
+> uses.
+>
+> On the solver node itself, the per-body data is **not** stored as solver
+> attributes: `bodyShapes[]` is a message array connected to one
+> `pmxRigidBodyShape` node per body, and each shape node carries the body's
+> PMX-verbatim fields (`bodyColliderType`, `bodyShapeSize`, `bodyRestTranslate`/
+> `bodyRestRotate`, `bodyGroupId`, `bodyMaskGroup0..15`, `bodyMass`,
+> `bodyPhysicsMode`, …).  The shape's DAG parent transform is the body's
+> viewport GUIDE — the solver drives it to the body's CURRENT pose each frame
+> (`outGuideTranslate[]`/`outGuideRotate[]` on the solver), so the collider
+> follows the animation.  The REST pose lives in the shape's
+> `bodyRestTranslate`/`bodyRestRotate` attributes — edit those (or the other
+> body attributes) in the Attribute Editor to change the simulation.
 
 ---
 

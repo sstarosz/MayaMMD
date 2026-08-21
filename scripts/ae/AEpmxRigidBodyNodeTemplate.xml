@@ -1,0 +1,33 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!--
+  SPDX-License-Identifier: MIT
+
+  AEpmxRigidBodyNodeTemplate.xml
+
+  Attribute-Editor template for the `pmxRigidBodyNode` solver.  Maya's XML
+  AE templates cannot render the solver's `joints` compound-array (it builds
+  an empty control), so the primary editor for this node is a classic MEL AE
+  template defined by the plugin (`editorTemplate -addControl "joints"`
+  renders the default Multi control) — see `mmd/plugin.py`
+  (`_AE_SOLVER_TEMPLATE_MEL`).  The plugin clears the
+  `AEpmxRigidBodyNodeCustomView` optionVar so that MEL template (via
+  createEditor) is used by default; this XML stays available only if the
+  user picks the "Solver" view manually.  Installed to
+  <module>/scripts/AETemplates/ and discovered via MAYA_CUSTOM_TEMPLATE_PATH
+  (see AEpmxRigidBodyShapeTemplate.xml for the mechanism).
+-->
+<templates>
+  <using package='maya'/>
+  <template name='AEpmxRigidBodyNode'>
+    <attribute name='gravity' type='maya.double3'>
+      <label>Gravity</label>
+    </attribute>
+  </template>
+
+  <view name='Solver' template='AEpmxRigidBodyNode'>
+    <group name='solver'>
+      <label>Solver</label>
+      <property name='gravity'/>
+    </group>
+  </view>
+</templates>

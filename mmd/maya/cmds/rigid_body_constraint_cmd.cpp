@@ -187,13 +187,13 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // the importer (pmxRigidBody loops before this command), and the node's
     // engine silently SKIPS joints whose bodies are missing — catching the
     // mistake here is far friendlier than a silently-dead constraint.
-    MPlug bodiesPlug = fn.findPlug(RigidBodyNode::aBodies, true, &plugStat);
-    if (bodiesPlug.isNull())
+    MPlug shapesPlug = fn.findPlug(RigidBodyNode::aBodyShapes, true, &plugStat);
+    if (shapesPlug.isNull())
     {
-        MGlobal::displayError("pmxRigidBodyConstraint: node has no 'bodies' array");
+        MGlobal::displayError("pmxRigidBodyConstraint: node has no 'bodyShapes' array");
         return MS::kFailure;
     }
-    const int bodyCount = static_cast<int>(bodiesPlug.numElements());
+    const int bodyCount = static_cast<int>(shapesPlug.evaluateNumElements());
     if (bodyA < 0 || bodyA >= bodyCount || bodyB < 0 || bodyB >= bodyCount)
     {
         MString msg = MString("bodyA/bodyB (") + MString(std::to_string(bodyA).c_str()) +

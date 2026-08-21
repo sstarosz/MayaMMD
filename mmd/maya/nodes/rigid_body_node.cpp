@@ -18,9 +18,9 @@
 #include "rigid_body_node.hpp"
 
 #include "maya_utils.hpp"
+#include "rigid_body_shape.hpp"
 
 #include <algorithm>
-#include <array>
 
 #include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
@@ -31,6 +31,7 @@
 #include <maya/MDistance.h>
 #include <maya/MEulerRotation.h>
 #include <maya/MFnCompoundAttribute.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnData.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
@@ -61,7 +62,6 @@
 // Pure math (Euler <-> quaternion, row/column transpose) comes from the
 // Maya-free physics_math.hpp; the Bullet conversions from bullet_bridge.hpp.
 using namespace mmd::core::physics_math;
-using mmd::core::applyShapeSize;
 using mmd::core::Double3;
 using mmd::core::Double4;
 using mmd::core::Matrix4;
@@ -79,24 +79,7 @@ const MTypeId RigidBodyNode::kTypeId(0x0011C105); // unique Maya node type id fo
 MObject RigidBodyNode::aTime;
 MObject RigidBodyNode::aGravity;
 
-MObject RigidBodyNode::aBodies;
-MObject RigidBodyNode::aBodyEnabled;
-MObject RigidBodyNode::aBodyNameLocal;
-MObject RigidBodyNode::aBodyNameUniversal;
-MObject RigidBodyNode::aBodyGroupId;
-std::array<MObject, 16> RigidBodyNode::aBodyMaskGroup;
-MObject RigidBodyNode::aBodyColliderType;
-MObject RigidBodyNode::aBodyShapeSize;
-MObject RigidBodyNode::aBodyRestTranslate;
-MObject RigidBodyNode::aBodyRestRotate;
-MObject RigidBodyNode::aBodyMass;
-MObject RigidBodyNode::aBodyLinearDamping;
-MObject RigidBodyNode::aBodyAngularDamping;
-MObject RigidBodyNode::aBodyRestitution;
-MObject RigidBodyNode::aBodyFriction;
-MObject RigidBodyNode::aBodyPhysicsMode;
-MObject RigidBodyNode::aBodyJoint;
-MObject RigidBodyNode::aBodyAnchorWorld;
+MObject RigidBodyNode::aBodyShapes;
 
 MObject RigidBodyNode::aJoints;
 MObject RigidBodyNode::aJointNameLocal;
@@ -121,6 +104,15 @@ MObject RigidBodyNode::aOutRotate;
 MObject RigidBodyNode::aOutRotateX;
 MObject RigidBodyNode::aOutRotateY;
 MObject RigidBodyNode::aOutRotateZ;
+
+MObject RigidBodyNode::aOutGuideTranslate;
+MObject RigidBodyNode::aOutGuideTranslateX;
+MObject RigidBodyNode::aOutGuideTranslateY;
+MObject RigidBodyNode::aOutGuideTranslateZ;
+MObject RigidBodyNode::aOutGuideRotate;
+MObject RigidBodyNode::aOutGuideRotateX;
+MObject RigidBodyNode::aOutGuideRotateY;
+MObject RigidBodyNode::aOutGuideRotateZ;
 
 // ===========================================================================
 // File-local helpers (pure attribute/plugin reading — no node state)
@@ -234,39 +226,23 @@ struct Inputs
     return world;
 }
 
-// Map the node's persisted attribute enum (kColliderBox=1..kColliderCapsule=3)
-// to the engine's PMX-aligned enum (eSphere=0..eCapsule=2).  The attribute
-// values are stored in scenes, so they cannot change; the engine enum matches
-// the PMX ShapeType byte instead — casting would silently swap sphere/capsule.
-[[nodiscard]] RigidBodySimulation::ColliderType colliderToEngine(short v)
-{
-    switch (v)
-    {
-    case RigidBodyNode::kColliderBox:
-        return RigidBodySimulation::ColliderType::eBox;
-    case RigidBodyNode::kColliderSphere:
-        return RigidBodySimulation::ColliderType::eSphere;
-    default:
-        return RigidBodySimulation::ColliderType::eCapsule; // kColliderCapsule
-    }
-}
-
-// Resolve the body's related joint (bodyJoint message) into the joint's DAG
-// path + PMX bone indices; returns false for a body with no connected joint
-// (a static collider).  The DAG IS the PMX bone hierarchy — the bone builder
-// parents each joint directly under its PMX parent.  Runs once per world
-// build via resolveBodyWiring (~5 DG API calls per body); the result is
-// cached in the world's bodies and not re-checked per frame — re-binding a
-// body or re-parenting a joint needs a rebuild trigger (e.g. re-import).
-bool resolveRelatedBones(const MPlug& bodiesPlug, unsigned int index, MDagPath& jointPath,
-                         int& boneIndex, int& parentBoneIndex)
+// Resolve the body's related joint (its shape's bodyJoint message) into the
+// joint's DAG path + PMX bone indices; returns false for a body with no
+// connected joint (a static collider).  The DAG IS the PMX bone hierarchy —
+// the bone builder parents each joint directly under its PMX parent.  Runs
+// once per world build via resolveBodyWiring (~5 DG API calls per body); the
+// result is cached in the world's bodies and not re-checked per frame —
+// re-binding a body or re-parenting a joint needs a rebuild trigger (e.g.
+// re-import).
+bool resolveRelatedBones(const MObject& shapeNode, MDagPath& jointPath, int& boneIndex,
+                         int& parentBoneIndex)
 {
     boneIndex = -1;
     parentBoneIndex = -1;
+    if (shapeNode.isNull() || !shapeNode.hasFn(MFn::kDependencyNode))
+        return false;
     MPlugArray sources;
-    bodiesPlug.elementByLogicalIndex(index)
-        .child(RigidBodyNode::aBodyJoint)
-        .connectedTo(sources, true, false);
+    MPlug(shapeNode, RigidBodyShape::aBodyJoint).connectedTo(sources, true, false);
     if (sources.length() == 0 || MDagPath::getAPathTo(sources[0].node(), jointPath) != MS::kSuccess)
         return false;
     boneIndex = mmd::maya::jointPmxBoneIndex(jointPath);
@@ -318,49 +294,27 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
     }
 }
 
-// Read one body element's PMX-verbatim fields.  The DAG-derived wiring
-// (relatedBoneIndex / parentBoneIndex / resetAnchorIndex) stays -1 here —
-// resolveBodyWiring fills it at world build.
-[[nodiscard]] RigidBodySimulation::BodyDefinition readBody(MDataHandle& hd)
-{
-    RigidBodySimulation::BodyDefinition b;
-    b.restPos = readDouble3(hd.child(RigidBodyNode::aBodyRestTranslate));
-    b.restRot = readDouble3(hd.child(RigidBodyNode::aBodyRestRotate));
-    b.mass = hd.child(RigidBodyNode::aBodyMass).asDouble();
-    b.linearDamping = hd.child(RigidBodyNode::aBodyLinearDamping).asDouble();
-    b.angularDamping = hd.child(RigidBodyNode::aBodyAngularDamping).asDouble();
-    b.friction = hd.child(RigidBodyNode::aBodyFriction).asDouble();
-    b.restitution = hd.child(RigidBodyNode::aBodyRestitution).asDouble();
-    b.colliderType = colliderToEngine(hd.child(RigidBodyNode::aBodyColliderType).asShort());
-    const Double3 shapeSize = readDouble3(hd.child(RigidBodyNode::aBodyShapeSize));
-    applyShapeSize(b, shapeSize); // PMX shape_size -> engine radius/extents/length
-    b.mask = 0;
-    for (int g = 0; g < 16; ++g)
-        if (hd.child(RigidBodyNode::aBodyMaskGroup.at(g)).asBool())
-            b.mask |= 1L << g;
-    b.groupId = hd.child(RigidBodyNode::aBodyGroupId).asShort();
-    // Keep the full PMX physics mode (0/1/2) — PHYSICS vs PHYSICS_BONE must
-    // stay distinguishable; kinematic is a derived property.
-    b.physicsMode = static_cast<RigidBodySimulation::PhysicsMode>(
-        hd.child(RigidBodyNode::aBodyPhysicsMode).asShort());
-    b.enabled = hd.child(RigidBodyNode::aBodyEnabled).asBool();
-    return b;
-}
-
-// Read the node's bodies array (PMX-verbatim fields only).  The array is
-// written DENSELY by the commands (auto-append), so the element position
-// (jumpToArrayElement) and the logical index line up.
-[[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition> readBodyData(MDataBlock& dataBlock)
+// Read the solver's body list from its bodyShapes[] message array (PMX
+// order — written DENSELY by the builder): each connected pmxRigidBodyShape
+// node provides one BodyDefinition (PMX-verbatim fields; the rest pose comes
+// from the shape node's TRANSFORM, so moving a guide in the viewport changes
+// the sim config).  Unconnected slots are skipped, keeping the body index ==
+// connected-shape order.
+[[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition> readBodyData(const MObject& node)
 {
     std::vector<RigidBodySimulation::BodyDefinition> out;
-    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(RigidBodyNode::aBodies);
-    const unsigned int bodyCount = bodiesHandle.elementCount();
+    MPlug shapesPlug(node, RigidBodyNode::aBodyShapes);
+    const unsigned int bodyCount = shapesPlug.evaluateNumElements();
     out.reserve(bodyCount);
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
-        bodiesHandle.jumpToArrayElement(i);
-        MDataHandle element = bodiesHandle.inputValue();
-        out.push_back(readBody(element));
+        MPlugArray sources;
+        shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
+        if (sources.length() == 0)
+            continue;
+        RigidBodySimulation::BodyDefinition b;
+        if (RigidBodyShape::readBodyDefinition(sources[0].node(), b))
+            out.push_back(b);
     }
     return out;
 }
@@ -377,11 +331,18 @@ void resolveBodyWiring(const MObject& node,
                        std::vector<MDagPath>& jointPaths)
 {
     jointPaths.assign(bodies.size(), MDagPath());
-    const MPlug bodiesPlug(node, RigidBodyNode::aBodies);
-    for (size_t i = 0; i < bodies.size(); ++i)
+    MPlug shapesPlug(node, RigidBodyNode::aBodyShapes);
+    const unsigned int bodyCount = shapesPlug.evaluateNumElements();
+    size_t bi = 0;
+    for (unsigned int i = 0; i < bodyCount && bi < bodies.size(); ++i)
     {
-        resolveRelatedBones(bodiesPlug, (unsigned int) i, jointPaths[i], bodies[i].relatedBoneIndex,
-                            bodies[i].parentBoneIndex);
+        MPlugArray sources;
+        shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
+        if (sources.length() == 0)
+            continue;
+        resolveRelatedBones(sources[0].node(), jointPaths[bi], bodies[bi].relatedBoneIndex,
+                            bodies[bi].parentBoneIndex);
+        ++bi;
     }
     deriveResetAnchors(bodies, jointPaths);
 }
@@ -466,10 +427,10 @@ bool isOutputPlug(const MPlug& plug)
 // Frame policy — pure functions over World / Inputs (no node state)
 // ===========================================================================
 // Read the PMX-verbatim inputs for one evaluation.
-[[nodiscard]] Inputs readInputs(MDataBlock& dataBlock)
+[[nodiscard]] Inputs readInputs(const MObject& node, MDataBlock& dataBlock)
 {
     Inputs in;
-    in.bodies = readBodyData(dataBlock);
+    in.bodies = readBodyData(node);
     in.joints = readJointData(dataBlock);
     in.gravity = readGravity(dataBlock);
     return in;
@@ -497,6 +458,17 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
     return k;
 }
 
+// The connected pmxRigidBodyShape node for body `index` (PMX order); null
+// when the bodyShapes[] slot is unconnected.
+[[nodiscard]] MObject bodyShapeNode(const MObject& node, unsigned int index)
+{
+    MPlugArray sources;
+    MPlug(node, RigidBodyNode::aBodyShapes)
+        .elementByLogicalIndex(index)
+        .connectedTo(sources, true, false);
+    return sources.length() ? sources[0].node() : MObject::kNullObj;
+}
+
 // Refresh each kinematic anchor from its INPUT (bodies[i].bodyAnchorWorld =
 // joint.worldMatrix[0], or the body's own rest world for a boneless pin).
 // Returns true when any anchor moved (a bone dragged at the current frame).
@@ -508,20 +480,22 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
 // M·bodyRest) and for animation (body follows the posed bone).  The write-back
 // (pass 1) therefore reads the kinematic body's pose directly (no K multiply),
 // and the raw-anchor reset keeps the weld constraint exactly satisfied.
-bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
+bool updateKinematicAnchors(World& world, const MObject& node)
 {
     if (!world.sim.initialized())
         return false;
     bool anchorsMoved = false;
-    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(RigidBodyNode::aBodies);
     int anchorIndex = 0;
     for (size_t i = 0; i < world.bodies.size(); ++i)
     {
         const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
             continue;
-        bodiesHandle.jumpToArrayElement((unsigned int) i);
-        MMatrix w = bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix();
+        const MObject shape = bodyShapeNode(node, (unsigned int) i);
+        if (shape.isNull())
+            continue;
+        MPlug anchorPlug(shape, RigidBodyShape::aBodyAnchorWorld);
+        MMatrix w = anchorPlug.asMDataHandle().asMatrix();
         // RAW rigid attachment (row-vector): the body is a child of its joint
         // at a constant local offset, so bodyWorld = bodyRest * anchorRest^-1 *
         // anchorWorld (bodyRest on the LEFT).  At rest this is bodyRest; under
@@ -549,17 +523,19 @@ bool updateKinematicAnchors(World& world, MDataBlock& dataBlock)
 // Read each kinematic anchor's RAW world matrix (bodyAnchorWorld, BEFORE the
 // K^-1 rest offset) in kinematic order.  The whole-skeleton-move detector
 // compares these — the per-body K would otherwise break the shared-move test.
-[[nodiscard]] std::vector<MMatrix> readRawAnchorWorlds(World& world, MDataBlock& dataBlock)
+[[nodiscard]] std::vector<MMatrix> readRawAnchorWorlds(World& world, const MObject& node)
 {
     std::vector<MMatrix> out;
-    MArrayDataHandle bodiesHandle = dataBlock.inputArrayValue(RigidBodyNode::aBodies);
     for (size_t i = 0; i < world.bodies.size(); ++i)
     {
         const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
             continue;
-        bodiesHandle.jumpToArrayElement((unsigned int) i);
-        out.push_back(bodiesHandle.inputValue().child(RigidBodyNode::aBodyAnchorWorld).asMatrix());
+        const MObject shape = bodyShapeNode(node, (unsigned int) i);
+        if (shape.isNull())
+            continue;
+        MPlug anchorPlug(shape, RigidBodyShape::aBodyAnchorWorld);
+        out.push_back(anchorPlug.asMDataHandle().asMatrix());
     }
     return out;
 }
@@ -662,7 +638,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // posed — the 51° mismatch on first play — and a rewind rebuild comparing
 // against a different captured pose — the persistent rewind jump).
 [[nodiscard]] std::optional<World> buildWorld(const MObject& node, const Inputs& in,
-                                              const MTime& now, MDataBlock& dataBlock)
+                                              const MTime& now)
 {
     if (in.bodies.empty())
         return std::nullopt;
@@ -678,6 +654,25 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     world.bodies = in.bodies;
     world.joints = in.joints;
     world.gravity = in.gravity;
+
+    // The guide outputs are expressed in the RigidBodies group's space (the
+    // solver's DAG parent — also the parent of every per-body guide
+    // transform).  The Bullet world runs in WORLD space, so each body's
+    // solved pose must be brought into the group's local frame before it can
+    // drive a child of the group.
+    {
+        MDagPath solverPath;
+        if (MDagPath::getAPathTo(node, solverPath) == MS::kSuccess &&
+            solverPath.pop() == MS::kSuccess)
+        {
+            // inclusiveMatrix() lives on MDagPath (not the function set).
+            world.groupWorld = solverPath.inclusiveMatrix();
+        }
+        else
+        {
+            world.groupWorld = MMatrix::identity;
+        }
+    }
 
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);
@@ -700,7 +695,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     // stamped pmxRest* attributes; a boneless pin's anchor IS its own rest
     // world, which never moves).  Read BEFORE updateKinematicAnchors so the
     // raw placement can use it.
-    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, node);
     std::vector<MMatrix> originalAnchors;
     originalAnchors.reserve(curAnchors.size());
     {
@@ -723,7 +718,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     }
     world.originalAnchorWorld = originalAnchors;
 
-    updateKinematicAnchors(world, dataBlock); // apply anchors with the fresh raw placement
+    updateKinematicAnchors(world, node); // apply anchors with the fresh raw placement
 
     // Pin the chains to the CURRENT skeleton pose with the RAW anchor worlds
     // (the joint worlds, NOT the K^-1-conjugated kinematic-body poses).  Each
@@ -794,10 +789,10 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // the move and yank the chains by it (272/273 joints jumped up to 75° in the
 // reproduced case).  A local bone drag moves the anchors differently (returns
 // nullopt) and still steps normally.
-[[nodiscard]] World advance(World world, const MTime& now, MDataBlock& dataBlock)
+[[nodiscard]] World advance(World world, const MObject& node, const MTime& now)
 {
-    const bool anchorsMoved = updateKinematicAnchors(world, dataBlock);
-    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, dataBlock);
+    const bool anchorsMoved = updateKinematicAnchors(world, node);
+    const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(world, node);
     const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
 
     if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
@@ -837,8 +832,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 // demands it, otherwise advance it.  The previous world is moved in and the
 // result replaces it — state is never mutated piecemeal.
 [[nodiscard]] std::optional<World> frame(std::optional<World> world, const Inputs& in,
-                                         const MObject& node, const MTime& now,
-                                         MDataBlock& dataBlock)
+                                         const MObject& node, const MTime& now)
 {
     if (!world || needsRebuild(*world, in, now))
     {
@@ -847,7 +841,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
         // model constant, so the pinning is identical whether the world is
         // first built, rebuilt on a config change, or rebuilt on a scrub-back;
         // a moved/posed skeleton is never baked into the offset).
-        return buildWorld(node, in, now, dataBlock);
+        return buildWorld(node, in, now);
     }
     // A PAUSED-FRAME pose change (e.g. an animation was just applied and
     // posed the bones at the current frame without time advancing) re-pins
@@ -859,19 +853,19 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     const double dt = (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds);
     if (dt == 0.0)
     {
-        const bool anchorsMoved = updateKinematicAnchors(*world, dataBlock);
+        const bool anchorsMoved = updateKinematicAnchors(*world, node);
         if (anchorsMoved)
         {
-            const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(*world, dataBlock);
+            const std::vector<MMatrix> curAnchors = readRawAnchorWorlds(*world, node);
             const bool wholeMove =
                 detectWholeSkeletonMove(*world, world->lastAnchorWorld, curAnchors).has_value();
             if (!wholeMove)
             {
-                return buildWorld(node, in, now, dataBlock);
+                return buildWorld(node, in, now);
             }
         }
     }
-    return advance(std::move(*world), now, dataBlock);
+    return advance(std::move(*world), node, now);
 }
 
 // Write each dynamic body's solved local pose to outTranslate/outRotate.
@@ -1074,6 +1068,56 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
     rOut.setAllClean();
     dataBlock.outputValue(RigidBodyNode::aOutTranslate).setClean();
     dataBlock.outputValue(RigidBodyNode::aOutRotate).setClean();
+
+    // Guide outputs: every body's CURRENT world pose in the group's space.
+    // The pmxRigidBody command connects these to the per-body guide
+    // transforms, so the colliders follow the animation (kinematic bodies
+    // track their bone; the others track the solved sim pose).  Written for
+    // EVERY index (enabled or not) so the array stays dense and aligned with
+    // bodyShapes[] — a disabled body falls back to its rest pose in the
+    // engine, so its guide sits at rest instead of jumping to the origin.
+    MArrayDataBuilder gtBuilder(&dataBlock, RigidBodyNode::aOutGuideTranslate, bodyCount);
+    MArrayDataBuilder grBuilder(&dataBlock, RigidBodyNode::aOutGuideRotate, bodyCount);
+    if (world)
+    {
+        constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+        const MMatrix groupInv = world->groupWorld.inverse();
+        for (unsigned int i = 0; i < bodyCount; ++i)
+        {
+            const RigidBodySimulation::Pose wp = world->sim.bodyPose(i);
+            Double3 rot;
+            quatToEulerXYZDegrees(Double4(wp.quat.x, wp.quat.y, wp.quat.z, wp.quat.w), rot);
+            // Body world (row-vector Maya), then into the group's frame so
+            // the driven guide (a child of the group) lands where the body
+            // actually is.
+            const MMatrix bodyWorld =
+                mmd::maya::matrixFromTR(mmd::core::Double3(wp.pos.x, wp.pos.y, wp.pos.z), rot);
+            const MTransformationMatrix gtm(groupInv * bodyWorld);
+            const MVector t = gtm.getTranslation(MSpace::kTransform);
+            const MEulerRotation e = gtm.eulerRotation(); // radians
+
+            MDataHandle gtEl = gtBuilder.addElement(i);
+            gtEl.child(RigidBodyNode::aOutGuideTranslateX).setMDistance(MDistance(t.x));
+            gtEl.child(RigidBodyNode::aOutGuideTranslateY).setMDistance(MDistance(t.y));
+            gtEl.child(RigidBodyNode::aOutGuideTranslateZ).setMDistance(MDistance(t.z));
+
+            MDataHandle grEl = grBuilder.addElement(i);
+            grEl.child(RigidBodyNode::aOutGuideRotateX)
+                .setMAngle(MAngle(e.x * kRadToDeg, MAngle::kDegrees));
+            grEl.child(RigidBodyNode::aOutGuideRotateY)
+                .setMAngle(MAngle(e.y * kRadToDeg, MAngle::kDegrees));
+            grEl.child(RigidBodyNode::aOutGuideRotateZ)
+                .setMAngle(MAngle(e.z * kRadToDeg, MAngle::kDegrees));
+        }
+    }
+    MArrayDataHandle gtOut = dataBlock.outputArrayValue(RigidBodyNode::aOutGuideTranslate);
+    gtOut.set(gtBuilder);
+    gtOut.setAllClean();
+    MArrayDataHandle grOut = dataBlock.outputArrayValue(RigidBodyNode::aOutGuideRotate);
+    grOut.set(grBuilder);
+    grOut.setAllClean();
+    dataBlock.outputValue(RigidBodyNode::aOutGuideTranslate).setClean();
+    dataBlock.outputValue(RigidBodyNode::aOutGuideRotate).setClean();
     return MS::kSuccess;
 }
 
@@ -1146,111 +1190,22 @@ MStatus RigidBodyNode::initialize()
     aGravity = makeNumeric(nAttr, "gravity", "grav", MFnNumericData::k3Double, 0.0);
     nAttr.setDefault(0.0, -9.8, 0.0); // MMD's physics engine uses exactly -9.8
 
-    // --- body compound (children mirror rigid_bodies.json; aBodyEnabled — a
-    // Maya-only custom attribute — sits first) ---
-    aBodyEnabled = makeNumeric(nAttr, "bodyEnabled", "ben", MFnNumericData::kBoolean, 1.0);
-    aBodyNameLocal = makeString(tAttr, "bodyNameLocal", "bnml");
-    aBodyNameUniversal = makeString(tAttr, "bodyNameUniversal", "bnmu");
-
-    // PMX collision group (0..15).
-    {
-        MFnEnumAttribute eAttr;
-        aBodyGroupId = eAttr.create("bodyGroupId", "bgid", 0, &stat);
-        MMD_CHECK_MSTATUS(stat);
-        for (int g = 0; g < 16; ++g)
-            eAttr.addField(MString(("Group " + std::to_string(g)).c_str()), static_cast<short>(g));
-        eAttr.setStorable(true);
-        eAttr.setKeyable(false);
-    }
-
-    // PMX collision mask — one bool per group.  This is the
-    // non_collision_group field stored VERBATIM (bit i set = collides with
-    // group i; MMD feeds it to Bullet directly — no inversion).
-    for (int g = 0; g < 16; ++g)
-    {
-        const MString longName(("bodyMaskGroup" + std::to_string(g)).c_str());
-        const MString shortName(("bmg" + std::to_string(g)).c_str());
-        aBodyMaskGroup.at(g) =
-            makeNumeric(nAttr, longName, shortName, MFnNumericData::kBoolean, 1.0);
-    }
-
-    // PMX collider shape.
-    {
-        MFnEnumAttribute eAttr;
-        aBodyColliderType = eAttr.create("bodyColliderType", "bct", kColliderBox, &stat);
-        MMD_CHECK_MSTATUS(stat);
-        eAttr.addField("Box", kColliderBox);
-        eAttr.addField("Sphere", kColliderSphere);
-        eAttr.addField("Capsule", kColliderCapsule);
-        eAttr.setStorable(true);
-        eAttr.setKeyable(false);
-    }
-    aBodyShapeSize = makeNumeric(nAttr, "bodyShapeSize", "bss", MFnNumericData::k3Double, 1.0);
-    aBodyRestTranslate =
-        makeNumeric(nAttr, "bodyRestTranslate", "brt", MFnNumericData::k3Double, 0.0);
-    aBodyRestRotate = makeNumeric(nAttr, "bodyRestRotate", "brr", MFnNumericData::k3Double, 0.0);
-    aBodyMass = makeNumeric(nAttr, "bodyMass", "bm", MFnNumericData::kDouble, 1.0);
-    aBodyLinearDamping =
-        makeNumeric(nAttr, "bodyLinearDamping", "bld", MFnNumericData::kDouble, 0.0);
-    aBodyAngularDamping =
-        makeNumeric(nAttr, "bodyAngularDamping", "bad", MFnNumericData::kDouble, 0.0);
-    aBodyRestitution = makeNumeric(nAttr, "bodyRestitution", "bre", MFnNumericData::kDouble, 0.0);
-    aBodyFriction = makeNumeric(nAttr, "bodyFriction", "bfr", MFnNumericData::kDouble, 0.5);
-
-    // PMX physics mode — followBone / physics / physicsBone.
-    {
-        MFnEnumAttribute eAttr;
-        aBodyPhysicsMode =
-            eAttr.create("bodyPhysicsMode", "bpm",
-                         static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysics), &stat);
-        MMD_CHECK_MSTATUS(stat);
-        eAttr.addField("FollowBone",
-                       static_cast<short>(RigidBodySimulation::PhysicsMode::eFollowBone));
-        eAttr.addField("Physics", static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysics));
-        eAttr.addField("PhysicsBone",
-                       static_cast<short>(RigidBodySimulation::PhysicsMode::ePhysicsBone));
-        eAttr.setStorable(true);
-        eAttr.setKeyable(false);
-    }
-
-    // The related joint as a MESSAGE (mirrors PMX related_bone_index);
-    // unconnected = a static collider (no write-back).
-    aBodyJoint = mMsgAttr.create("bodyJoint", "bjnt", &stat);
+    // --- per-body shape message array (PMX order) ---
+    // Each element connects to a pmxRigidBodyShape node that holds that body's
+    // PMX-verbatim data (see rigid_body_shape.{hpp,cpp}); the solver pulls
+    // every body from its shape in readBodyData.  The REST pose comes from
+    // the shape's bodyRestTranslate/bodyRestRotate attributes; the shape's
+    // TRANSFORM is the viewport GUIDE, driven to the body's CURRENT pose each
+    // frame by the outGuideTranslate/outGuideRotate outputs (a config change
+    // is detected by the per-eval re-read + comparison).
+    aBodyShapes = mMsgAttr.create("bodyShapes", "bsh", &stat);
     MMD_CHECK_MSTATUS(stat);
+    mMsgAttr.setArray(true);
+    mMsgAttr.setReadable(true);
+    mMsgAttr.setWritable(true);
+    mMsgAttr.setCached(false);
     mMsgAttr.setStorable(true);
     mMsgAttr.setKeyable(false);
-
-    // Kinematic-anchor INPUT: the bone world the body follows
-    // (joint.worldMatrix[0]; a boneless FOLLOW_BONE body pins its rest world).
-    aBodyAnchorWorld = mAttr.create("bodyAnchorWorld", "baw", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    mAttr.setStorable(true);
-    mAttr.setKeyable(false);
-
-    aBodies = cAttr.create("bodies", "bds", &stat);
-    MMD_CHECK_MSTATUS(stat);
-    cAttr.setArray(true);
-    cAttr.setUsesArrayDataBuilder(true);
-    cAttr.setStorable(true);
-    cAttr.setKeyable(false);
-    cAttr.addChild(aBodyEnabled);
-    cAttr.addChild(aBodyNameLocal);
-    cAttr.addChild(aBodyNameUniversal);
-    cAttr.addChild(aBodyGroupId);
-    for (int g = 0; g < 16; ++g)
-        cAttr.addChild(aBodyMaskGroup.at(g));
-    cAttr.addChild(aBodyColliderType);
-    cAttr.addChild(aBodyShapeSize);
-    cAttr.addChild(aBodyRestTranslate);
-    cAttr.addChild(aBodyRestRotate);
-    cAttr.addChild(aBodyMass);
-    cAttr.addChild(aBodyLinearDamping);
-    cAttr.addChild(aBodyAngularDamping);
-    cAttr.addChild(aBodyRestitution);
-    cAttr.addChild(aBodyFriction);
-    cAttr.addChild(aBodyPhysicsMode);
-    cAttr.addChild(aBodyJoint);
-    cAttr.addChild(aBodyAnchorWorld);
 
     // --- joint compound (mirrors the PMX rigid-body constraint fields) ---
     aJointNameLocal = makeString(tAttr, "jointNameLocal", "jnml");
@@ -1347,12 +1302,57 @@ MStatus RigidBodyNode::initialize()
     cAttr.addChild(aOutRotateY);
     cAttr.addChild(aOutRotateZ);
 
+    // --- guide outputs: every body's CURRENT pose (group space) ---
+    // Same unit-typed compound pattern as outTranslate/outRotate so the
+    // connections to the per-body guide transform's translate/rotate are
+    // direct (no auto-inserted unitConversion).
+    MFnUnitAttribute uGuideAttr;
+    aOutGuideTranslateX =
+        uGuideAttr.create("outGuideTranslateX", "ogtx", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutGuideTranslateY =
+        uGuideAttr.create("outGuideTranslateY", "ogty", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutGuideTranslateZ =
+        uGuideAttr.create("outGuideTranslateZ", "ogtz", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+
+    aOutGuideTranslate = cAttr.create("outGuideTranslate", "ogtr", &stat);
+    MMD_CHECK_MSTATUS(stat);
+    cAttr.setArray(true);
+    cAttr.setUsesArrayDataBuilder(true);
+    cAttr.setWritable(false);
+    cAttr.setStorable(false);
+    cAttr.addChild(aOutGuideTranslateX);
+    cAttr.addChild(aOutGuideTranslateY);
+    cAttr.addChild(aOutGuideTranslateZ);
+
+    aOutGuideRotateX =
+        uGuideAttr.create("outGuideRotateX", "ogrx", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutGuideRotateY =
+        uGuideAttr.create("outGuideRotateY", "ogry", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutGuideRotateZ =
+        uGuideAttr.create("outGuideRotateZ", "ogrz", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+
+    aOutGuideRotate = cAttr.create("outGuideRotate", "ogrt", &stat);
+    MMD_CHECK_MSTATUS(stat);
+    cAttr.setArray(true);
+    cAttr.setUsesArrayDataBuilder(true);
+    cAttr.setWritable(false);
+    cAttr.setStorable(false);
+    cAttr.addChild(aOutGuideRotateX);
+    cAttr.addChild(aOutGuideRotateY);
+    cAttr.addChild(aOutGuideRotateZ);
+
     // --- node attribute registration ---
     stat = addAttribute(aTime);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodies);
+    stat = addAttribute(aBodyShapes);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJoints);
     MMD_CHECK_MSTATUS(stat);
@@ -1360,27 +1360,48 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutRotate);
     MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutGuideTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutGuideRotate);
+    MMD_CHECK_MSTATUS(stat);
 
     // Make `time` drive the outputs.
     stat = attributeAffects(aTime, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aTime, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aTime, aOutGuideTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aTime, aOutGuideRotate);
+    MMD_CHECK_MSTATUS(stat);
 
     // Every config input drives the outputs too, so compute() re-runs on a
     // body/joint/gravity edit (config change detection) and on a kinematic
-    // bone drag at a fixed time (the anchor lives on bodies[i].bodyAnchorWorld).
+    // bone drag at a fixed time (the anchor lives on the shape's
+    // bodyAnchorWorld).
     stat = attributeAffects(aGravity, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodies, aOutTranslate);
+    stat = attributeAffects(aGravity, aOutGuideTranslate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aBodies, aOutRotate);
+    stat = attributeAffects(aGravity, aOutGuideRotate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aBodyShapes, aOutTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aBodyShapes, aOutRotate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aBodyShapes, aOutGuideTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aBodyShapes, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJoints, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJoints, aOutRotate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutGuideTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
 
     return MS::kSuccess;
@@ -1414,8 +1435,8 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 
     // Frame transition: read the PMX-verbatim inputs, then (re)build or
     // advance the world.  The new world atomically replaces the old one.
-    const Inputs in = readInputs(dataBlock);
-    mWorld = frame(std::move(mWorld), in, thisMObject(), now, dataBlock);
+    const Inputs in = readInputs(thisMObject(), dataBlock);
+    mWorld = frame(std::move(mWorld), in, thisMObject(), now);
 
     return writeOutputs(mWorld, dataBlock);
 }
