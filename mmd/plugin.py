@@ -356,11 +356,14 @@ def _register_ae_template_path() -> None:
         folder_fwd = folder.replace("\\", "/")
         current = mel.eval("getenv MAYA_CUSTOM_TEMPLATE_PATH") or ""
         existing = [p.strip() for p in current.split(";") if p.strip()]
-        if folder_fwd in existing:
-            return
-        merged = ";".join([folder_fwd] + existing)
-        mel.eval(f'putenv "MAYA_CUSTOM_TEMPLATE_PATH" "{merged}"')
-        log.debug("AE templates: %s", folder_fwd)
+        # Only putenv when the folder is new — but ALWAYS set the optionVar
+        # defaults below.  An early return here would skip them whenever the
+        # .mod already put this folder on the path at startup (the normal
+        # installed-module case), leaving the shape AE on the flat editor.
+        if folder_fwd not in existing:
+            merged = ";".join([folder_fwd] + existing)
+            mel.eval(f'putenv "MAYA_CUSTOM_TEMPLATE_PATH" "{merged}"')
+            log.debug("AE templates: %s", folder_fwd)
         # Make the grouped views the DEFAULT for both rigid-body node types.
         # The AE only builds a custom (XML) view when the per-type optionVar
         # names one — otherwise it builds the plain editor, which dumps the
