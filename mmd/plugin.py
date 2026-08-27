@@ -459,7 +459,7 @@ def initializePlugin() -> None:
         # so define the classic MEL AE template (default Multi control).
         try:
             _register_ae_mel_templates()
-        except Exception:  # noqa: BLE001 - MEL proc definition is Maya-only
+        except Exception:
             log.debug("Could not register MEL AE template", exc_info=True)
 
         # Cleanup stale UI elements

@@ -8,11 +8,12 @@
  *
  * The node is a plain data holder: every PMX body field is a storable
  * attribute (no compute() — the solver reads them through its `bodyShapes[]`
- * message array).  The node's TRANSFORM is the body's rest pose — the builder
- * positions the locator at the PMX shape position/rotation — so the user can
- * select and move the guide with the standard Move tool, and the solver reads
- * the rest pose straight from the transform.  The collider is drawn by a draw
- * override registered for `drawdb/geometry/pmxRigidBodyShape` (not here).
+ * message array).  The body's REST pose lives in the `bodyRestTranslate` /
+ * `bodyRestRotate` attributes; the node's DAG parent transform is the viewport
+ * GUIDE — placed at the rest pose by the builder, then DRIVEN by the solver
+ * to the body's CURRENT pose each frame.  The collider is drawn by a
+ * geometry override registered for `drawdb/geometry/pmxRigidBodyShape` (not
+ * here).
  */
 
 #include "rigid_body_shape.hpp"

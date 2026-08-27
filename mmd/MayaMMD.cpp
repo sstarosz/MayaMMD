@@ -97,8 +97,8 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     // 1b. Register the native rigid-body physics node (embedded Bullet).
     //     An MPxLocatorNode that owns a Maya-free Bullet world and steps it on
     //     every time change — this is the MMD secondary-movement engine that
-    //     replaces mayaBullet.  (A draw override for the guide visualization
-    //     is planned but intentionally not added yet.)
+    //     replaces mayaBullet.  (The per-body guide visualization lives on the
+    //     pmxRigidBodyShape nodes' geometry override — see 1b2 below.)
     {
         MString classification(RigidBodyNode::kNodeClassify);
         stat = plugin.registerNode(RigidBodyNode::kNodeName, RigidBodyNode::kTypeId,

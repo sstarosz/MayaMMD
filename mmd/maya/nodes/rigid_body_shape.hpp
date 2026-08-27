@@ -11,8 +11,9 @@
  *   1. a data holder — every PMX body field is a storable attribute (the
  *      solver reads them through its `bodyShapes[]` message array), and
  *   2. the viewport GUIDE — its transform is DRIVEN by the solver each frame
- *      to the body's CURRENT world pose, so the collider (drawn by the draw
- *      override at the guide-local origin) follows the animation: kinematic
+ *      to the body's CURRENT world pose, so the collider (drawn by the
+ *      geometry override at the guide-local origin) follows the animation:
+ *      kinematic
  *      bodies track their bone, dynamic bodies track the simulated pose.
  *      The body's REST pose lives in the `bodyRestTranslate` /
  *      `bodyRestRotate` attributes (world space, PMX-verbatim after the

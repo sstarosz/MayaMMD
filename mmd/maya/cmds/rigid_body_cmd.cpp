@@ -452,8 +452,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // world build) — this is what makes the collider "live on the correct
     // bone".  Dynamic bodies are wired for write-back here too (see the
     // Output wiring block below — the command ALWAYS connects them).  Bodies
-    // display from their rest pose — the draw override draws the collider at
-    // the shape's transform.
+    // display from their rest pose — the geometry override draws the collider
+    // at the guide-local origin (the guide transform is driven to the body's
+    // CURRENT pose by the solver).
     if (kinematic)
     {
         // The anchor world lives on the shape node (bodyAnchorWorld — a
