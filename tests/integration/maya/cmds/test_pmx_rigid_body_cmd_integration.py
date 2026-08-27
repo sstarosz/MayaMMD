@@ -86,7 +86,12 @@ def _shape_at(solver: str, index: int) -> str:
 
 
 def _guide_at(solver: str, index: int) -> str:
-    """The guide transform (the body's rest pose) holding the shape at `index`."""
+    """The guide transform holding the shape at `index`.
+
+    Placed at the body's rest pose by the builder; the solver drives it to
+    the body's CURRENT pose each frame (the rest pose itself lives in the
+    shape's bodyRestTranslate/bodyRestRotate attributes).
+    """
     parents = cmds.listRelatives(_shape_at(solver, index), parent=True) or []
     assert_eq(len(parents), 1, f"shape {index} should have one guide parent")
     return parents[0]

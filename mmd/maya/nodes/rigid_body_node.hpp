@@ -94,10 +94,10 @@ class RigidBodyNode : public MPxLocatorNode
     // Per-body message array: aBodyShapes[i] -> the pmxRigidBodyShape node
     // for PMX body i (PMX order — one selectable/movable locator per body).
     // The solver pulls every body's PMX-verbatim data from the connected
-    // shape node via RigidBodyShape::readBodyDefinition (including its rest
-    // pose, which is the shape's transform — moving the guide in the viewport
-    // therefore changes the sim config and triggers a rebuild).  Unconnected
-    // slots are skipped.
+    // shape node via RigidBodyShape::readBodyDefinition — the REST pose from
+    // the shape's bodyRestTranslate/bodyRestRotate attributes (the guide
+    // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
+    // Unconnected slots are skipped.
     static MObject aBodyShapes;
 
     // Per-joint compound array: aJoints[j].

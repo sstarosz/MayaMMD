@@ -258,8 +258,9 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
 
     # The bodyShapes message array mirrors the PMX rigid bodies (one shape per
     # rigid body, in PMX order — appended by the native pmxRigidBody command;
-    # each pmxRigidBodyShape holds the body data and its guide transform is
-    # the rest pose).
+    # each pmxRigidBodyShape holds the body data, and the body's REST pose is
+    # stored in its bodyRestTranslate/bodyRestRotate attributes — the guide
+    # transform is the CURRENT pose, driven by the solver).
     expected_bodies = len(pmx_data.rigid_bodies)
     assert_true(
         cmds.attributeQuery("bodyShapes", node=solver, exists=True),

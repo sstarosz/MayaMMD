@@ -296,10 +296,10 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
 
 // Read the solver's body list from its bodyShapes[] message array (PMX
 // order — written DENSELY by the builder): each connected pmxRigidBodyShape
-// node provides one BodyDefinition (PMX-verbatim fields; the rest pose comes
-// from the shape node's TRANSFORM, so moving a guide in the viewport changes
-// the sim config).  Unconnected slots are skipped, keeping the body index ==
-// connected-shape order.
+// node provides one BodyDefinition (PMX-verbatim fields; the REST pose comes
+// from the shape's bodyRestTranslate/bodyRestRotate attributes, not the
+// guide transform, which holds the CURRENT pose).  Unconnected slots are
+// skipped, keeping the body index == connected-shape order.
 [[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition> readBodyData(const MObject& node)
 {
     std::vector<RigidBodySimulation::BodyDefinition> out;
