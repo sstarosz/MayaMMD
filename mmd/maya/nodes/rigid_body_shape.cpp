@@ -358,7 +358,7 @@ MBoundingBox RigidBodyShape::boundingBox() const
 {
     // Object-space box around the REST collider (the node's transform is the
     // rest pose, so the collider sits at the local origin).  Used for
-    // viewport framing/culling; the draw override draws the collider.
+    // viewport framing/culling; the geometry override draws the collider.
     MFnDependencyNode fn(thisMObject());
     MStatus stat;
     const MPlug sizePlug = fn.findPlug(aBodyShapeSize, true, &stat);

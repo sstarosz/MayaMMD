@@ -6,9 +6,10 @@
  * RigidBodyShapeGeometryOverride — lit viewport renderer for one
  * pmxRigidBodyShape (see the header for the design summary).
  *
- * The collider's SOLID surface is drawn with the stock k3dBlinn shader so it
- * responds to the viewport lights; the WIRE outline is drawn with
- * MUIDrawManager (as before).  Both are in the guide's LOCAL space (the
+ * The collider's SOLID surface is drawn with the stock OpenPBR surface
+ * shader (k3dIsotropicOpenPBRSurfaceShader) so it responds to the viewport
+ * lights; the WIRE outline is drawn with MUIDrawManager (as before).  Both
+ * are in the guide's LOCAL space (the
  * guide transform is the body's current pose), so the render-item matrix is
  * the identity and the collider follows the animated guide automatically.
  *
@@ -22,8 +23,8 @@
 #include "rigid_body_shape.hpp"
 
 #include <maya/MColor.h>
-#include <maya/MFnDependencyNode.h>
 #include <maya/MFn.h>
+#include <maya/MFnDependencyNode.h>
 #include <maya/MGeometry.h>
 #include <maya/MHWGeometryUtilities.h>
 #include <maya/MPlug.h>
@@ -109,7 +110,7 @@ void buildBox(float hx, float hy, float hz, ColliderMesh& mesh)
     const float zp[3] = {0, 0, 1};
     const float zn[3] = {0, 0, -1};
     const float p[8][3] = {
-        {hx, -hy, -hz}, {hx, hy, -hz}, {hx, hy, hz}, {hx, -hy, hz},
+        {hx, -hy, -hz}, {hx, hy, -hz}, {hx, hy, hz},   {hx, -hy, hz},
         {-hx, -hy, hz}, {-hx, hy, hz}, {-hx, hy, -hz}, {-hx, -hy, -hz},
     };
     pushQuad(mesh, xp, p[0], p[1], p[2], p[3]); // +X
@@ -218,8 +219,8 @@ void buildCollider(short colliderType, const MPoint& size, ColliderMesh& mesh)
     switch (colliderType)
     {
     case RigidBodyShape::kColliderBox:
-        buildBox(static_cast<float>(size.x), static_cast<float>(size.y),
-                 static_cast<float>(size.z), mesh);
+        buildBox(static_cast<float>(size.x), static_cast<float>(size.y), static_cast<float>(size.z),
+                 mesh);
         break;
     case RigidBodyShape::kColliderSphere:
         buildSphere(static_cast<float>(size.x), 12, 16, mesh);
@@ -450,9 +451,8 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
     // Maya's selection colour) regardless of drawMode — like any mesh.
     // Unselected bodies show their group-colour wire only in wire modes.
     const bool selected = isSelected(objPath);
-    const bool drawWire = selected ||
-                          (fState.drawMode == RigidBodyShape::kDrawWire ||
-                           fState.drawMode == RigidBodyShape::kDrawWireSolid);
+    const bool drawWire = selected || (fState.drawMode == RigidBodyShape::kDrawWire ||
+                                       fState.drawMode == RigidBodyShape::kDrawWireSolid);
     if (!drawWire)
         return;
 
@@ -572,7 +572,8 @@ void RigidBodyShapeGeometryOverride::cleanUp()
 // ===========================================================================
 bool RigidBodyShapeGeometryOverride::refineSelectionPath(const MSelectionInfo& /*selectInfo*/,
                                                          const MRenderItem& /*hitItem*/,
-                                                         MDagPath& dagPath, MObject& /*geomComponents*/,
+                                                         MDagPath& dagPath,
+                                                         MObject& /*geomComponents*/,
                                                          MSelectionMask& /*objectMask*/)
 {
     MDagPath shapePath;
@@ -582,8 +583,8 @@ bool RigidBodyShapeGeometryOverride::refineSelectionPath(const MSelectionInfo& /
     return true;
 }
 
-void RigidBodyShapeGeometryOverride::updateSelectionGranularity(
-    const MDagPath& /*dagPath*/, MSelectionContext& selectionContext)
+void RigidBodyShapeGeometryOverride::updateSelectionGranularity(const MDagPath& /*dagPath*/,
+                                                                MSelectionContext& selectionContext)
 {
     selectionContext.setSelectionLevel(MSelectionContext::kObject);
 }

@@ -19,7 +19,7 @@
  *      MMD→Maya flip) — deliberately NOT in the transform, because the
  *      transform is animated.
  *
- * The collider is drawn by a draw override registered for this node's
+ * The collider is drawn by a geometry override registered for this node's
  * classification (`drawdb/geometry/pmxRigidBodyShape`); draw mode
  * (none/wire/solid) is a per-node `drawMode` attribute so bodies can be
  * shown differently.  The node has no compute() — the solver pulls the
@@ -48,7 +48,7 @@ class RigidBodyShape : public MPxLocatorNode
   public:
     static const MTypeId kTypeId;
     static constexpr const char* kNodeName = "pmxRigidBodyShape";
-    // VP2 draw-database classification — the draw override is registered
+    // VP2 draw-database classification — the geometry override is registered
     // under this string.
     static constexpr const char* kNodeClassify = "drawdb/geometry/pmxRigidBodyShape";
 

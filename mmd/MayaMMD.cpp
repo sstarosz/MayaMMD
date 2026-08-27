@@ -123,7 +123,7 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyShape registration failed");
 
     // 1b3. Register the viewport geometry override for the per-body guides —
-    //     renders the collider's SOLID surface lit (stock Blinn) with the
+    //     renders the collider's SOLID surface lit (stock OpenPBR) with the
     //     group colour, plus the wire outline.  (MDrawRegistry, not MFnPlugin
     //     — deregistered separately below.)
     stat = MHWRender::MDrawRegistry::registerGeometryOverrideCreator(
