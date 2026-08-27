@@ -2,9 +2,10 @@
 rigid_body_builder.py — rigid bodies for PMX models.
 
 Creates the ``{model}_RigidBodies`` group and one ``pmxRigidBodyNode`` solver
-per PMX model, then populates the solver's ``bodies`` and ``joints`` arrays
-through the native ``pmxRigidBody`` / ``pmxRigidBodyConstraint`` commands
-(one entry per PMX rigid body / joint, in PMX order).  The solver is
+per PMX model, then creates one ``pmxRigidBodyShape`` locator node per rigid
+body through the native ``pmxRigidBody`` command (one entry per PMX rigid
+body / joint, in PMX order), wired into the solver's ``bodyShapes[]`` message
+array.  The solver is
 time-driven (``time1.outTime``); the node computes the solved joint-local
 poses internally (bone-world write-back) and the command wires them straight
 into the related joints — there is no separate finalize step.  The Bullet
@@ -64,8 +65,8 @@ def _create_rigid_body_solver(
     """Create the ``pmxRigidBodyNode`` solver (a locator shape) and make it time-driven.
 
     The node is an ``MPxLocatorNode``: it owns the Bullet world (``mmd/core``
-    RigidBodySimulation) and will draw its own guide visualization through a C++ draw
-    override (planned).
+    RigidBodySimulation) and drives the per-body ``pmxRigidBodyShape`` guides
+    (each drawn by a C++ geometry override) to their current pose every frame.
 
     Connecting ``time1.outTime`` makes the evaluation manager step the solver
     every frame (the same path as a parentConstraint, so it works under
@@ -95,12 +96,15 @@ def _populate_rigid_bodies(
     Data + bone binding.  Bodies are appended in PMX order so the body index
     matches the PMX rigid-body index that the constraint command references.
     FOLLOW_BONE bodies get their kinematic-anchor INPUT here (the command
-    connects joint.worldMatrix -> bodies[i].bodyAnchorWorld); dynamic bodies
+    connects joint.worldMatrix -> shape.bodyAnchorWorld); dynamic bodies
     with a related joint get their outTranslate/outRotate connected into the
     related joint at creation (the command always wires a dynamic body on a
     bone).  The write-back K offset (jointRestWorld * bodyRestWorld^-1) is
     NOT baked anymore — the node derives it internally from the joints'
-    pmxRest* attributes.
+    pmxRest* attributes.  Each body is a ``pmxRigidBodyShape`` guide: the
+    guide TRANSFORM is driven to the body's CURRENT pose by the solver each
+    frame (so the collider follows the animation), and the REST pose lives in
+    the shape's ``bodyRestTranslate``/``bodyRestRotate`` attributes.
 
     Returns the number of bodies successfully appended — the caller must
     compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every

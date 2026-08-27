@@ -1,1 +1,6 @@
 + MayaMMD @MMD_PROJECT_VERSION@ @CMAKE_INSTALL_PREFIX@
+# ABSOLUTE path on purpose: the module loader only resolves relative paths
+# for Maya's well-known path variables; for custom variables like
+# MAYA_CUSTOM_TEMPLATE_PATH it would set the literal "scripts/AETemplates"
+# (relative to the CWD), which the AE can never find.
+MAYA_CUSTOM_TEMPLATE_PATH += @CMAKE_INSTALL_PREFIX@/scripts/AETemplates

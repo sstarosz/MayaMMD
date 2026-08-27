@@ -179,6 +179,8 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
         mmd/maya/nodes/rigid_body_node.cpp
+        mmd/maya/nodes/rigid_body_shape.cpp
+        mmd/maya/nodes/rigid_body_shape_geometry_override.cpp
     )
     target_include_directories(MayaMMD PRIVATE
         "${CMAKE_BINARY_DIR}/generated"
@@ -245,6 +247,25 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
             COMMENT "Deploying MayaMMD.mll → ${CMAKE_INSTALL_PREFIX}/plug-ins/"
         )
 
+        # AE XML templates → <prefix>/scripts/AETemplates/ (found via
+        # MAYA_CUSTOM_TEMPLATE_PATH in the .mod).  Copied post-build so the
+        # dev install picks them up without an explicit cmake --install.
+        file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates")
+        add_custom_command(TARGET MayaMMD POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyShapeTemplate.xml"
+                "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/AEpmxRigidBodyShapeTemplate.xml"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyNodeTemplate.xml"
+                "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/AEpmxRigidBodyNodeTemplate.xml"
+            COMMENT "Deploying AE templates → ${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/"
+        )
+        install(FILES
+            "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyShapeTemplate.xml"
+            "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyNodeTemplate.xml"
+            DESTINATION "scripts/AETemplates"
+        )
+
         # Generate MayaMMD.mod directly into the install prefix.
         # Module root = CMAKE_INSTALL_PREFIX, so Maya finds plug-ins/
         # automatically — no MAYA_PLUG_IN_PATH or PYTHONPATH override needed.
@@ -263,6 +284,22 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         install(FILES "${CMAKE_BINARY_DIR}/MayaMMD.mod"
             DESTINATION "."
         )
+
+        # Auto-deploy the generated .mod onto Maya's module search path so the
+        # AE template path (and plug-in registration) is picked up without a
+        # manual copy into the Maya modules folder.  Standard per-version
+        # location on Windows: Documents/maya/<version>/modules.
+        if(WIN32 AND DEFINED ENV{USERPROFILE})
+            set(_maya_modules_dir "$ENV{USERPROFILE}/Documents/maya/${MAYA_VERSION}/modules")
+            add_custom_command(TARGET MayaMMD POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${_maya_modules_dir}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${CMAKE_INSTALL_PREFIX}/MayaMMD.mod"
+                    "${_maya_modules_dir}/MayaMMD.mod"
+                COMMENT "Deploying MayaMMD.mod → ${_maya_modules_dir}/"
+            )
+            unset(_maya_modules_dir)
+        endif()
 
         # Keep install(TARGETS) for cmake --install / packaging support
         install(TARGETS MayaMMD
@@ -345,6 +382,14 @@ if(BUILD_PACKAGE)
     # Icons (e.g., the Maya shelf button icon) ship inside mmd/ via
     # build_release.py and are installed together with the mmd package above.
 
+    # Attribute-Editor XML templates → scripts/AETemplates/ (the .mod below
+    # exposes the folder via MAYA_CUSTOM_TEMPLATE_PATH).
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyShapeTemplate.xml"
+        "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyNodeTemplate.xml"
+        DESTINATION "${RELEASE_OUTPUT_DIR}/scripts/AETemplates"
+    )
+
     # Documentation files
     set(_docs README.md LICENSE.txt CHANGELOG.md)
     foreach(_doc ${_docs})
@@ -358,7 +403,9 @@ if(BUILD_PACKAGE)
     # Reuse the version already resolved at configure time.
     set(_pkg_version "${MMD_PROJECT_VERSION}")
 
-    set(MOD_CONTENT "+ MayaMMD ${_pkg_version} MayaMMD\n")
+    # Absolute path for MAYA_CUSTOM_TEMPLATE_PATH (relative paths are not
+    # module-resolved for custom variables — same reason as the dev .mod).
+    set(MOD_CONTENT "+ MayaMMD ${_pkg_version} MayaMMD\nMAYA_CUSTOM_TEMPLATE_PATH += ${RELEASE_OUTPUT_DIR}/scripts/AETemplates\n")
     file(WRITE "${CMAKE_BINARY_DIR}/MayaMMD.mod" "${MOD_CONTENT}")
     install(FILES "${CMAKE_BINARY_DIR}/MayaMMD.mod"
         DESTINATION "${CMAKE_INSTALL_PREFIX}/MayaMMD-Maya${MAYA_VERSION}-${OUTPUT_OS}")

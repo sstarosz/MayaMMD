@@ -256,22 +256,27 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         "root pmxRigidBodyNode attribute should name the solver",
     )
 
-    # The bodies array mirrors the PMX rigid bodies (one body per rigid body,
-    # in PMX order — appended by the native pmxRigidBody command).
+    # The bodyShapes message array mirrors the PMX rigid bodies (one shape per
+    # rigid body, in PMX order — appended by the native pmxRigidBody command;
+    # each pmxRigidBodyShape holds the body data, and the body's REST pose is
+    # stored in its bodyRestTranslate/bodyRestRotate attributes — the guide
+    # transform is the CURRENT pose, driven by the solver).
     expected_bodies = len(pmx_data.rigid_bodies)
     assert_true(
-        cmds.attributeQuery("bodies", node=solver, exists=True),
-        "solver has no bodies attribute",
+        cmds.attributeQuery("bodyShapes", node=solver, exists=True),
+        "solver has no bodyShapes attribute",
     )
     if expected_bodies > 0:
         assert_eq(
-            int(cmds.getAttr(f"{solver}.bodies", size=True)),
+            int(cmds.getAttr(f"{solver}.bodyShapes", size=True)),
             expected_bodies,
-            "bodies count != PMX rigid body count",
+            "bodyShapes count != PMX rigid body count",
         )
         # First body's data mirrors the first PMX rigid body.
         first = pmx_data.rigid_bodies[0]
-        base = f"{solver}.bodies[0]"
+        srcs = cmds.listConnections(f"{solver}.bodyShapes[0]", source=True) or []
+        assert_true(bool(srcs), "bodyShapes[0] has no source shape node")
+        base = srcs[0]
         assert_eq(
             cmds.getAttr(f"{base}.bodyNameLocal"),
             first.name_local,
@@ -283,11 +288,11 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             "first body physics mode",
         )
     else:
-        # Models with no rigid bodies still get the node (empty bodies = no-op).
+        # Models with no rigid bodies still get the node (empty bodyShapes = no-op).
         assert_eq(
-            int(cmds.getAttr(f"{solver}.bodies", size=True) or 0),
+            int(cmds.getAttr(f"{solver}.bodyShapes", size=True) or 0),
             0,
-            "no-body model should have an empty bodies array",
+            "no-body model should have an empty bodyShapes array",
         )
 
     # The joints array mirrors the PMX rigid-body constraints (one joint per
@@ -472,13 +477,20 @@ def test_pmx_physics_wiring(pmx_data: PmxModel, maya_pmx_data):
             continue
         dynamic += 1
         # The body's related joint is connected as a MESSAGE by pmxRigidBody
-        # (bodies[i].bodyJoint -> joint.message) — the node resolves the
+        # (shape.bodyJoint -> joint.message) — the node resolves the
         # write-back parent and the reset anchor from it + the joint DAG, so
         # no per-body wiring inputs exist.
-        joint_srcs = (
-            cmds.listConnections(f"{solver}.bodies[{rb_idx}].bodyJoint", source=True)
+        # listConnections(source=True) on a DAG shape returns its TOP
+        # transform (the guide) — use plugs=True for the actual shape node.
+        shape_plugs = (
+            cmds.listConnections(
+                f"{solver}.bodyShapes[{rb_idx}]", source=True, plugs=True
+            )
             or []
         )
+        assert_true(bool(shape_plugs), f"body {rb_idx} has no connected shape node")
+        shape = str(shape_plugs[0]).split(".")[0]
+        joint_srcs = cmds.listConnections(f"{shape}.bodyJoint", source=True) or []
         # listConnections returns SHORT node names; jpath is a full path.
         short = jpath.rpartition("|")[2]
         assert_true(

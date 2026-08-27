@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Per-body rigid-body viewport guides** — every PMX rigid body now imports
+  as its own selectable `pmxRigidBodyShape` locator node (a TRANSFORM guide
+  holding the locator shape):
+  - Select an individual body's guide in the viewport / Outliner — it is
+    **driven by the solver to the body's CURRENT pose each frame**, so the
+    collider follows the animation: kinematic bodies track their bone,
+    dynamic bodies track the simulated pose, disabled bodies sit at rest.
+  - The body's REST pose lives in the shape's `bodyRestTranslate` /
+    `bodyRestRotate` attributes (editable in the Attribute Editor; the
+    solver rebuilds from them), not on the animated guide transform.
+  - `drawMode` attribute per body (Off / Wire / Solid / Wire+Solid) with a
+    16-colour collision-group palette, kinematic bodies dimmed, disabled
+    bodies greyed, and the selected guide highlighted.
+  - The SOLID surface is rendered **lit** by the viewport lights (the stock
+    OpenPBR surface shader via an `MPxGeometryOverride`, matching the
+    imported meshes' `openPBRSurface` look — replaces the old flat-colour
+    `MUIDrawManager` solid), drawn on top of the character mesh so interior
+    colliders stay visible; the wire outline is unchanged.
+  - Shape type / size / collision group / mask / physics mode are all editable
+    in the Attribute Editor.
+- **Attribute-Editor templates for the rigid-body nodes** — shipped as
+  `AEpmxRigidBodyShapeTemplate.xml` / `AEpmxRigidBodyNodeTemplate.xml` (the
+  documented XML AE-template mechanism), installed into the module's
+  `scripts/AETemplates/`.  The plugin registers that folder on
+  `MAYA_CUSTOM_TEMPLATE_PATH` at load time (computed from the plugin's own
+  location), so the templates work whether the plugin is loaded via
+  `MayaMMD.mod` on `MAYA_MODULE_PATH` or directly via `MAYA_PLUG_IN_PATH` /
+  the shelf.  The generated `MayaMMD.mod` sets `MAYA_CUSTOM_TEMPLATE_PATH`
+  with an ABSOLUTE path (the module loader does not resolve relative paths
+  for custom variables) and the dev build auto-deploys the `.mod` into the
+  Maya modules folder (`Documents/maya/<version>/modules`), so no manual
+  copy is needed.  The body data is shown as the node's primary Attribute-Editor
+  content with proper labels (Local Name, Collision Group, Shape Size, …)
+  instead of one flat "Extra Attributes" list.  The grouped "Body" view
+  (Body / Rest Pose / Physics / Collision Mask / Display) is the default —
+  the plugin pre-sets the per-type view optionVar the AE's Views menu uses,
+  because the AE only builds a custom XML view when a named view is active
+  (otherwise it shows the plain editor with Extra Attributes).  The
+  `pmxRigidBodyNode` solver is editable too: a "Solver" section with
+  `gravity` plus a **Joints** section listing every physics constraint
+  (name, body indices, type, frame, linear/angular limits and springs) with
+  Add/Remove buttons.  Because Maya's XML AE templates cannot render
+  compound-array attributes (a `joints` property builds an empty control
+  with no add button), the solver AE is built with the Python AE framework
+  Maya's own plugins use (`maya.app.flux.ae`, registered at plugin load via
+  `AEpmxRigidBodyNodeTemplate`).  The plugin deliberately clears the
+  `AEpmxRigidBodyNodeCustomView` optionVar (showEditor.mel routes a node to
+  its XML view whenever that optionVar names one, which would bypass the
+  Flux editor entirely); the XML template is kept gravity-only and is only
+  used if the view is picked manually.  The internal arrays/outputs stay
+  hidden in both cases.
+- **`pmxRigidBodyShape` native node** — a C++ `MPxLocatorNode` that carries
+  one PMX body's data (PMX-verbatim fields) and is drawn by a registered
+  `MPxDrawOverride`.
+
+### Changed
+
+- **Rigid-body schema: `bodies[]` compound → `bodyShapes[]` + per-body nodes**
+  (breaking — re-import required).  `pmxRigidBodyNode.bodyShapes[]` is now a
+  message array connected to one `pmxRigidBodyShape` per body; the body's
+  data attributes (which previously lived as `bodies[i].body*` children on
+  the solver) now live on the shape node, and the rest pose lives in the
+  shape's `bodyRestTranslate`/`bodyRestRotate` attributes instead of
+  `bodies[i].bodyRestTranslate`/`bodyRestRotate`.
+- **Guides now follow the simulation** — the solver gained per-body
+  `outGuideTranslate[]`/`outGuideRotate[]` outputs (the body's current world
+  pose in the RigidBodies group's space), and `pmxRigidBody` connects them to
+  the guide transforms, so the collider visualization tracks the animated
+  body instead of sitting at rest.
+
+### Fixed
+
+- **Box colliders were half their MMD size** — the PMX box `shape_size` IS the
+  Bullet half-extent (MMD feeds it verbatim to `btBoxShape`; nanoem /
+  MMDAI / blender_mmd_tools agree), but both the engine (`applyShapeSize`)
+  and the viewport draw override halved it, so every box rigid body drew and
+  collided at half size (jacket / Beg colliders visibly smaller than MMD
+  Editor).  Box `shape_size` is now stored and drawn verbatim (full span =
+  2 × shape_size), matching MMD.
+- **`pmxRigidBody` no longer collapses every body onto index 0** — appending
+  to the solver's message array used `MPlug::numElements()` (always 0 for a
+  non-cached message array), so each `connectOrReplace` overwrote element 0
+  and only the last body survived once the array had never been materialized
+  (e.g. when the solver had no time connection yet).  The next-free index is
+  now derived from `evaluateNumElements()`, which materializes the array's
+  backing store so each body lands on its own element.
+
+---
+
 ## [0.2.0] - 2026-08-14
 
 ### Added

@@ -321,6 +321,108 @@ class MayaMMDCmd(om.MPxCommand):
 # ---------------------------------------------------------------------------
 
 
+def _register_ae_template_path() -> None:
+    """Make the Attribute Editor find the shipped AE XML templates.
+
+    The AE reads ``MAYA_CUSTOM_TEMPLATE_PATH`` (showEditor.mel: templateDirs)
+    every time it builds a node's editor, so appending the templates folder
+    at plugin load works even when ``MayaMMD.mod`` is not on
+    ``MAYA_MODULE_PATH`` (e.g. the plugin was loaded via
+    ``MAYA_PLUG_IN_PATH`` or the shelf).  Candidate folders, in order:
+
+      1. relative to the loaded .mll  → ``<module>/scripts/AETemplates``
+      2. dev-from-source fallback     → ``<repo>/scripts/ae``
+    """
+    candidates: list[str] = []
+    try:
+        mll = cmds.pluginInfo(PLUGIN_NAME, query=True, path=True)
+        if mll:
+            candidates.append(
+                os.path.normpath(
+                    os.path.join(os.path.dirname(mll), "..", "scripts", "AETemplates")
+                )
+            )
+    except Exception:  # noqa: BLE001, S110 - pluginInfo may be unavailable headless
+        pass
+    candidates.append(
+        os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "scripts", "ae"))
+    )
+
+    for folder in candidates:
+        if not os.path.isdir(folder):
+            continue
+        # mel putenv / getenv use the process env; forward slashes avoid MEL
+        # backslash escaping in the putenv value.
+        folder_fwd = folder.replace("\\", "/")
+        current = mel.eval("getenv MAYA_CUSTOM_TEMPLATE_PATH") or ""
+        existing = [p.strip() for p in current.split(";") if p.strip()]
+        # Only putenv when the folder is new — but ALWAYS set the optionVar
+        # defaults below.  An early return here would skip them whenever the
+        # .mod already put this folder on the path at startup (the normal
+        # installed-module case), leaving the shape AE on the flat editor.
+        if folder_fwd not in existing:
+            merged = ";".join([folder_fwd] + existing)
+            mel.eval(f'putenv "MAYA_CUSTOM_TEMPLATE_PATH" "{merged}"')
+            log.debug("AE templates: %s", folder_fwd)
+        # Make the grouped views the DEFAULT for both rigid-body node types.
+        # The AE only builds a custom (XML) view when the per-type optionVar
+        # names one — otherwise it builds the plain editor, which dumps the
+        # attributes under "Extra Attributes".  Same optionVar the AE's Views
+        # menu writes when the user picks a view.
+        try:
+            # Shape node: the grouped "Body" XML view stays the default.
+            mel.eval('optionVar -sv AEpmxRigidBodyShapeCustomView "Body"')
+            # Solver node: deliberately NO XML-view optionVar.  A named view
+            # routes the AE to the (gravity-only) XML template, bypassing
+            # createEditor — but the joints editor is the MEL template, which
+            # the AE only invokes through createEditor when no custom view is
+            # active.  Clear the legacy "Solver" value so the MEL template is
+            # used.
+            if mel.eval("optionVar -q AEpmxRigidBodyNodeCustomView") == "Solver":
+                mel.eval("optionVar -rm AEpmxRigidBodyNodeCustomView")
+        except Exception:
+            log.debug("Could not set default AE views", exc_info=True)
+        return
+    log.debug("No AE template folder found")
+
+
+# Classic MEL Attribute-Editor template for the solver node.  Maya's XML AE
+# templates cannot render the ``joints`` compound-array (an empty control
+# with no add button), so this node uses the standard MEL template instead:
+# ``editorTemplate -addControl "joints"`` builds the DEFAULT control for the
+# attribute, which for an array of compounds is a proper Multi (add/remove,
+# expandable children) — no custom widget, and no reliance on Maya's
+# internal Flux AE framework (whose custom-control layout overlapped the
+# Extra Attributes section).  ``gravity`` gets its standard vector control.
+# The proc is only invoked when the plugin clears the
+# ``AEpmxRigidBodyNodeCustomView`` optionVar, so the AE takes the
+# ``createEditor`` path (a named view would route it to the XML template
+# instead).
+_AE_SOLVER_TEMPLATE_MEL = """\
+global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
+    editorTemplate -beginScrollLayout;
+    editorTemplate -suppress "bodyShapes";
+    editorTemplate -suppress "outTranslate";
+    editorTemplate -suppress "outRotate";
+    editorTemplate -suppress "outGuideTranslate";
+    editorTemplate -suppress "outGuideRotate";
+    editorTemplate -beginLayout "Solver" -collapse 0;
+        editorTemplate -addControl "gravity";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Joints" -collapse 0;
+        editorTemplate -addControl "joints";
+    editorTemplate -endLayout;
+    editorTemplate -addExtraControls;
+    editorTemplate -endScrollLayout;
+}
+"""
+
+
+def _register_ae_mel_templates() -> None:
+    """Define the solver's MEL AE template (the ``joints`` Multi editor)."""
+    mel.eval(_AE_SOLVER_TEMPLATE_MEL)
+
+
 def initializePlugin() -> None:
     """Called by C++ .mll's initializePlugin after native C++ registration.
 
@@ -347,6 +449,21 @@ def initializePlugin() -> None:
                 loaded,
                 len(_MMD_MODULES),
             )
+
+        # Attribute-Editor XML templates: make Maya find them no matter how
+        # the plugin was loaded (module, MAYA_PLUG_IN_PATH or shelf), and
+        # make the grouped "Body" view the default (see the function).
+        try:
+            _register_ae_template_path()
+        except Exception:
+            log.debug("Could not set MAYA_CUSTOM_TEMPLATE_PATH", exc_info=True)
+
+        # Solver node: XML AE templates can't render the joints compound-array,
+        # so define the classic MEL AE template (default Multi control).
+        try:
+            _register_ae_mel_templates()
+        except Exception:
+            log.debug("Could not register MEL AE template", exc_info=True)
 
         # Cleanup stale UI elements
         if cmds.menu("MayaMMDMenu", exists=True):

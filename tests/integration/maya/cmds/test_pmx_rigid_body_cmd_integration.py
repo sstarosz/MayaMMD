@@ -9,8 +9,10 @@ Tests cover (the "add a body and configure it on addition" contract):
 
 - Auto-append body index (0, 1, 2 ...) and stored body DATA (names, mass,
   damping, friction, restitution, group, mask, shape, physics mode, rest pose,
-  PMX shape_size verbatim).
-- FOLLOW_BONE + bone -> kinematic anchor binding (bodies[i].bodyAnchorWorld
+  PMX shape_size verbatim) — each body lives on its own ``pmxRigidBodyShape``
+  node (shape.aSolver -> solver.bodyShapes[i]), whose DAG parent transform
+  holds the rest pose.
+- FOLLOW_BONE + bone -> kinematic anchor binding (shape.bodyAnchorWorld
   fed by the joint's worldMatrix; the body<->bone offset K is DERIVED by the
   node from the joints' pmxRest* attributes).
 - PHYSICS / PHYSICS_BONE on a bone -> write-back wired AT CREATION: a dynamic
@@ -71,6 +73,30 @@ def _make_physics_scene():
     return group, solver, joint_a, joint_b
 
 
+def _shape_at(solver: str, index: int) -> str:
+    """The pmxRigidBodyShape node connected to solver.bodyShapes[index]."""
+    # listConnections(source=True) on a DAG shape returns its TOP transform
+    # (the guide) — use plugs=True to resolve the actual shape node.
+    plugs = (
+        cmds.listConnections(f"{solver}.bodyShapes[{index}]", source=True, plugs=True)
+        or []
+    )
+    assert_eq(len(plugs), 1, f"bodyShapes[{index}] should have one source ({plugs})")
+    return str(plugs[0]).split(".")[0]
+
+
+def _guide_at(solver: str, index: int) -> str:
+    """The guide transform holding the shape at `index`.
+
+    Placed at the body's rest pose by the builder; the solver drives it to
+    the body's CURRENT pose each frame (the rest pose itself lives in the
+    shape's bodyRestTranslate/bodyRestRotate attributes).
+    """
+    parents = cmds.listRelatives(_shape_at(solver, index), parent=True) or []
+    assert_eq(len(parents), 1, f"shape {index} should have one guide parent")
+    return parents[0]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Cases
 # ─────────────────────────────────────────────────────────────────────────
@@ -97,9 +123,11 @@ def test_append_body_data():
         physicsMode="followBone",
     )
     assert_eq(idx, 0, f"first body index != 0 ({idx})")
-    assert_eq(int(cmds.getAttr(f"{solver}.bodies", size=True)), 1, "bodies count != 1")
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodyShapes", size=True)), 1, "body count != 1"
+    )
 
-    base = f"{solver}.bodies[0]"
+    base = _shape_at(solver, 0)
     assert_eq(cmds.getAttr(f"{base}.bodyNameLocal"), "BodyA", "bodyNameLocal")
     assert_eq(
         cmds.getAttr(f"{base}.bodyNameUniversal"), "BodyA_univ", "bodyNameUniversal"
@@ -140,15 +168,35 @@ def test_append_body_data():
         approx_equal_tuple(cmds.getAttr(f"{base}.bodyShapeSize")[0], (1.0, 2.0, 3.0)),
         f"bodyShapeSize != size {cmds.getAttr(f'{base}.bodyShapeSize')}",
     )
-    # Rest pose stored in world space: the group is at the origin, so the MMD
-    # position (Z-flip of 0 == 0) lands directly in world space.
+    # Rest pose stored in world space on the SHAPE's bodyRestTranslate: the
+    # group is at the origin, so the MMD position (Z-flip of 0 == 0) lands
+    # directly in world space.
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{base}.bodyRestTranslate")[0], (0.5, 0.0, 0.0)
+            cmds.getAttr(f"{_shape_at(solver, 0)}.bodyRestTranslate")[0],
+            (0.5, 0.0, 0.0),
         ),
-        f"bodyRestTranslate != (0.5, 0, 0) {cmds.getAttr(f'{base}.bodyRestTranslate')}",
+        "bodyRestTranslate != (0.5, 0, 0)",
     )
-    print("✓ append body stores data at index 0")
+    # The guide transform is DRIVEN to the body's current pose: the solver's
+    # outGuideTranslate[0] / outGuideRotate[0] feed the guide's translate /
+    # rotate (so the collider follows the animation).
+    guide = _guide_at(solver, 0)
+    gt_dests = (
+        cmds.listConnections(f"{solver}.outGuideTranslate[0]", destination=True) or []
+    )
+    gr_dests = (
+        cmds.listConnections(f"{solver}.outGuideRotate[0]", destination=True) or []
+    )
+    assert_true(
+        any(guide in str(d) for d in gt_dests),
+        f"guide translate not driven by outGuideTranslate[0] ({gt_dests})",
+    )
+    assert_true(
+        any(guide in str(d) for d in gr_dests),
+        f"guide rotate not driven by outGuideRotate[0] ({gr_dests})",
+    )
+    print("✓ append body stores data at index 0 (+ guide driven by the solver)")
     return True
 
 
@@ -168,15 +216,16 @@ def test_follow_bone_binds_anchor():
     )
     assert_eq(idx, 0, "index != 0")
 
-    # The anchor world is a MATRIX CHILD of the body compound
-    # (bodies[0].bodyAnchorWorld), fed by the joint's worldMatrix[0]
+    # The anchor world is a MATRIX attribute on the body's shape node
+    # (shape.bodyAnchorWorld), fed by the joint's worldMatrix[0]
     # (listConnections returns the source NODE name).
     srcs = (
-        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+        cmds.listConnections(f"{_shape_at(solver, 0)}.bodyAnchorWorld", source=True)
+        or []
     )
     assert_true(
         any(joint_a in src for src in srcs),
-        f"bodies[0].bodyAnchorWorld not fed by joint ({srcs})",
+        f"shape[0].bodyAnchorWorld not fed by joint ({srcs})",
     )
     # The body<->bone offset K is DERIVED by the node from the joints'
     # pmxRest* attributes — the command stores no offset input.
@@ -197,18 +246,17 @@ def test_no_bone_body_has_no_write_back():
         physicsMode="physics",
     )
     assert_eq(idx, 0, "index != 0")
+    base = _shape_at(solver, 0)
+    assert_eq(int(cmds.getAttr(f"{base}.bodyPhysicsMode")), MODE_PHYSICS, "mode")
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[0].bodyPhysicsMode")), MODE_PHYSICS, "mode"
-    )
-    assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[0].bodyColliderType")),
+        int(cmds.getAttr(f"{base}.bodyColliderType")),
         COLLIDER_CAPSULE,
         "type",
     )
 
     # No anchor connection, and no joint to connect to -> no write-back wiring.
     assert_eq(
-        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or [],
+        cmds.listConnections(f"{base}.bodyAnchorWorld", source=True) or [],
         [],
         "no anchor connection for a no-bone body",
     )
@@ -234,17 +282,16 @@ def test_static_collider_no_bone():
         physicsMode="followBone",
     )
     assert_eq(idx, 0, "index != 0")
-    # Pinned anchor: no incoming connection on bodies[0].bodyAnchorWorld.
-    srcs = (
-        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
-    )
+    base = _shape_at(solver, 0)
+    # Pinned anchor: no incoming connection on shape.bodyAnchorWorld.
+    srcs = cmds.listConnections(f"{base}.bodyAnchorWorld", source=True) or []
     assert_true(
         not srcs, f"static collider anchor should be pinned, got sources {srcs}"
     )
     # The pinned world matrix holds the body's rest pose in world space:
     # translation = the Z-flipped position (2, 0, 0), not a round-tripped
     # decomposition (which would drop group scale).
-    pinned = cmds.getAttr(f"{solver}.bodies[0].bodyAnchorWorld")
+    pinned = cmds.getAttr(f"{base}.bodyAnchorWorld")
     assert_true(pinned is not None and len(pinned) == 16, "pinned anchor not set")
     assert_true(
         approx_equal_tuple(pinned[12:15], (2.0, 0.0, 0.0)),
@@ -262,7 +309,9 @@ def test_auto_increment_indices():
     idx1 = cmds.pmxRigidBody(solver, name="B1", bone=joint_a, physicsMode="physics")
     idx2 = cmds.pmxRigidBody(solver, name="B2", bone=joint_a, physicsMode="followBone")
     assert_eq((idx0, idx1, idx2), (0, 1, 2), "indices not 0,1,2")
-    assert_eq(int(cmds.getAttr(f"{solver}.bodies", size=True)), 3, "bodies count != 3")
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.bodyShapes", size=True)), 3, "body count != 3"
+    )
 
     # Explicit index equal to the next free index is accepted.
     idx3 = cmds.pmxRigidBody(solver, index=3, name="B3", physicsMode="physics")
@@ -291,7 +340,7 @@ def test_clamp01():
         restitution=-0.2,
         physicsMode="physics",
     )
-    base = f"{solver}.bodies[0]"
+    base = _shape_at(solver, 0)
     assert_eq(
         float(cmds.getAttr(f"{base}.bodyLinearDamping")),
         1.0,
@@ -319,7 +368,7 @@ def test_invalid_shape_rejected():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies", size=True)),
+        int(cmds.getAttr(f"{solver}.bodyShapes", size=True)),
         0,
         "no body should be appended",
     )
@@ -336,7 +385,7 @@ def test_invalid_physics_mode_rejected():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies", size=True)),
+        int(cmds.getAttr(f"{solver}.bodyShapes", size=True)),
         0,
         "no body should be appended",
     )
@@ -360,7 +409,7 @@ def test_model_root_resolution():
     )
     assert_eq(idx, 0, "index via model root != 0")
     assert_eq(
-        cmds.getAttr(f"{solver}.bodies[0].bodyNameLocal"),
+        cmds.getAttr(f"{_shape_at(solver, 0)}.bodyNameLocal"),
         "ViaRoot",
         "name via model root",
     )
@@ -372,11 +421,13 @@ def test_enum_fields_exposed():
     """The enum attributes expose their fields through attributeQuery."""
     _group, solver, _ja, _jb = _make_physics_scene()
 
-    fields_collider = cmds.attributeQuery(
-        "bodyColliderType", node=solver, listEnum=True
-    )
-    fields_mode = cmds.attributeQuery("bodyPhysicsMode", node=solver, listEnum=True)
-    fields_group = cmds.attributeQuery("bodyGroupId", node=solver, listEnum=True)
+    # The enum attributes live on the per-body SHAPE node (not the solver).
+    cmds.pmxRigidBody(solver, name="Enum", physicsMode="physics")
+    shape = _shape_at(solver, 0)
+    fields_collider = cmds.attributeQuery("bodyColliderType", node=shape, listEnum=True)
+    fields_mode = cmds.attributeQuery("bodyPhysicsMode", node=shape, listEnum=True)
+    fields_group = cmds.attributeQuery("bodyGroupId", node=shape, listEnum=True)
+    fields_draw = cmds.attributeQuery("drawMode", node=shape, listEnum=True)
     assert_true(
         fields_collider
         and "Box" in fields_collider[0]
@@ -395,8 +446,16 @@ def test_enum_fields_exposed():
         fields_group and "Group 0" in fields_group[0] and "Group 15" in fields_group[0],
         f"bodyGroupId fields missing {fields_group}",
     )
+    assert_true(
+        fields_draw
+        and "Off" in fields_draw[0]
+        and "Wire" in fields_draw[0]
+        and "Solid" in fields_draw[0]
+        and "WireSolid" in fields_draw[0],
+        f"drawMode fields missing {fields_draw}",
+    )
     print(
-        "✓ enum fields exposed (Box/Sphere/Capsule, FollowBone/Physics/PhysicsBone, Group 0..15)"
+        "✓ enum fields exposed (Box/Sphere/Capsule, FollowBone/Physics/PhysicsBone, Group 0..15, drawMode)"
     )
     return True
 
@@ -406,31 +465,32 @@ def test_body_mask_group_toggles():
     _group, solver, _ja, _jb = _make_physics_scene()
 
     cmds.pmxRigidBody(solver, name="Toggled", physicsMode="physics")
+    base = _shape_at(solver, 0)
 
     # Default: every group enabled (matches the legacy 0xFFFF mask).
     for g in range(16):
         assert_eq(
-            bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup{g}")),
+            bool(cmds.getAttr(f"{base}.bodyMaskGroup{g}")),
             True,
             f"bodyMaskGroup{g} default != True",
         )
 
     # Each toggle is independent — disabling one leaves the others alone.
-    cmds.setAttr(f"{solver}.bodies[0].bodyMaskGroup3", False)
-    cmds.setAttr(f"{solver}.bodies[0].bodyMaskGroup11", False)
+    cmds.setAttr(f"{base}.bodyMaskGroup3", False)
+    cmds.setAttr(f"{base}.bodyMaskGroup11", False)
     assert_eq(
-        bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup3")),
+        bool(cmds.getAttr(f"{base}.bodyMaskGroup3")),
         False,
         "group 3 not off",
     )
     assert_eq(
-        bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup11")),
+        bool(cmds.getAttr(f"{base}.bodyMaskGroup11")),
         False,
         "group 11 not off",
     )
     for g in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15):
         assert_eq(
-            bool(cmds.getAttr(f"{solver}.bodies[0].bodyMaskGroup{g}")),
+            bool(cmds.getAttr(f"{base}.bodyMaskGroup{g}")),
             True,
             f"group {g} unexpectedly off",
         )
@@ -450,8 +510,8 @@ def test_related_joint_connected():
 
     idx = cmds.pmxRigidBody(solver, name="Wired", bone=joint_a, physicsMode="physics")
     assert_eq(idx, 0, "index != 0")
-    base = f"{solver}.bodies[0]"
-    # The related joint's message plug is the source of bodies[0].bodyJoint.
+    base = _shape_at(solver, 0)
+    # The related joint's message plug is the source of shape.bodyJoint.
     srcs = cmds.listConnections(f"{base}.bodyJoint", source=True) or []
     assert_true(
         bool(srcs) and joint_a in srcs, f"bodyJoint not connected to {joint_a} ({srcs})"
@@ -460,7 +520,7 @@ def test_related_joint_connected():
     idx2 = cmds.pmxRigidBody(solver, name="NoBone", physicsMode="physics")
     assert_eq(idx2, 1, "index != 1")
     assert_eq(
-        cmds.listConnections(f"{solver}.bodies[1].bodyJoint", source=True) or [],
+        cmds.listConnections(f"{_shape_at(solver, 1)}.bodyJoint", source=True) or [],
         [],
         "no-bone bodyJoint must be unconnected",
     )
@@ -527,11 +587,12 @@ def test_dynamic_body_anchor_untouched():
         position=(0.0, 2.0, 0.0),
         physicsMode="physics",
     )
-    # No anchor connection for a dynamic body — its bodyAnchorWorld child
+    # No anchor connection for a dynamic body — its bodyAnchorWorld attribute
     # stays at the identity default.  The write-back K offset is no longer
     # baked anywhere: the node derives it from the joints' pmxRest* attrs.
     srcs = (
-        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+        cmds.listConnections(f"{_shape_at(solver, 0)}.bodyAnchorWorld", source=True)
+        or []
     )
     assert_true(not srcs, f"dynamic body must not have an anchor input ({srcs})")
     print("✓ dynamic body leaves bodyAnchorWorld untouched (K derived by node)")
@@ -561,19 +622,19 @@ def test_shape_size_verbatim_per_collider():
     )
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{solver}.bodies[0].bodyShapeSize")[0], (1.0, 2.0, 3.0)
+            cmds.getAttr(f"{_shape_at(solver, 0)}.bodyShapeSize")[0], (1.0, 2.0, 3.0)
         ),
         "box shapeSize not verbatim",
     )
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{solver}.bodies[1].bodyShapeSize")[0], (0.4, 0.0, 0.0)
+            cmds.getAttr(f"{_shape_at(solver, 1)}.bodyShapeSize")[0], (0.4, 0.0, 0.0)
         ),
         "sphere shapeSize not verbatim",
     )
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{solver}.bodies[2].bodyShapeSize")[0], (0.3, 2.0, 0.0)
+            cmds.getAttr(f"{_shape_at(solver, 2)}.bodyShapeSize")[0], (0.3, 2.0, 0.0)
         ),
         "capsule shapeSize not verbatim",
     )
@@ -593,15 +654,15 @@ def test_rest_pose_conversion():
         rotation=(1.5707963267948966, 0.0, 0.0),  # pi/2
         physicsMode="physics",
     )
-    base = f"{solver}.bodies[0]"
+    shape = _shape_at(solver, 0)
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{base}.bodyRestTranslate")[0], (1.0, 2.0, -3.0)
+            cmds.getAttr(f"{shape}.bodyRestTranslate")[0], (1.0, 2.0, -3.0)
         ),
-        f"bodyRestTranslate Z-flip wrong {cmds.getAttr(f'{base}.bodyRestTranslate')}",
+        f"bodyRestTranslate Z-flip wrong {cmds.getAttr(f'{shape}.bodyRestTranslate')}",
     )
     # pi/2 rad -> 90 deg, negated on X (handedness flip).
-    rest_rot = cmds.getAttr(f"{base}.bodyRestRotate")[0]
+    rest_rot = cmds.getAttr(f"{shape}.bodyRestRotate")[0]
     assert_true(
         approx_equal_tuple(rest_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
         f"bodyRestRotate handedness flip wrong {rest_rot}",
@@ -621,27 +682,27 @@ def test_kinematic_anchor_ordering():
     cmds.pmxRigidBody(solver, name="Kin3", bone=joint_b, physicsMode="followBone")
 
     # Two kinematic bodies -> two bodyAnchorWorld inputs, one per FOLLOW_BONE
-    # body (bodies[1] from joint_a, bodies[3] from joint_b); the dynamic
+    # body (shape[1] from joint_a, shape[3] from joint_b); the dynamic
     # bodies in between stay unconnected.
     for body_idx, joint in ((1, joint_a), (3, joint_b)):
         srcs = (
             cmds.listConnections(
-                f"{solver}.bodies[{body_idx}].bodyAnchorWorld", source=True
+                f"{_shape_at(solver, body_idx)}.bodyAnchorWorld", source=True
             )
             or []
         )
         assert_true(
             any(joint in src for src in srcs),
-            f"bodies[{body_idx}].bodyAnchorWorld not fed by {joint} ({srcs})",
+            f"shape[{body_idx}].bodyAnchorWorld not fed by {joint} ({srcs})",
         )
     for body_idx in (0, 2):
         assert_eq(
             cmds.listConnections(
-                f"{solver}.bodies[{body_idx}].bodyAnchorWorld", source=True
+                f"{_shape_at(solver, body_idx)}.bodyAnchorWorld", source=True
             )
             or [],
             [],
-            f"dynamic bodies[{body_idx}] must have no anchor input",
+            f"dynamic shape[{body_idx}] must have no anchor input",
         )
     print("✓ bodyAnchorWorld inputs per FOLLOW_BONE body; dynamic bodies untouched")
     return True
@@ -658,11 +719,12 @@ def test_numeric_bone_index():
     assert_eq(idx, 0, "index != 0")
     # Anchor fed by the joint that carries pmxBoneIndex == 7.
     srcs = (
-        cmds.listConnections(f"{solver}.bodies[0].bodyAnchorWorld", source=True) or []
+        cmds.listConnections(f"{_shape_at(solver, 0)}.bodyAnchorWorld", source=True)
+        or []
     )
     assert_true(
         any(joint_a in src for src in srcs),
-        f"bodies[0].bodyAnchorWorld not fed by the pmxBoneIndex=7 joint ({srcs})",
+        f"shape[0].bodyAnchorWorld not fed by the pmxBoneIndex=7 joint ({srcs})",
     )
     print("✓ -bone <pmxBoneIdx> resolves the related joint")
     return True
@@ -683,7 +745,7 @@ def test_query_edit_rejected():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies", size=True) or 0),
+        int(cmds.getAttr(f"{solver}.bodyShapes", size=True) or 0),
         0,
         "rejected query/edit should not create a body",
     )
@@ -725,9 +787,11 @@ def test_group_clamped():
     # Out-of-range values clamp to the enum bounds instead of writing garbage.
     cmds.pmxRigidBody(solver, name="Low", group=-5, physicsMode="physics")
     cmds.pmxRigidBody(solver, name="High", group=99, physicsMode="physics")
-    assert_eq(int(cmds.getAttr(f"{solver}.bodies[0].bodyGroupId")), 0, "group<0 -> 0")
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[1].bodyGroupId")), 15, "group>15 -> 15"
+        int(cmds.getAttr(f"{_shape_at(solver, 0)}.bodyGroupId")), 0, "group<0 -> 0"
+    )
+    assert_eq(
+        int(cmds.getAttr(f"{_shape_at(solver, 1)}.bodyGroupId")), 15, "group>15 -> 15"
     )
     print("✓ -group clamped to 0..15")
     return True
@@ -738,7 +802,7 @@ def test_defaults_applied():
     _group, solver, _ja, _jb = _make_physics_scene()
 
     cmds.pmxRigidBody(solver)
-    base = f"{solver}.bodies[0]"
+    base = _shape_at(solver, 0)
     # String defaults: sphere / physics (the -sh / -pm defaults in doCreate).
     assert_eq(
         int(cmds.getAttr(f"{base}.bodyColliderType")),
@@ -776,11 +840,11 @@ def test_defaults_applied():
         approx_equal_tuple(
             cmds.getAttr(f"{base}.bodyRestTranslate")[0], (0.0, 0.0, 0.0)
         ),
-        "default rest translate != (0,0,0)",
+        "default bodyRestTranslate != (0,0,0)",
     )
     assert_true(
         approx_equal_tuple(cmds.getAttr(f"{base}.bodyRestRotate")[0], (0.0, 0.0, 0.0)),
-        "default rest rotate != (0,0,0)",
+        "default bodyRestRotate != (0,0,0)",
     )
     # Default mask = 0xFFFF (collide with every group).
     for g in range(16):
@@ -802,22 +866,22 @@ def test_enum_strings_case_insensitive():
         solver, name="Jumbled", shape="CaPsUlE", physicsMode="PhysicsBone"
     )
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[0].bodyColliderType")),
+        int(cmds.getAttr(f"{_shape_at(solver, 0)}.bodyColliderType")),
         COLLIDER_BOX,
         "shape 'BOX' -> box",
     )
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[0].bodyPhysicsMode")),
+        int(cmds.getAttr(f"{_shape_at(solver, 0)}.bodyPhysicsMode")),
         MODE_FOLLOW_BONE,
         "mode 'FollowBone' -> followBone",
     )
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[1].bodyColliderType")),
+        int(cmds.getAttr(f"{_shape_at(solver, 1)}.bodyColliderType")),
         COLLIDER_CAPSULE,
         "shape 'CaPsUlE' -> capsule",
     )
     assert_eq(
-        int(cmds.getAttr(f"{solver}.bodies[1].bodyPhysicsMode")),
+        int(cmds.getAttr(f"{_shape_at(solver, 1)}.bodyPhysicsMode")),
         MODE_PHYSICS_BONE,
         "mode 'PhysicsBone' -> physicsBone",
     )
@@ -852,7 +916,7 @@ def test_bone_index_no_match_no_wiring():
 
     idx = cmds.pmxRigidBody(solver, name="Ghost", bone="999", physicsMode="physics")
     assert_eq(idx, 0, "index != 0")
-    base = f"{solver}.bodies[0]"
+    base = _shape_at(solver, 0)
     assert_eq(
         cmds.listConnections(f"{base}.bodyJoint", source=True) or [],
         [],

@@ -27,6 +27,9 @@ _version.py
 #Test logs
 test-logs/
 
+#Scratch — local notes, probes, experiments (never committed)
+scratch/
+
 #Cpp / CMake
 /out/
 .vs/

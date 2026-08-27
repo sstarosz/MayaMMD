@@ -29,7 +29,6 @@
 #include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
-#include <array>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -92,48 +91,14 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aTime;
     static MObject aGravity;
 
-    // Per-body compound array: aBodies[i] — children are declared to mirror
-    // the PMX rigid_bodies.json fields; aBodyEnabled (a Maya-only custom
-    // attribute) sits first.
-    static MObject aBodies;
-    static MObject aBodyEnabled;       // bool (custom) — disabled bodies are skipped by buildWorld
-    static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
-    static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none
-    static MObject aBodyGroupId;       // enum — PMX group_id 0..15 ("Group 0".."Group 15")
-    // THE collision mask — one bool per collision group (0..15), True = the
-    // body collides with that group.  This is the PMX non_collision_group
-    // field stored VERBATIM (bit i set = collides with group i — MMD feeds it
-    // to Bullet directly, no inversion); the node uses it exactly as read.
-    // Declared as std::array so the attribute loops can use bounds-checked
-    // .at() (the cppcoreguidelines constant-array-index check rejects `[]`
-    // with a loop counter on a C array).
-    static std::array<MObject, 16> aBodyMaskGroup;
-    static MObject aBodyColliderType; // enum — PMX shape (kColliderBox/Sphere/Capsule)
-    // PMX shape_size VERBATIM (3 doubles, full size).  The node derives the
-    // engine's radius / box half-extents / capsule length by collider type
-    // (mmd::core::applyShapeSize) in readBodyData.
-    static MObject aBodyShapeSize;      // float3 — PMX shape_size verbatim
-    static MObject aBodyRestTranslate;  // float3 — PMX shape_position (rest, world space)
-    static MObject aBodyRestRotate;     // float3 — PMX shape_rotation (degrees)
-    static MObject aBodyMass;           // double — PMX mass
-    static MObject aBodyLinearDamping;  // double — PMX move_attenuation
-    static MObject aBodyAngularDamping; // double — PMX rotation_damping
-    static MObject aBodyRestitution;    // double — PMX repulsion
-    static MObject aBodyFriction;       // double — PMX friction_force
-    static MObject aBodyPhysicsMode;    // enum — PMX physics_mode (PhysicsMode)
-    static MObject aBodyJoint;          // message child — the body's related joint (its
-                                        // bone); the node resolves the bone index + the
-                                        // hierarchy from it + the joint DAG.  Unconnected
-                                        // = a static collider (no write-back).
-    // The body's kinematic-anchor INPUT — a MATRIX child of the body compound
-    // (the parentConstraint target[i].targetParentMatrix pattern).
-    // pmxRigidBody connects joint.worldMatrix[0] into it for every FOLLOW_BONE
-    // body with a related joint, so each body declares the bone world it
-    // follows; a boneless FOLLOW_BONE body pins its own rest world instead.
-    // The node applies the body<->joint rest offset (K^-1) on top.  The
-    // Bullet world runs in WORLD space, so the solver's own location never
-    // matters.  Unconnected = identity (dynamic bodies never read it).
-    static MObject aBodyAnchorWorld;
+    // Per-body message array: aBodyShapes[i] -> the pmxRigidBodyShape node
+    // for PMX body i (PMX order — one selectable/movable locator per body).
+    // The solver pulls every body's PMX-verbatim data from the connected
+    // shape node via RigidBodyShape::readBodyDefinition — the REST pose from
+    // the shape's bodyRestTranslate/bodyRestRotate attributes (the guide
+    // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
+    // Unconnected slots are skipped.
+    static MObject aBodyShapes;
 
     // Per-joint compound array: aJoints[j].
     static MObject aJoints;
@@ -165,6 +130,21 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aOutRotateX; // kAngle child
     static MObject aOutRotateY; // kAngle child
     static MObject aOutRotateZ; // kAngle child
+
+    // Guide outputs: each body's CURRENT world pose (in the RigidBodies
+    // group's space) — written for EVERY body index.  The pmxRigidBody
+    // command connects them to the per-body guide transforms, so the guide
+    // (and its collider) follows the animation.  Same unit-typed compound
+    // pattern as outTranslate/outRotate, so the connections to the guide's
+    // translate/rotate are direct.
+    static MObject aOutGuideTranslate;
+    static MObject aOutGuideTranslateX; // kDistance child
+    static MObject aOutGuideTranslateY; // kDistance child
+    static MObject aOutGuideTranslateZ; // kDistance child
+    static MObject aOutGuideRotate;
+    static MObject aOutGuideRotateX; // kAngle child
+    static MObject aOutGuideRotateY; // kAngle child
+    static MObject aOutGuideRotateZ; // kAngle child
 
     // The full per-node simulation state: the Bullet world plus the config,
     // wiring, and derived write-back offsets it was built with, bundled and
@@ -198,6 +178,11 @@ class RigidBodyNode : public MPxLocatorNode
         // solved bone world as a joint-local pose.  Invalid for bodies with no
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
+        // The RigidBodies group's inclusive matrix (the solver's DAG parent —
+        // also the parent of every per-body guide transform).  The guide
+        // outputs express each body's WORLD pose in this space, so the driven
+        // guide lands where the body actually is even if the group was moved.
+        MMatrix groupWorld;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };

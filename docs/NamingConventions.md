@@ -8,30 +8,31 @@ All naming constants are defined centrally in `pmx_naming_manager.py` (`mmd/maya
 
 All suffixes start with a capital letter for consistency.
 
-| Node                      | Type | Naming pattern                         | Example                                          |
-| ------------------------- | ---- | -------------------------------------- | ------------------------------------------------ |
-| Joint                     | DAG  | `{bone_name}_Jnt`                      | `upper_arm_R_Jnt` / `Bone_52_Jnt`                |
-| Tail joint                | DAG  | `{bone_name}_TailJnt`                  | `upper_arm_R_TailJnt`                            |
-| inheritCtrl (transform)   | DAG  | `{bone_name}_InheritCtrl`              | `shoulderP_R_InheritCtrl`                        |
-| morphCtrl (transform)     | DAG  | `{bone_name}_MorphCtrl`                | `arm_twist_R_Bone_52_MorphCtrl`                  |
-| ikHandle                  | DAG  | `{bone_name}_IkHandle`                 | `Bone_126_IkHandle`                              |
-| Root transform            | DAG  | `{model}_Root`                         | `GirlsFrontline_TololoDefault_Root`              |
-| Bones group               | DAG  | `{model}_Bones`                        | `GirlsFrontline_TololoDefault_Bones`             |
-| Mesh transform            | DAG  | `{model}_Mesh`                         | `GirlsFrontline_TololoDefault_Mesh`              |
-| Mesh shape                | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
-| Geo group                 | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
-| RigidBodies group         | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
-| RigidBodySolver (pmxRigidBodyNode) | DAG | `{model}_RigidBodySolver`      | `GirlsFrontline_TololoDefault_RigidBodySolver`   |
-| rotScale (multiplyDivide) | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
-| ccdSolver                 | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
-| BoneMorph node            | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
-| BlendShape node           | DG   | `{model}_BlendShape`                   | `GirlsFrontline_TololoDefault_BlendShape`        |
-| Material                  | DG   | `{model}_{material_name}_Mat`          | `GirlsFrontline_TololoDefault_Face_Mat`          |
-| Shading group             | DG   | `{model}_{material_name}_SG`           | `GirlsFrontline_TololoDefault_Face_SG`           |
-| Texture                   | DG   | `{model}_{texture_name}_Tex`           | `GirlsFrontline_TololoDefault_body_Tex`          |
-| Place2dTexture            | DG   | `{model}_{texture_name}_Place2D`       | `GirlsFrontline_TololoDefault_body_Place2D`      |
-| RigidBody                 | DG   | `{model}_{rigidbody_name}`             | `GirlsFrontline_TololoDefault_leg_rb`            |
-| Blendshape target         | attr | `{morph_name}` (attribute, not a node) | `eye_blink`                                      |
+| Node                               | Type | Naming pattern                         | Example                                          |
+| ---------------------------------- | ---- | -------------------------------------- | ------------------------------------------------ |
+| Joint                              | DAG  | `{bone_name}_Jnt`                      | `upper_arm_R_Jnt` / `Bone_52_Jnt`                |
+| Tail joint                         | DAG  | `{bone_name}_TailJnt`                  | `upper_arm_R_TailJnt`                            |
+| inheritCtrl (transform)            | DAG  | `{bone_name}_InheritCtrl`              | `shoulderP_R_InheritCtrl`                        |
+| morphCtrl (transform)              | DAG  | `{bone_name}_MorphCtrl`                | `arm_twist_R_Bone_52_MorphCtrl`                  |
+| ikHandle                           | DAG  | `{bone_name}_IkHandle`                 | `Bone_126_IkHandle`                              |
+| Root transform                     | DAG  | `{model}_Root`                         | `GirlsFrontline_TololoDefault_Root`              |
+| Bones group                        | DAG  | `{model}_Bones`                        | `GirlsFrontline_TololoDefault_Bones`             |
+| Mesh transform                     | DAG  | `{model}_Mesh`                         | `GirlsFrontline_TololoDefault_Mesh`              |
+| Mesh shape                         | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
+| Geo group                          | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
+| RigidBodies group                  | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
+| RigidBodySolver (pmxRigidBodyNode) | DAG  | `{model}_RigidBodySolver`              | `GirlsFrontline_TololoDefault_RigidBodySolver`   |
+| RigidBody guide (transform)        | DAG  | `{model}_{rigidbody_name}`             | `GirlsFrontline_TololoDefault_leg_rb`            |
+| RigidBodyShape (pmxRigidBodyShape) | DAG  | `{model}_{rigidbody_name}Shape`        | `GirlsFrontline_TololoDefault_leg_rbShape`       |
+| rotScale (multiplyDivide)          | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
+| ccdSolver                          | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
+| BoneMorph node                     | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
+| BlendShape node                    | DG   | `{model}_BlendShape`                   | `GirlsFrontline_TololoDefault_BlendShape`        |
+| Material                           | DG   | `{model}_{material_name}_Mat`          | `GirlsFrontline_TololoDefault_Face_Mat`          |
+| Shading group                      | DG   | `{model}_{material_name}_SG`           | `GirlsFrontline_TololoDefault_Face_SG`           |
+| Texture                            | DG   | `{model}_{texture_name}_Tex`           | `GirlsFrontline_TololoDefault_body_Tex`          |
+| Place2dTexture                     | DG   | `{model}_{texture_name}_Place2D`       | `GirlsFrontline_TololoDefault_body_Place2D`      |
+| Blendshape target                  | attr | `{morph_name}` (attribute, not a node) | `eye_blink`                                      |
 
 ## Why DAG nodes omit the model prefix
 
