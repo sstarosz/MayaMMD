@@ -10,17 +10,26 @@
 #include "rigid_body_joint_geometry_override.hpp"
 
 #include "rigid_body_joint.hpp"
+#include "rigid_body_node.hpp"
 
 #include <maya/MColor.h>
+#include <maya/MDagPath.h>
+#include <maya/MDistance.h>
+#include <maya/MEulerRotation.h>
 #include <maya/MFn.h>
+#include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnTransform.h>
 #include <maya/MGeometry.h>
 #include <maya/MHWGeometry.h>
 #include <maya/MHWGeometryUtilities.h>
+#include <maya/MMatrix.h>
 #include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 #include <maya/MPoint.h>
 #include <maya/MShaderManager.h>
 #include <maya/MStatus.h>
+#include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 #include <maya/MViewport2Renderer.h>
 
@@ -71,39 +80,70 @@ void pushQuad(BoxMesh& mesh, const float n[3], const float a[3], const float b[3
     base += 4;
 }
 
-// The linear-limit box: centered at (min+max)/2 with half-extents |max-min|/2
-// (flat-shaded 6 quads, like the collider box builder).  Axes with no range
-// get a thin sliver so sliders still show a visible box.
-void buildLimitBox(const MPoint& lmin, const MPoint& lmax, double sliver, BoxMesh& mesh)
+// Read a k3Double plug into an MPoint (x, y, z).
+[[nodiscard]] MPoint readPoint3(const MPlug& plug)
 {
-    const auto axis = [&](double lo, double hi) -> std::pair<double, double>
-    {
-        const double spread = std::fabs(hi - lo);
-        const double half = spread > 1e-4 ? 0.5 * spread : sliver;
-        const double center = 0.5 * (lo + hi);
-        return {center, half};
-    };
-    const auto [cx, hx] = axis(lmin.x, lmax.x);
-    const auto [cy, hy] = axis(lmin.y, lmax.y);
-    const auto [cz, hz] = axis(lmin.z, lmax.z);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
+    const double* v = plug.asMDataHandle().asDouble3();
+    return MPoint(v[0], v[1], v[2]);
+}
 
+// Read body `index`'s CURRENT pose (RigidBodies GROUP space) from the
+// solver's outGuideTranslate array output.  Returns false when the element is
+// missing (out of range / not yet evaluated).
+[[nodiscard]] bool readBodyGuidePose(const MObject& solver, int index, MPoint& pos)
+{
+    if (solver.isNull() || index < 0)
+        return false;
+    MPlug tPlug(solver, RigidBodyNode::aOutGuideTranslate);
+    const unsigned int count = tPlug.evaluateNumElements();
+    if (static_cast<unsigned int>(index) >= count)
+        return false;
+    const MPlug el = tPlug.elementByLogicalIndex(static_cast<unsigned int>(index));
+    if (el.isNull())
+        return false;
+    pos.x = el.child(RigidBodyNode::aOutGuideTranslateX).asMDistance().asCentimeters();
+    pos.y = el.child(RigidBodyNode::aOutGuideTranslateY).asMDistance().asCentimeters();
+    pos.z = el.child(RigidBodyNode::aOutGuideTranslateZ).asMDistance().asCentimeters();
+    return true;
+}
+
+// Draw a wireframe box's 12 edges spanning [lo, hi] (axis-aligned).
+void drawBoxEdges(MHWRender::MUIDrawManager& drawMgr, const MPoint& lo, const MPoint& hi)
+{
+    const float v[8][3] = {
+        {static_cast<float>(lo.x), static_cast<float>(lo.y), static_cast<float>(lo.z)},
+        {static_cast<float>(hi.x), static_cast<float>(lo.y), static_cast<float>(lo.z)},
+        {static_cast<float>(hi.x), static_cast<float>(hi.y), static_cast<float>(lo.z)},
+        {static_cast<float>(lo.x), static_cast<float>(hi.y), static_cast<float>(lo.z)},
+        {static_cast<float>(lo.x), static_cast<float>(lo.y), static_cast<float>(hi.z)},
+        {static_cast<float>(hi.x), static_cast<float>(lo.y), static_cast<float>(hi.z)},
+        {static_cast<float>(hi.x), static_cast<float>(hi.y), static_cast<float>(hi.z)},
+        {static_cast<float>(lo.x), static_cast<float>(hi.y), static_cast<float>(hi.z)},
+    };
+    const int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                              {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+    for (const auto& e : edges)
+        drawMgr.line(MPoint(v[e[0]][0], v[e[0]][1], v[e[0]][2]),
+                     MPoint(v[e[1]][0], v[e[1]][1], v[e[1]][2]));
+}
+
+// A flat-shaded unit cube of half-extent `h` centred at the origin — the
+// joint's anchor marker (small, so it is the connector + limits that carry
+// the information, not the solid).
+void buildAnchorCube(double h, BoxMesh& mesh)
+{
+    const float hf = static_cast<float>(h);
     const float xp[3] = {1, 0, 0};
     const float xn[3] = {-1, 0, 0};
     const float yp[3] = {0, 1, 0};
     const float yn[3] = {0, -1, 0};
     const float zp[3] = {0, 0, 1};
     const float zn[3] = {0, 0, -1};
-    const float hx0 = static_cast<float>(hx), hy0 = static_cast<float>(hy),
-                hz0 = static_cast<float>(hz);
-    const float cxf = static_cast<float>(cx), cyf = static_cast<float>(cy),
-                czf = static_cast<float>(cz);
     const float p[8][3] = {
-        {cxf + hx0, cyf - hy0, czf - hz0}, {cxf + hx0, cyf + hy0, czf - hz0},
-        {cxf + hx0, cyf + hy0, czf + hz0}, {cxf + hx0, cyf - hy0, czf + hz0},
-        {cxf - hx0, cyf - hy0, czf + hz0}, {cxf - hx0, cyf + hy0, czf + hz0},
-        {cxf - hx0, cyf + hy0, czf - hz0}, {cxf - hx0, cyf - hy0, czf - hz0},
+        {hf, -hf, -hf}, {hf, hf, -hf}, {hf, hf, hf},   {hf, -hf, hf},
+        {-hf, -hf, hf}, {-hf, hf, hf}, {-hf, hf, -hf}, {-hf, -hf, -hf},
     };
-    // Face corners are wound CCW when viewed from outside.
     unsigned int base = 0;
     pushQuad(mesh, xp, p[0], p[1], p[2], p[3], base); // +X
     pushQuad(mesh, xn, p[4], p[5], p[6], p[7], base); // -X
@@ -111,14 +151,6 @@ void buildLimitBox(const MPoint& lmin, const MPoint& lmax, double sliver, BoxMes
     pushQuad(mesh, yn, p[0], p[3], p[4], p[7], base); // -Y
     pushQuad(mesh, zp, p[3], p[2], p[5], p[4], base); // +Z
     pushQuad(mesh, zn, p[0], p[7], p[6], p[1], base); // -Z
-}
-
-// Read a k3Double plug into an MPoint (x, y, z).
-[[nodiscard]] MPoint readPoint3(const MPlug& plug)
-{
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = plug.asMDataHandle().asDouble3();
-    return MPoint(v[0], v[1], v[2]);
 }
 
 // Fill one vertex buffer (`dimension` floats per vertex) with `numVerts`
@@ -201,7 +233,8 @@ void RigidBodyJointGeometryOverride::updateDG()
     const MPlug typePlug = fn.findPlug(RigidBodyJoint::aJointType, true, &stat);
     const MPlug lminPlug = fn.findPlug(RigidBodyJoint::aJointLinearMin, true, &stat);
     const MPlug lmaxPlug = fn.findPlug(RigidBodyJoint::aJointLinearMax, true, &stat);
-
+    const MPlug bodyAPlug = fn.findPlug(RigidBodyJoint::aJointBodyA, true, &stat);
+    const MPlug bodyBPlug = fn.findPlug(RigidBodyJoint::aJointBodyB, true, &stat);
     if (modePlug.isNull())
         return;
 
@@ -209,6 +242,47 @@ void RigidBodyJointGeometryOverride::updateDG()
     fState.type = typePlug.isNull() ? 0 : static_cast<short>(typePlug.asShort());
     fState.linearMin = readPoint3(lminPlug);
     fState.linearMax = readPoint3(lmaxPlug);
+
+    // The connector links the two constrained bodies: resolve the owning
+    // solver (joint.solver -> solver) and read bodyA/bodyB's CURRENT poses
+    // (RigidBodies GROUP space) from its outGuideTranslate outputs.
+    fState.hasBodyA = false;
+    fState.hasBodyB = false;
+    m_solver = MObject::kNullObj;
+    MPlug solverPlug = fn.findPlug(RigidBodyJoint::aSolver, true, &stat);
+    MPlugArray solverSrcs;
+    if (!solverPlug.isNull())
+        solverPlug.connectedTo(solverSrcs, true, false);
+    MPoint frameGroup;
+    if (solverSrcs.length() > 0)
+    {
+        m_solver = solverSrcs[0].node();
+        const int bodyA = bodyAPlug.isNull() ? -1 : bodyAPlug.asInt();
+        const int bodyB = bodyBPlug.isNull() ? -1 : bodyBPlug.asInt();
+        fState.hasBodyA = readBodyGuidePose(m_solver, bodyA, fState.bodyAPos);
+        fState.hasBodyB = readBodyGuidePose(m_solver, bodyB, fState.bodyBPos);
+        // The frame in GROUP space = the guide's LOCAL translation (the guide
+        // is a direct child of the group).  Used only to size the anchor.
+        MFnDagNode dag(fJoint, &stat);
+        MObject guide = stat ? dag.parent(0, &stat) : MObject::kNullObj;
+        if (stat && !guide.isNull() && guide.hasFn(MFn::kTransform))
+        {
+            MFnTransform tf(guide, &stat);
+            const MVector t = tf.getTranslation(MSpace::kTransform, &stat);
+            frameGroup = MPoint(t.x, t.y, t.z);
+        }
+    }
+
+    // Adaptive anchor-cube size: relative to the connector extent (the limit
+    // box and the frame-to-bodies distances), so it reads at any scene scale.
+    double extent = std::fabs(fState.linearMax.x - fState.linearMin.x);
+    extent = std::max(extent, std::fabs(fState.linearMax.y - fState.linearMin.y));
+    extent = std::max(extent, std::fabs(fState.linearMax.z - fState.linearMin.z));
+    if (fState.hasBodyA)
+        extent = std::max(extent, (fState.bodyAPos - frameGroup).length());
+    if (fState.hasBodyB)
+        extent = std::max(extent, (fState.bodyBPos - frameGroup).length());
+    fState.anchorHalf = extent > 1e-4 ? std::clamp(extent * 0.08, 0.03, 0.4) : 0.04;
 }
 
 void RigidBodyJointGeometryOverride::jointColor(float& cr, float& cg, float& cb) const
@@ -242,11 +316,32 @@ void RigidBodyJointGeometryOverride::selectionColor(const MDagPath& path, float&
     }
 }
 
-void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& /*dagPath*/,
+void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
                                                        MRenderItemList& renderItems)
 {
     const bool drawSolid = (fState.drawMode == RigidBodyJoint::kDrawSolid ||
                             fState.drawMode == RigidBodyJoint::kDrawWireSolid);
+
+    // Map the group-space body poses into the shape's LOCAL space so the
+    // connector lines (drawn in addUIDrawables) land where the bodies are.
+    // m_toLocal = shapeWorld^-1 * groupWorld (the solver's DAG parent is the
+    // RigidBodies group).
+    MMatrix groupWorld;
+    if (!m_solver.isNull() && m_solver.hasFn(MFn::kDagNode))
+    {
+        MStatus stat;
+        MFnDagNode solverFn(m_solver, &stat);
+        MObject group = stat ? solverFn.parent(0, &stat) : MObject::kNullObj;
+        if (stat && !group.isNull())
+        {
+            MDagPath groupPath;
+            if (MDagPath::getAPathTo(group, groupPath) == MS::kSuccess)
+                groupWorld = groupPath.inclusiveMatrix();
+        }
+    }
+    m_toLocal = dagPath.inclusiveMatrix().inverse() * groupWorld;
+    fState.bodyAPos = fState.bodyAPos * m_toLocal;
+    fState.bodyBPos = fState.bodyBPos * m_toLocal;
 
     // The render item persists in the list (VP2 owns it) — find-or-create so
     // we never append a duplicate across frames.
@@ -306,15 +401,10 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
                                                       const MRenderItemList& renderItems,
                                                       MGeometry& data)
 {
-    // Build the limit-box mesh from the cached draw state (degenerate axes
-    // get a sliver sized relative to the box's own extent).
-    double spread = std::fabs(fState.linearMax.x - fState.linearMin.x);
-    spread = std::max(spread, std::fabs(fState.linearMax.y - fState.linearMin.y));
-    spread = std::max(spread, std::fabs(fState.linearMax.z - fState.linearMin.z));
-    const double sliver = spread > 1e-4 ? spread * 0.12 : 0.05;
-
+    // Build the small anchor-cube mesh (the joint marker at the frame — the
+    // connector lines + limit wire carry the constraint information).
     BoxMesh mesh;
-    buildLimitBox(fState.linearMin, fState.linearMax, sliver, mesh);
+    buildAnchorCube(fState.anchorHalf, mesh);
     if (mesh.positions.empty() || mesh.indices.empty())
         return;
 
@@ -395,46 +485,65 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& objPath,
     if (!drawWire)
         return;
 
-    double spread = std::fabs(fState.linearMax.x - fState.linearMin.x);
-    spread = std::max(spread, std::fabs(fState.linearMax.y - fState.linearMin.y));
-    spread = std::max(spread, std::fabs(fState.linearMax.z - fState.linearMin.z));
-    const double sliver = spread > 1e-4 ? spread * 0.12 : 0.05;
-
-    float cr = 1.0f, cg = 0.25f, cb = 0.25f;
+    float cr, cg, cb;
     if (selected)
         selectionColor(objPath, cr, cg, cb);
     else
         jointColor(cr, cg, cb);
-
-    BoxMesh mesh;
-    buildLimitBox(fState.linearMin, fState.linearMax, sliver, mesh);
+    const MColor color(cr, cg, cb);
+    const MPoint frame(0.0, 0.0, 0.0); // the shape's local origin IS the frame
 
     drawMgr.beginDrawable();
-    drawMgr.setColor(MColor(cr, cg, cb));
-    // Draw the 12 box edges (each face quad contributes 4 edges; skip shared).
-    const float v[8][3] = {
-        {static_cast<float>(fState.linearMin.x), static_cast<float>(fState.linearMin.y),
-         static_cast<float>(fState.linearMin.z)},
-        {static_cast<float>(fState.linearMax.x), static_cast<float>(fState.linearMin.y),
-         static_cast<float>(fState.linearMin.z)},
-        {static_cast<float>(fState.linearMax.x), static_cast<float>(fState.linearMax.y),
-         static_cast<float>(fState.linearMin.z)},
-        {static_cast<float>(fState.linearMin.x), static_cast<float>(fState.linearMax.y),
-         static_cast<float>(fState.linearMin.z)},
-        {static_cast<float>(fState.linearMin.x), static_cast<float>(fState.linearMin.y),
-         static_cast<float>(fState.linearMax.z)},
-        {static_cast<float>(fState.linearMax.x), static_cast<float>(fState.linearMin.y),
-         static_cast<float>(fState.linearMax.z)},
-        {static_cast<float>(fState.linearMax.x), static_cast<float>(fState.linearMax.y),
-         static_cast<float>(fState.linearMax.z)},
-        {static_cast<float>(fState.linearMin.x), static_cast<float>(fState.linearMax.y),
-         static_cast<float>(fState.linearMax.z)},
+    // Xray so the constraint stays visible even inside a collider or behind
+    // the character mesh.
+    drawMgr.beginDrawInXray();
+
+    // 1. Connectors — the PRIMARY information: which two bodies this joint
+    //    constrains, tracked to their CURRENT simulated pose (the group-space
+    //    poses were mapped to local in updateRenderItems).
+    drawMgr.setLineWidth(2.0f);
+    drawMgr.setColor(color);
+    if (fState.hasBodyA)
+        drawMgr.line(fState.bodyAPos, frame);
+    if (fState.hasBodyB)
+        drawMgr.line(frame, fState.bodyBPos);
+
+    // 2. Limit range as a thin wire box (the allowed translation range),
+    //    degenerate axes get a sliver so sliders still show a visible box.
+    drawMgr.setLineWidth(1.0f);
+    double spread = std::fabs(fState.linearMax.x - fState.linearMin.x);
+    spread = std::max(spread, std::fabs(fState.linearMax.y - fState.linearMin.y));
+    spread = std::max(spread, std::fabs(fState.linearMax.z - fState.linearMin.z));
+    const double sliver = spread > 1e-4 ? spread * 0.12 : fState.anchorHalf * 0.6;
+    const auto axisBox = [&](double lo, double hi, double spr) -> std::pair<double, double>
+    {
+        const double half = spr > 1e-4 ? 0.5 * std::fabs(hi - lo) : sliver;
+        return {0.5 * (lo + hi), half};
     };
-    const int edges[12][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
-                              {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-    for (const auto& e : edges)
-        drawMgr.line(MPoint(v[e[0]][0], v[e[0]][1], v[e[0]][2]),
-                     MPoint(v[e[1]][0], v[e[1]][1], v[e[1]][2]));
+    const auto [cx, hx] = axisBox(fState.linearMin.x, fState.linearMax.x, spread);
+    const auto [cy, hy] = axisBox(fState.linearMin.y, fState.linearMax.y, spread);
+    const auto [cz, hz] = axisBox(fState.linearMin.z, fState.linearMax.z, spread);
+    drawMgr.setColor(color);
+    drawBoxEdges(drawMgr, MPoint(cx - hx, cy - hy, cz - hz), MPoint(cx + hx, cy + hy, cz + hz));
+
+    // 3. The anchor cube's wire outline (the solid is the render item).
+    //    When selected this doubles as the native selection wireframe.
+    const double h = fState.anchorHalf;
+    drawMgr.setColor(color);
+    drawBoxEdges(drawMgr, MPoint(-h, -h, -h), MPoint(h, h, h));
+
+    // 4. Frame orientation triad (X red, Y green, Z blue), sized relative to
+    //    the anchor so it reads at any scene scale.
+    const double len = fState.anchorHalf * 3.0;
+    drawMgr.setColor(MColor(1.0f, 0.2f, 0.2f));
+    drawMgr.line(frame, frame + MVector(len, 0.0, 0.0));
+    drawMgr.setColor(MColor(0.2f, 1.0f, 0.2f));
+    drawMgr.line(frame, frame + MVector(0.0, len, 0.0));
+    drawMgr.setColor(MColor(0.2f, 0.4f, 1.0f));
+    drawMgr.line(frame, frame + MVector(0.0, 0.0, len));
+
+    drawMgr.setLineWidth(1.0f);
+    drawMgr.endDrawInXray();
     drawMgr.endDrawable();
 }
 

@@ -7,24 +7,25 @@
  * pmxRigidBodyJoint, parallel to RigidBodyShapeGeometryOverride for the
  * per-body colliders.
  *
- * The joint node's DAG transform IS the joint frame, so the glyph sits at
- * the LOCAL origin: a solid box spanning the joint's linear-limit range
- * (jointLinearMin/Max, flat-shaded), colour = PMX joint type, drawn with the
- * stock OpenPBR surface shader (k3dIsotropicOpenPBRSurfaceShader) so it is
- * lit by the viewport lights.  The WIRE outline is drawn with MUIDrawManager
- * (addUIDrawables), and the render item is pickable so the joint keeps its
- * native selection.
+ * The joint node's guide transform IS the joint frame, so the glyph sits at
+ * the LOCAL origin.  A joint is a rigid CONSTRAINT BETWEEN TWO BODIES, so the
+ * visualization leads with that relationship:
  *
- * Drawing (in the joint node's LOCAL space — the transform is the frame):
- *
- *   - solid -> one MRenderItem (NonMaterialSceneItem, OpenPBR surface
- *              shader, sDormantWireDepthPriority so it renders lit AND on
- *              top of the character mesh), position+normal(+uv) streams.
- *   - wire  -> MUIDrawManager lines (the same box outline).
+ *   - connector -> two thick lines from the two constrained bodies' CURRENT
+ *                  positions (read from the solver's outGuideTranslate[]
+ *                  outputs, mapped into the shape's local space) through the
+ *                  joint frame — you can see at a glance which two bodies a
+ *                  joint links, live.
+ *   - solid     -> a small anchor cube at the frame, lit with the stock OpenPBR
+ *                  surface shader (k3dIsotropicOpenPBRSurfaceShader) and
+ *                  coloured by PMX joint type; it is the pickable/selectable
+ *                  element.
+ *   - wire      -> the linear-limit range as a thin wire box + the frame's
+ *                  X/Y/Z orientation triad, via MUIDrawManager.
  *
  * The draw mode (off / wire / solid / wire+solid) is the joint's `drawMode`
  * attribute; the colour comes from the PMX joint type (6-colour palette).
- * When a joint is selected the SOLID keeps its colour and a native
+ * When a joint is selected the anchor keeps its colour and a native
  * selection-colour WIREFRAME is drawn on top (same as any mesh).
  *
  * LIFECYCLE (per the devkit footPrintNode_GeometryOverride sample): the
@@ -99,9 +100,21 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         short type = 0; // PMX JointType (0..5)
         MPoint linearMin;
         MPoint linearMax;
+        // The two constrained bodies' CURRENT positions (RigidBodies GROUP
+        // space), from the solver's outGuideTranslate outputs — the connector
+        // shows which two bodies this joint links.
+        MPoint bodyAPos;
+        MPoint bodyBPos;
+        bool hasBodyA = false;
+        bool hasBodyB = false;
+        double anchorHalf = 0.04; // solid anchor-cube half-extent (adaptive)
     };
 
     MObject fJoint;
+    MObject m_solver; // owning pmxRigidBodyNode (resolved in updateDG)
     DrawState fState;
+    // Group-space body poses -> the shape's LOCAL space (for the connector
+    // lines), computed in updateRenderItems() from the DAG-path matrices.
+    MMatrix m_toLocal;
     MHWRender::MShaderInstance* fSolidShader = nullptr;
 };
