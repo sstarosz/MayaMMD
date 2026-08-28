@@ -372,10 +372,12 @@ def _register_ae_template_path() -> None:
         try:
             # Shape node: the grouped "Body" XML view stays the default.
             mel.eval('optionVar -sv AEpmxRigidBodyShapeCustomView "Body"')
+            # Joint node: the grouped "Body" XML view stays the default.
+            mel.eval('optionVar -sv AEpmxRigidBodyJointCustomView "Body"')
             # Solver node: deliberately NO XML-view optionVar.  A named view
             # routes the AE to the (gravity-only) XML template, bypassing
-            # createEditor — but the joints editor is the MEL template, which
-            # the AE only invokes through createEditor when no custom view is
+            # createEditor — but the solver AE is the MEL template, which the
+            # AE only invokes through createEditor when no custom view is
             # active.  Clear the legacy "Solver" value so the MEL template is
             # used.
             if mel.eval("optionVar -q AEpmxRigidBodyNodeCustomView") == "Solver":
@@ -386,15 +388,11 @@ def _register_ae_template_path() -> None:
     log.debug("No AE template folder found")
 
 
-# Classic MEL Attribute-Editor template for the solver node.  Maya's XML AE
-# templates cannot render the ``joints`` compound-array (an empty control
-# with no add button), so this node uses the standard MEL template instead:
-# ``editorTemplate -addControl "joints"`` builds the DEFAULT control for the
-# attribute, which for an array of compounds is a proper Multi (add/remove,
-# expandable children) — no custom widget, and no reliance on Maya's
-# internal Flux AE framework (whose custom-control layout overlapped the
-# Extra Attributes section).  ``gravity`` gets its standard vector control.
-# The proc is only invoked when the plugin clears the
+# Classic MEL Attribute-Editor template for the solver node: a small
+# scrollLayout that shows ``gravity`` and suppresses the solver's message
+# arrays / outputs (the per-body and per-joint data lives on the connected
+# pmxRigidBodyShape / pmxRigidBodyJoint nodes, each with its own grouped XML
+# template).  The proc is only invoked when the plugin clears the
 # ``AEpmxRigidBodyNodeCustomView`` optionVar, so the AE takes the
 # ``createEditor`` path (a named view would route it to the XML template
 # instead).
@@ -402,15 +400,13 @@ _AE_SOLVER_TEMPLATE_MEL = """\
 global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
     editorTemplate -beginScrollLayout;
     editorTemplate -suppress "bodyShapes";
+    editorTemplate -suppress "jointShapes";
     editorTemplate -suppress "outTranslate";
     editorTemplate -suppress "outRotate";
     editorTemplate -suppress "outGuideTranslate";
     editorTemplate -suppress "outGuideRotate";
     editorTemplate -beginLayout "Solver" -collapse 0;
         editorTemplate -addControl "gravity";
-    editorTemplate -endLayout;
-    editorTemplate -beginLayout "Joints" -collapse 0;
-        editorTemplate -addControl "joints";
     editorTemplate -endLayout;
     editorTemplate -addExtraControls;
     editorTemplate -endScrollLayout;
@@ -419,7 +415,7 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
 
 
 def _register_ae_mel_templates() -> None:
-    """Define the solver's MEL AE template (the ``joints`` Multi editor)."""
+    """Define the solver's MEL AE template (gravity + suppressed arrays)."""
     mel.eval(_AE_SOLVER_TEMPLATE_MEL)
 
 

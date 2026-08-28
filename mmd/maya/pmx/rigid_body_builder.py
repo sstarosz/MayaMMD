@@ -157,15 +157,16 @@ def _populate_rigid_bodies(
 
 
 def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
-    """Append one joint per PMX rigid-body constraint through the native
-    ``pmxRigidBodyConstraint`` command.
+    """Create one joint per PMX rigid-body constraint via ``pmxRigidBodyConstraint``.
 
     PMX joints are CONSTRAINTS between rigid bodies (``rigid_body_index_a`` /
     ``rigid_body_index_b``), so this MUST run after ``_populate_rigid_bodies``
     (the command validates the referenced body indices against the node's
     current body count).  Joints are appended in PMX order so the joint index
-    matches the PMX joint index.  Data only — the solver is time-driven and
-    each body's write-back outputs are wired at creation by the command.
+    matches the PMX joint index.  Each call creates a selectable
+    ``pmxRigidBodyJoint`` node under the rigid bodies group — its transform IS
+    the joint frame, so the constraint is visible and editable in the viewport
+    — wired into the solver's ``jointShapes[]`` message array.
 
     Unlike bodies, a failed joint needs no count check: nothing downstream
     references joints by index, so a dropped joint just means one constraint

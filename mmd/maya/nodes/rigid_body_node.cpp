@@ -18,6 +18,7 @@
 #include "rigid_body_node.hpp"
 
 #include "maya_utils.hpp"
+#include "rigid_body_joint.hpp"
 #include "rigid_body_shape.hpp"
 
 #include <algorithm>
@@ -81,20 +82,7 @@ MObject RigidBodyNode::aGravity;
 
 MObject RigidBodyNode::aBodyShapes;
 
-MObject RigidBodyNode::aJoints;
-MObject RigidBodyNode::aJointNameLocal;
-MObject RigidBodyNode::aJointNameUniversal;
-MObject RigidBodyNode::aJointBodyA;
-MObject RigidBodyNode::aJointBodyB;
-MObject RigidBodyNode::aJointType;
-MObject RigidBodyNode::aJointFrameTranslate;
-MObject RigidBodyNode::aJointFrameRotate;
-MObject RigidBodyNode::aJointLinearMin;
-MObject RigidBodyNode::aJointLinearMax;
-MObject RigidBodyNode::aJointAngularMin;
-MObject RigidBodyNode::aJointAngularMax;
-MObject RigidBodyNode::aJointLinearSpring;
-MObject RigidBodyNode::aJointAngularSpring;
+MObject RigidBodyNode::aJointShapes;
 
 MObject RigidBodyNode::aOutTranslate;
 MObject RigidBodyNode::aOutTranslateX;
@@ -377,35 +365,27 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
     return true;
 }
 
-// Read one joint element's fields into an engine JointDefinition.
-[[nodiscard]] RigidBodySimulation::JointDefinition readJoint(MDataHandle& hd)
-{
-    RigidBodySimulation::JointDefinition j;
-    j.bodyA = hd.child(RigidBodyNode::aJointBodyA).asInt();
-    j.bodyB = hd.child(RigidBodyNode::aJointBodyB).asInt();
-    j.type = hd.child(RigidBodyNode::aJointType).asInt();
-    j.frameT = readDouble3(hd.child(RigidBodyNode::aJointFrameTranslate));
-    j.frameR = readDouble3(hd.child(RigidBodyNode::aJointFrameRotate));
-    j.linearMin = readDouble3(hd.child(RigidBodyNode::aJointLinearMin));
-    j.linearMax = readDouble3(hd.child(RigidBodyNode::aJointLinearMax));
-    j.angularMin = readDouble3(hd.child(RigidBodyNode::aJointAngularMin));
-    j.angularMax = readDouble3(hd.child(RigidBodyNode::aJointAngularMax));
-    j.linearSpring = readDouble3(hd.child(RigidBodyNode::aJointLinearSpring));
-    j.angularSpring = readDouble3(hd.child(RigidBodyNode::aJointAngularSpring));
-    return j;
-}
-
-[[nodiscard]] std::vector<RigidBodySimulation::JointDefinition> readJointData(MDataBlock& dataBlock)
+// Read the solver's joint list from its jointShapes[] message array (PMX
+// order — written DENSELY by the builder): each connected pmxRigidBodyJoint
+// node provides one JointDefinition via RigidBodyJoint::readJointDefinition
+// (the FRAME comes from the joint node's DAG transform; the rest from its
+// attributes).  Unconnected slots are skipped, keeping the joint index ==
+// connected-joint order.
+[[nodiscard]] std::vector<RigidBodySimulation::JointDefinition> readJointData(const MObject& node)
 {
     std::vector<RigidBodySimulation::JointDefinition> out;
-    MArrayDataHandle jointsHandle = dataBlock.inputArrayValue(RigidBodyNode::aJoints);
-    const unsigned int jointCount = jointsHandle.elementCount();
+    MPlug shapesPlug(node, RigidBodyNode::aJointShapes);
+    const unsigned int jointCount = shapesPlug.evaluateNumElements();
     out.reserve(jointCount);
     for (unsigned int i = 0; i < jointCount; ++i)
     {
-        jointsHandle.jumpToArrayElement(i);
-        MDataHandle element = jointsHandle.inputValue();
-        out.push_back(readJoint(element));
+        MPlugArray sources;
+        shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
+        if (sources.length() == 0)
+            continue;
+        RigidBodySimulation::JointDefinition j;
+        if (RigidBodyJoint::readJointDefinition(sources[0].node(), j))
+            out.push_back(j);
     }
     return out;
 }
@@ -431,7 +411,7 @@ bool isOutputPlug(const MPlug& plug)
 {
     Inputs in;
     in.bodies = readBodyData(node);
-    in.joints = readJointData(dataBlock);
+    in.joints = readJointData(node);
     in.gravity = readGravity(dataBlock);
     return in;
 }
@@ -1207,57 +1187,21 @@ MStatus RigidBodyNode::initialize()
     mMsgAttr.setStorable(true);
     mMsgAttr.setKeyable(false);
 
-    // --- joint compound (mirrors the PMX rigid-body constraint fields) ---
-    aJointNameLocal = makeString(tAttr, "jointNameLocal", "jnml");
-    aJointNameUniversal = makeString(tAttr, "jointNameUniversal", "jnmu");
-    aJointBodyA = makeNumeric(nAttr, "jointBodyA", "jba", MFnNumericData::kLong, 0);
-    aJointBodyB = makeNumeric(nAttr, "jointBodyB", "jbb", MFnNumericData::kLong, 0);
-    // PMX joint type — one field per PMX JointType (0..5).
-    {
-        MFnEnumAttribute eAttr;
-        aJointType = eAttr.create("jointType", "jt", 0, &stat);
-        MMD_CHECK_MSTATUS(stat);
-        eAttr.addField("Spring6Dof", 0);
-        eAttr.addField("SixDof", 1);
-        eAttr.addField("P2P", 2);
-        eAttr.addField("ConeTwist", 3);
-        eAttr.addField("Slider", 4);
-        eAttr.addField("Hinge", 5);
-        eAttr.setStorable(true);
-        eAttr.setKeyable(false);
-    }
-    aJointFrameTranslate =
-        makeNumeric(nAttr, "jointFrameTranslate", "jft", MFnNumericData::k3Double, 0.0);
-    aJointFrameRotate =
-        makeNumeric(nAttr, "jointFrameRotate", "jfr", MFnNumericData::k3Double, 0.0);
-    aJointLinearMin = makeNumeric(nAttr, "jointLinearMin", "jlmn", MFnNumericData::k3Double, 0.0);
-    aJointLinearMax = makeNumeric(nAttr, "jointLinearMax", "jlmx", MFnNumericData::k3Double, 0.0);
-    aJointAngularMin = makeNumeric(nAttr, "jointAngularMin", "jamn", MFnNumericData::k3Double, 0.0);
-    aJointAngularMax = makeNumeric(nAttr, "jointAngularMax", "jamx", MFnNumericData::k3Double, 0.0);
-    aJointLinearSpring =
-        makeNumeric(nAttr, "jointLinearSpring", "jls", MFnNumericData::k3Double, 0.0);
-    aJointAngularSpring =
-        makeNumeric(nAttr, "jointAngularSpring", "jas", MFnNumericData::k3Double, 0.0);
-
-    aJoints = cAttr.create("joints", "jns", &stat);
+    // --- per-joint shape message array (PMX order) ---
+    // Each element connects to a pmxRigidBodyJoint node that holds that
+    // joint's PMX-verbatim data (see rigid_body_joint.{hpp,cpp}); the solver
+    // pulls every joint from its node in readJointData.  The joint's FRAME
+    // is the joint node's DAG transform (joints are static config — moving
+    // the node repositions the constraint), so a config change is detected
+    // by the per-eval re-read + comparison.
+    aJointShapes = mMsgAttr.create("jointShapes", "js", &stat);
     MMD_CHECK_MSTATUS(stat);
-    cAttr.setArray(true);
-    cAttr.setUsesArrayDataBuilder(true);
-    cAttr.setStorable(true);
-    cAttr.setKeyable(false);
-    cAttr.addChild(aJointNameLocal);
-    cAttr.addChild(aJointNameUniversal);
-    cAttr.addChild(aJointBodyA);
-    cAttr.addChild(aJointBodyB);
-    cAttr.addChild(aJointType);
-    cAttr.addChild(aJointFrameTranslate);
-    cAttr.addChild(aJointFrameRotate);
-    cAttr.addChild(aJointLinearMin);
-    cAttr.addChild(aJointLinearMax);
-    cAttr.addChild(aJointAngularMin);
-    cAttr.addChild(aJointAngularMax);
-    cAttr.addChild(aJointLinearSpring);
-    cAttr.addChild(aJointAngularSpring);
+    mMsgAttr.setArray(true);
+    mMsgAttr.setReadable(true);
+    mMsgAttr.setWritable(true);
+    mMsgAttr.setCached(false);
+    mMsgAttr.setStorable(true);
+    mMsgAttr.setKeyable(false);
 
     // --- outputs ---
     // Unit-typed compound children (MFnUnitAttribute), exactly like
@@ -1354,7 +1298,7 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyShapes);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJoints);
+    stat = addAttribute(aJointShapes);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
@@ -1395,13 +1339,13 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aBodyShapes, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aJoints, aOutTranslate);
+    stat = attributeAffects(aJointShapes, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aJoints, aOutRotate);
+    stat = attributeAffects(aJointShapes, aOutRotate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aJoints, aOutGuideTranslate);
+    stat = attributeAffects(aJointShapes, aOutGuideTranslate);
     MMD_CHECK_MSTATUS(stat);
-    stat = attributeAffects(aJoints, aOutGuideRotate);
+    stat = attributeAffects(aJointShapes, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
 
     return MS::kSuccess;

@@ -295,26 +295,34 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             "no-body model should have an empty bodyShapes array",
         )
 
-    # The joints array mirrors the PMX rigid-body constraints (one joint per
-    # PMX joint, in PMX order — appended by the native pmxRigidBodyConstraint
-    # command after every body exists).
+    # The jointShapes message array mirrors the PMX rigid-body constraints
+    # (one pmxRigidBodyJoint node per PMX joint, in PMX order — created by the
+    # native pmxRigidBodyConstraint command after every body exists; each
+    # joint node's transform IS the joint frame).
     expected_joints = len(pmx_data.joints)
     assert_true(
-        cmds.attributeQuery("joints", node=solver, exists=True),
-        "solver has no joints attribute",
+        cmds.attributeQuery("jointShapes", node=solver, exists=True),
+        "solver has no jointShapes attribute",
     )
     if expected_joints > 0:
         assert_eq(
-            int(cmds.getAttr(f"{solver}.joints", size=True)),
+            int(cmds.getAttr(f"{solver}.jointShapes", size=True)),
             expected_joints,
-            "joints count != PMX joint count",
+            "jointShapes count != PMX joint count",
         )
         # First joint's data mirrors the first PMX joint: body refs, type,
         # name, and the frame/limit conversion (Z-flip on position; angular
         # limits reflected through F = diag(1,1,-1): X/Y negated + swapped,
         # Z unchanged).
         first = pmx_data.joints[0]
-        jbase = f"{solver}.joints[0]"
+        joint_plugs = (
+            cmds.listConnections(f"{solver}.jointShapes[0]", source=True, plugs=True)
+            or []
+        )
+        assert_true(bool(joint_plugs), "jointShapes[0] has no source joint node")
+        jbase = str(joint_plugs[0]).split(".")[0]
+        guide = cmds.listRelatives(jbase, parent=True) or []
+        assert_true(bool(guide), "joint shape should have a guide parent")
         assert_eq(
             int(cmds.getAttr(f"{jbase}.jointBodyA")),
             int(first.rigid_body_index_a),
@@ -335,13 +343,14 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             first.name_local,
             "first joint name_local",
         )
+        # The frame is the joint guide's transform (Z-flip on position).
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointFrameTranslate")[0],
+                cmds.getAttr(f"{guide[0]}.translate")[0],
                 (first.position.x, first.position.y, -first.position.z),
             ),
             f"first joint frame translate Z-flip wrong "
-            f"{cmds.getAttr(f'{jbase}.jointFrameTranslate')}",
+            f"{cmds.getAttr(f'{guide[0]}.translate')}",
         )
         assert_true(
             approx_equal_tuple(
@@ -368,11 +377,11 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             f"{cmds.getAttr(f'{jbase}.jointAngularMax')}",
         )
     else:
-        # Models with no joints get an empty joints array.
+        # Models with no joints get an empty jointShapes array.
         assert_eq(
-            int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+            int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
             0,
-            "no-joint model should have an empty joints array",
+            "no-joint model should have an empty jointShapes array",
         )
     print(
         f"PASS: rigid bodies group + {_NODE_TYPE} with {expected_bodies} bodies, "

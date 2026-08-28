@@ -100,21 +100,13 @@ class RigidBodyNode : public MPxLocatorNode
     // Unconnected slots are skipped.
     static MObject aBodyShapes;
 
-    // Per-joint compound array: aJoints[j].
-    static MObject aJoints;
-    static MObject aJointNameLocal;      // string — PMX name_local; "" = none
-    static MObject aJointNameUniversal;  // string — PMX name_universal; "" = none
-    static MObject aJointBodyA;          // long
-    static MObject aJointBodyB;          // long
-    static MObject aJointType;           // enum 0..5 (PMX JointType — dropdown)
-    static MObject aJointFrameTranslate; // float3
-    static MObject aJointFrameRotate;    // float3 degrees
-    static MObject aJointLinearMin;      // float3
-    static MObject aJointLinearMax;      // float3
-    static MObject aJointAngularMin;     // float3
-    static MObject aJointAngularMax;     // float3
-    static MObject aJointLinearSpring;   // float3
-    static MObject aJointAngularSpring;  // float3
+    // Per-joint message array: aJointShapes[i] -> the pmxRigidBodyJoint node
+    // for PMX joint i (PMX order — one selectable/movable locator per joint).
+    // The solver pulls every joint's PMX-verbatim data from the connected
+    // joint node via RigidBodyJoint::readJointDefinition — the joint's FRAME
+    // is the node's DAG transform (joints are static config; moving the node
+    // repositions the constraint).  Unconnected slots are skipped.
+    static MObject aJointShapes;
 
     // Outputs: solved local translate/rotate per body (compound arrays).
     // The children are UNIT-TYPED (MFnUnitAttribute kDistance / kAngle) —

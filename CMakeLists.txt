@@ -178,6 +178,8 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/rigid_body_joint.cpp
+        mmd/maya/nodes/rigid_body_joint_geometry_override.cpp
         mmd/maya/nodes/rigid_body_node.cpp
         mmd/maya/nodes/rigid_body_shape.cpp
         mmd/maya/nodes/rigid_body_shape_geometry_override.cpp
@@ -256,12 +258,16 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
                 "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyShapeTemplate.xml"
                 "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/AEpmxRigidBodyShapeTemplate.xml"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyJointTemplate.xml"
+                "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/AEpmxRigidBodyJointTemplate.xml"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyNodeTemplate.xml"
                 "${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/AEpmxRigidBodyNodeTemplate.xml"
             COMMENT "Deploying AE templates → ${CMAKE_INSTALL_PREFIX}/scripts/AETemplates/"
         )
         install(FILES
             "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyShapeTemplate.xml"
+            "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyJointTemplate.xml"
             "${CMAKE_SOURCE_DIR}/scripts/ae/AEpmxRigidBodyNodeTemplate.xml"
             DESTINATION "scripts/AETemplates"
         )

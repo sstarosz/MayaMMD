@@ -110,6 +110,38 @@ def _stamp_joint_rest(joint: str, tx: float, ty: float, tz: float) -> None:
         cmds.setAttr(f"{joint}.pmxRestRotate{axis}", 0.0)
 
 
+def _add_weld_joint(
+    node: str,
+    group: str,
+    index: int,
+    frame: tuple[float, float, float] = (0.0, 0.5, 0.0),
+    body_a: int = 0,
+    body_b: int = 1,
+    name: str = "weldJoint",
+) -> str:
+    """Create one rigid-weld joint: a pmxRigidBodyJoint node at `frame`.
+
+    The joint's guide transform IS the frame (the solver reads the world
+    frame); SPRING_6DOF (type 0) with zero limits = locked.  Wired into
+    ``node.jointShapes[index]``.
+    """
+    joint = cmds.createNode("pmxRigidBodyJoint", name=f"{name}{index}", parent=group)
+    guide = cmds.listRelatives(joint, parent=True) or []
+    assert_eq(len(guide), 1, f"joint {index} should have one guide parent")
+    cmds.setAttr(f"{guide[0]}.translate", *frame, type="double3")
+    cmds.setAttr(f"{joint}.jointBodyA", body_a)
+    cmds.setAttr(f"{joint}.jointBodyB", body_b)
+    cmds.setAttr(f"{joint}.jointType", 0)
+    cmds.setAttr(f"{joint}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    cmds.connectAttr(f"{joint}.solver", f"{node}.jointShapes[{index}]")
+    return joint
+
+
 def _read_output(node: str, index: int) -> tuple[float, float, float]:
     """Force evaluation and read outTranslate[index] (unit-typed compound)."""
     cmds.dgeval(f"{node}.outTranslate")
@@ -133,18 +165,7 @@ def _set_welded_chain(node: str, group: str) -> tuple[str, str]:
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
 
     # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
     return p0, p1
 
 
@@ -177,9 +198,11 @@ def test_attribute_surface_and_defaults():
         "time",
         "gravity",
         "bodyShapes",
-        "joints",
+        "jointShapes",
         "outTranslate",
         "outRotate",
+        "outGuideTranslate",
+        "outGuideRotate",
     ]
     for attr in top_level:
         assert_true(
@@ -221,25 +244,29 @@ def test_attribute_surface_and_defaults():
             f"missing shape attribute {child}",
         )
 
+    # Joint DATA lives on the per-joint pmxRigidBodyJoint nodes (the solver
+    # only exposes the jointShapes message array; the FRAME is the joint
+    # node's DAG transform, not an attribute).
+    joint = cmds.createNode("pmxRigidBodyJoint", name="attrJoint0", parent=group)
+    cmds.connectAttr(f"{joint}.solver", f"{node}.jointShapes[0]")
     joint_children = [
         "jointNameLocal",
         "jointNameUniversal",
         "jointBodyA",
         "jointBodyB",
         "jointType",
-        "jointFrameTranslate",
-        "jointFrameRotate",
         "jointLinearMin",
         "jointLinearMax",
         "jointAngularMin",
         "jointAngularMax",
         "jointLinearSpring",
         "jointAngularSpring",
+        "drawMode",
     ]
     for child in joint_children:
         assert_true(
-            cmds.attributeQuery(child, node=node, exists=True),
-            f"missing joint-compound child {child}",
+            cmds.attributeQuery(child, node=joint, exists=True),
+            f"missing joint attribute {child}",
         )
 
     # Defaults
@@ -332,18 +359,7 @@ def test_kinematic_anchor_drives_welded_body():
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
 
     # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
     # Anchor world matrix on the body's OWN shape: translate the kinematic
     # anchor to y=3 (no bodyJoint message -> the derived offset K^-1 =
@@ -545,18 +561,7 @@ def test_whole_skeleton_move_rides_dynamic_chain_along():
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
 
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
     # Settle at frame 1: the welded body hangs 1 unit above the anchor.
     cmds.currentTime(1)
@@ -615,18 +620,7 @@ def test_rewind_rebuild_keeps_character_move():
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
 
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
     # Settle at frame 1: the welded body hangs 1 unit above the anchor.
     cmds.currentTime(1)
@@ -705,18 +699,7 @@ def test_rewind_rebuild_pins_posed_skeleton():
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
 
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
     # Pose the skeleton BEFORE the first evaluation — as a VMD motion would
     # (rotate the anchor 30° about Z + move it up by 5).  The FIRST build must
@@ -822,18 +805,7 @@ def test_parentless_body_write_back_survives_rotated_parent_chain():
     cmds.connectAttr(f"{joint_c}.message", f"{p1}.bodyJoint")
 
     # Rigid weld between the anchor and the dynamic body.
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 1.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 1.0, 0.0))
 
     # Pose the skeleton BEFORE the first evaluation: rotate the anchor 30° Z
     # and move it up by 5 — the gap bone joint_b rotates WITH the chain.
@@ -953,18 +925,7 @@ def test_rewind_rebuild_pins_body_with_later_reset_anchor():
     cmds.connectAttr(f"{joint_anchor}.worldMatrix[0]", f"{p1}.bodyAnchorWorld")
 
     # Rigid weld between the anchor and the dynamic body.
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 0)
-    cmds.setAttr(f"{j}.jointBodyB", 1)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
     # Settle at frame 1: the welded dynamic body hangs 1 unit above the anchor
     # -> joint_child's world is at y≈1.
@@ -1072,18 +1033,7 @@ def test_disabled_kinematic_body_does_not_shift_anchor_write_back():
     cmds.connectAttr(f"{node}.outTranslate[2]", f"{joint_b}.translate")
     cmds.connectAttr(f"{node}.outRotate[2]", f"{joint_b}.rotate")
 
-    j = f"{node}.joints[0]"
-    cmds.setAttr(f"{j}.jointBodyA", 1)
-    cmds.setAttr(f"{j}.jointBodyB", 2)
-    cmds.setAttr(f"{j}.jointType", 0)
-    cmds.setAttr(f"{j}.jointFrameTranslate", 0.0, 0.5, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointFrameRotate", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMin", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularMax", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointLinearSpring", 0.0, 0.0, 0.0, type="double3")
-    cmds.setAttr(f"{j}.jointAngularSpring", 0.0, 0.0, 0.0, type="double3")
+    _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0), body_a=1, body_b=2)
 
     # Move the anchor up by 5 and settle: the welded dynamic body rides to
     # y≈6 in WORLD space, so joint_b's LOCAL write-back (relative to bone 0's

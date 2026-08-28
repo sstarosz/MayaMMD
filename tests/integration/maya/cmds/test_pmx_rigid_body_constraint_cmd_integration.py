@@ -61,6 +61,23 @@ def _add_bodies(solver, count):
         cmds.pmxRigidBody(solver, name=f"Body{i}", physicsMode="physics")
 
 
+def _joint_at(solver: str, index: int) -> str:
+    """The pmxRigidBodyJoint node connected to solver.jointShapes[index]."""
+    plugs = (
+        cmds.listConnections(f"{solver}.jointShapes[{index}]", source=True, plugs=True)
+        or []
+    )
+    assert_eq(len(plugs), 1, f"jointShapes[{index}] should have one source ({plugs})")
+    return str(plugs[0]).split(".")[0]
+
+
+def _joint_guide_at(solver: str, index: int) -> str:
+    """The joint's guide transform (the FRAME) holding the shape at `index`."""
+    parents = cmds.listRelatives(_joint_at(solver, index), parent=True) or []
+    assert_eq(len(parents), 1, f"joint {index} should have one guide parent")
+    return parents[0]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Cases
 # ─────────────────────────────────────────────────────────────────────────
@@ -88,9 +105,11 @@ def test_append_joint_data():
         angularSpring=(8.0, 9.0, 10.0),
     )
     assert_eq(idx, 0, f"first joint index != 0 ({idx})")
-    assert_eq(int(cmds.getAttr(f"{solver}.joints", size=True)), 1, "joints count != 1")
+    assert_eq(
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True)), 1, "joints count != 1"
+    )
 
-    base = f"{solver}.joints[0]"
+    base = _joint_at(solver, 0)
     assert_eq(cmds.getAttr(f"{base}.jointNameLocal"), "LeftChest", "jointNameLocal")
     assert_eq(
         cmds.getAttr(f"{base}.jointNameUniversal"),
@@ -117,21 +136,21 @@ def test_frame_conversion():
         position=(1.0, 2.0, 3.0),
         rotation=(1.5707963267948966, 0.0, 0.0),  # pi/2 rad on X
     )
-    base = f"{solver}.joints[0]"
-    # Z-flip: position z=3 -> -3.
+    base = _joint_guide_at(solver, 0)
+    # The frame is the joint guide's transform (world space): Z-flip on the
+    # translation (z=3 -> -3), and pi/2 rad -> -90 deg on X (handedness flip).
     assert_true(
-        approx_equal_tuple(
-            cmds.getAttr(f"{base}.jointFrameTranslate")[0], (1.0, 2.0, -3.0)
-        ),
-        f"jointFrameTranslate Z-flip wrong {cmds.getAttr(f'{base}.jointFrameTranslate')}",
+        approx_equal_tuple(cmds.getAttr(f"{base}.translate")[0], (1.0, 2.0, -3.0)),
+        f"joint frame translate Z-flip wrong {cmds.getAttr(f'{base}.translate')}",
     )
-    # pi/2 rad -> -90 deg on X (handedness flip), Y/Z untouched.
-    frame_rot = cmds.getAttr(f"{base}.jointFrameRotate")[0]
+    frame_rot = cmds.getAttr(f"{base}.rotate")[0]
     assert_true(
         approx_equal_tuple(frame_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
-        f"jointFrameRotate handedness flip wrong {frame_rot}",
+        f"joint frame rotate handedness flip wrong {frame_rot}",
     )
-    print("✓ MMD joint frame converted (Z-flip + radians->degrees handedness)")
+    print(
+        "✓ MMD joint frame on the guide transform (Z-flip + radians->degrees handedness)"
+    )
     return True
 
 
@@ -158,7 +177,7 @@ def test_limits_springs_converted():
         linearSpring=(4.0, 5.0, 6.0),
         angularSpring=(7.0, 8.0, 9.0),
     )
-    base = f"{solver}.joints[0]"
+    base = _joint_at(solver, 0)
     # Linear: X/Y unchanged; Z negated + min/max swapped.
     assert_true(
         approx_equal_tuple(
@@ -218,7 +237,7 @@ def test_asymmetric_angular_limits_real_model():
         angularMin=(-0.524, -0.175, -0.087),
         angularMax=(0.087, 0.175, 0.087),
     )
-    base = f"{solver}.joints[0]"
+    base = _joint_at(solver, 0)
     assert_true(
         approx_equal_tuple(
             cmds.getAttr(f"{base}.jointAngularMin")[0], (-0.087, -0.175, -0.087)
@@ -252,16 +271,18 @@ def test_frame_in_world_space():
         bodyA=0,
         bodyB=1,
         type=0,
-        position=(1.0, 2.0, 3.0),
+        position=(1.0, 2.0, 3.0),  # Z-flip -> world frame (1, 2, -3)
     )
-    base = f"{solver}.joints[0]"
+    # The joint guide's WORLD transform is the frame (world space), even
+    # though it is parented under the moved group — the solver reads world, so
+    # the sim stays independent of the group's location.
+    base = _joint_guide_at(solver, 0)
+    world_pos = cmds.xform(base, query=True, worldSpace=True, translation=True)
     assert_true(
-        approx_equal_tuple(
-            cmds.getAttr(f"{base}.jointFrameTranslate")[0], (1.0, 2.0, -3.0)
-        ),
-        f"jointFrameTranslate not in world space {cmds.getAttr(f'{base}.jointFrameTranslate')}",
+        approx_equal_tuple(world_pos, (1.0, 2.0, -3.0)),
+        f"joint world frame not world-fixed {world_pos}",
     )
-    print("✓ joint frame stored in world space (group transform ignored)")
+    print("✓ joint frame is the node's WORLD transform (group transform ignored)")
     return True
 
 
@@ -276,7 +297,7 @@ def test_self_constraint_rejected():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
         0,
         "rejected self-constraint should not create a joint",
     )
@@ -298,7 +319,7 @@ def test_auto_increment_indices():
     assert_eq(
         cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=2), 2, "joint 2 idx"
     )
-    assert_eq(int(cmds.getAttr(f"{solver}.joints", size=True)), 3, "joints count")
+    assert_eq(int(cmds.getAttr(f"{solver}.jointShapes", size=True)), 3, "joints count")
     print("✓ joints auto-increment 0, 1, 2 ...")
     return True
 
@@ -319,7 +340,7 @@ def test_explicit_index_validation():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.joints", size=True)),
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True)),
         1,
         "rejected index should not create a joint",
     )
@@ -339,7 +360,7 @@ def test_type_validated():
         except RuntimeError:
             pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
         0,
         "rejected type should not create a joint",
     )
@@ -352,7 +373,10 @@ def test_joint_type_enum_fields_exposed():
     _group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
 
-    fields = cmds.attributeQuery("jointType", node=solver, listEnum=True)
+    # The enum attribute lives on the per-joint node (not the solver).
+    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=4)
+    joint = _joint_at(solver, 0)
+    fields = cmds.attributeQuery("jointType", node=joint, listEnum=True)
     assert_true(
         fields
         and "Spring6Dof" in fields[0]
@@ -365,8 +389,7 @@ def test_joint_type_enum_fields_exposed():
     )
     # The field VALUES are the PMX JointType values (0..5) — writing 4 (Slider)
     # and reading back yields 4.
-    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=4)
-    assert_eq(int(cmds.getAttr(f"{solver}.joints[0].jointType")), 4, "enum value write")
+    assert_eq(int(cmds.getAttr(f"{joint}.jointType")), 4, "enum value write")
     print("✓ jointType exposes the six PMX JointType fields as a dropdown")
     return True
 
@@ -383,7 +406,7 @@ def test_body_indices_validated():
         except RuntimeError:
             pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
         0,
         "rejected body indices should not create a joint",
     )
@@ -405,7 +428,7 @@ def test_model_root_resolution():
     assert_eq(idx, 0, "index via model root != 0")
     assert_true(
         approx_equal_tuple(
-            cmds.getAttr(f"{solver}.joints[0].jointFrameTranslate")[0], (4.0, 0.0, 0.0)
+            cmds.getAttr(f"{_joint_guide_at(solver, 0)}.translate")[0], (4.0, 0.0, 0.0)
         ),
         "frame translate via model root",
     )
@@ -429,7 +452,7 @@ def test_query_edit_rejected():
     except RuntimeError:
         pass
     assert_eq(
-        int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+        int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
         0,
         "rejected query/edit should not create a joint",
     )
