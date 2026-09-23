@@ -1,7 +1,8 @@
 """
 rigid_body_builder.py — rigid bodies for PMX models.
 
-Creates the ``{model}_RigidBodies`` group and one ``pmxRigidBodyNode`` solver
+Creates the ``{model}_RigidBodies`` group (with the ``{model}_Bodies`` and
+``{model}_Joints`` identity sub-groups) and one ``pmxRigidBodyNode`` solver
 per PMX model, then creates one ``pmxRigidBodyShape`` locator node per rigid
 body through the native ``pmxRigidBody`` command (one entry per PMX rigid
 body / joint, in PMX order), wired into the solver's ``bodyShapes[]`` message
@@ -59,6 +60,46 @@ def _create_rigid_bodies_group(
     )
 
 
+def _create_subgroup(parent_group: str, name: str) -> str:
+    """Create an IDENTITY transform sub-group under ``parent_group``.
+
+    The ``{model}_Bodies`` / ``{model}_Joints`` sub-groups are pure Outliner
+    organisation and MUST stay at identity: the solver drives the per-body
+    guide transforms in the ``{model}_RigidBodies`` group's space, so an
+    offset between that group and the guides would displace every collider
+    in the viewport.
+    """
+    return cmds.createNode("transform", name=name, parent=parent_group)
+
+
+def _children(group: str) -> set[str]:
+    """Full DAG paths of ``group``'s current direct children."""
+    return set(cmds.listRelatives(group, children=True, fullPath=True) or [])
+
+
+def _move_new_children(parent_group: str, previous: set[str], destination: str) -> None:
+    """Move the nodes created under ``parent_group`` since ``previous`` into ``destination``.
+
+    The native commands create every per-body guide / per-joint transform
+    directly under their parent group (``{model}_RigidBodies``); the Outliner
+    organisation (``{model}_Bodies`` / ``{model}_Joints``) is applied here, in
+    one batched ``parent`` call per batch.  ``destination`` is an IDENTITY
+    child of ``parent_group``, so the move is done with ``relative=True`` —
+    every LOCAL value (the guides' driven translate/rotate, the joints'
+    world-frame-compensated transform) stays untouched, and connections (guide
+    driving, bodyShapes/jointShapes wiring) survive reparenting.
+    """
+    created = sorted(_children(parent_group) - previous)
+    if not created:
+        return
+    try:
+        cmds.parent(created, destination, relative=True)
+    except Exception as exc:  # pragma: no cover - Maya-side failure path
+        log.warning(
+            "Could not move %d nodes into %s: %s", len(created), destination, exc
+        )
+
+
 def _create_rigid_body_solver(
     name_registry: PMXNamingManager, parent_group: str
 ) -> str:
@@ -104,7 +145,8 @@ def _populate_rigid_bodies(
     pmxRest* attributes.  Each body is a ``pmxRigidBodyShape`` guide: the
     guide TRANSFORM is driven to the body's CURRENT pose by the solver each
     frame (so the collider follows the animation), and the REST pose lives in
-    the shape's ``bodyRestTranslate``/``bodyRestRotate`` attributes.
+    the shape's ``bodyRestTranslate``/``bodyRestRotate`` attributes.  The
+    caller moves the new guides into the ``{model}_Bodies`` sub-group.
 
     Returns the number of bodies successfully appended — the caller must
     compare it against ``len(pmx_data.rigid_bodies)``: if a body fails, every
@@ -164,9 +206,10 @@ def _populate_rigid_body_constraints(node: str, pmx_data: PmxModel) -> None:
     (the command validates the referenced body indices against the node's
     current body count).  Joints are appended in PMX order so the joint index
     matches the PMX joint index.  Each call creates a selectable
-    ``pmxRigidBodyJoint`` node under the rigid bodies group — its transform IS
-    the joint frame, so the constraint is visible and editable in the viewport
-    — wired into the solver's ``jointShapes[]`` message array.
+    ``pmxRigidBodyJoint`` node — its transform IS the joint frame, so the
+    constraint is visible and editable in the viewport — wired into the
+    solver's ``jointShapes[]`` message array.  The caller moves the new joint
+    nodes into the ``{model}_Joints`` sub-group.
 
     Unlike bodies, a failed joint needs no count check: nothing downstream
     references joints by index, so a dropped joint just means one constraint
@@ -227,9 +270,12 @@ def create_rigid_bodies_from_pmx_data(
     """Create the rigid-body graph for a PMX model (no in-memory handle).
 
     Creates the ``{model}_RigidBodies`` group with one ``pmxRigidBodyNode``
-    solver under it, then populates the solver through the native commands: one
-    ``pmxRigidBody`` per PMX rigid body and one ``pmxRigidBodyConstraint``
-    per PMX joint, both in PMX order.  Everything is wired in this single
+    solver directly under it plus the ``{model}_Bodies`` / ``{model}_Joints``
+    identity sub-groups, then populates the solver through the native
+    commands: one ``pmxRigidBody`` per PMX rigid body (guides under
+    ``{model}_Bodies``) and one ``pmxRigidBodyConstraint``
+    per PMX joint (nodes under ``{model}_Joints``), both in PMX order.
+    Everything is wired in this single
     pass — there is no separate finalize step.
 
     Args:
@@ -245,6 +291,11 @@ def create_rigid_bodies_from_pmx_data(
         group is left in the scene in that case.
     """
     group = _create_rigid_bodies_group(name_registry, root_transform_obj)
+    # Outliner organisation: the solver stays at the top of the rigid bodies
+    # group; the per-body guides and the per-joint nodes each get their own
+    # identity sub-group so bodies and joints are separate in the Outliner.
+    bodies_group = _create_subgroup(group, name_registry.get_bodies_group_name())
+    joints_group = _create_subgroup(group, name_registry.get_joints_group_name())
     try:
         node = _create_rigid_body_solver(name_registry, parent_group=group)
     except Exception as e:  # pragma: no cover - Maya-side failure path
@@ -254,8 +305,9 @@ def create_rigid_bodies_from_pmx_data(
             e,
         )
         return None
-
+    bodies_before = _children(group)
     created = _populate_rigid_bodies(node, pmx_data, joints)
+    _move_new_children(group, bodies_before, bodies_group)
     # A failed body shifts every later PMX body index — the constraint
     # references would point at the WRONG bodies.
     if created != len(pmx_data.rigid_bodies):
@@ -265,5 +317,7 @@ def create_rigid_bodies_from_pmx_data(
             created,
             len(pmx_data.rigid_bodies),
         )
+    joints_before = _children(group)
     _populate_rigid_body_constraints(node, pmx_data)
+    _move_new_children(group, joints_before, joints_group)
     return node

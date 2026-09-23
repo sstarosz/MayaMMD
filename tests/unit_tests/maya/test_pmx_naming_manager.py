@@ -342,6 +342,12 @@ class TestPMXNamingStrategy(unittest.TestCase):
             naming_manager.get_rigid_body_solver_name(),
             "PhysModelLocal_RigidBodySolver",
         )
+        self.assertEqual(
+            naming_manager.get_bodies_group_name(), "PhysModelLocal_Bodies"
+        )
+        self.assertEqual(
+            naming_manager.get_joints_group_name(), "PhysModelLocal_Joints"
+        )
 
         # Universal name is the fallback when local is empty.
         pmx_model2 = MockPmxModel([])
@@ -357,6 +363,12 @@ class TestPMXNamingStrategy(unittest.TestCase):
             naming_manager2.get_rigid_body_solver_name(),
             "PhysModelUniversal_RigidBodySolver",
         )
+        self.assertEqual(
+            naming_manager2.get_bodies_group_name(), "PhysModelUniversal_Bodies"
+        )
+        self.assertEqual(
+            naming_manager2.get_joints_group_name(), "PhysModelUniversal_Joints"
+        )
 
         # No model names at all -> bare fallback names.
         naming_manager3 = PMXNamingManager(MockPmxModel([]))
@@ -364,6 +376,8 @@ class TestPMXNamingStrategy(unittest.TestCase):
         self.assertEqual(
             naming_manager3.get_rigid_body_solver_name(), "RigidBodySolver"
         )
+        self.assertEqual(naming_manager3.get_bodies_group_name(), "Bodies")
+        self.assertEqual(naming_manager3.get_joints_group_name(), "Joints")
 
 
 if __name__ == "__main__":

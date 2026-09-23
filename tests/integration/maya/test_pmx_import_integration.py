@@ -214,7 +214,9 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
     one ``pmxRigidBodyNode`` solver (gravity -9.8), POPULATES its ``bodies``
     array through the native ``pmxRigidBody`` command (one body per PMX rigid
     body, in PMX order), and stamps the solver name on the root's
-    ``pmxRigidBodyNode`` string attribute for discovery.
+    ``pmxRigidBodyNode`` string attribute for discovery.  The per-body guides
+    and the per-joint nodes live in the group's identity ``{model}_Bodies`` /
+    ``{model}_Joints`` sub-groups (bodies and joints separate in the Outliner).
     """
     root_obj = maya_pmx_data.root_obj
     root_fn = om.MFnTransform(root_obj)
@@ -234,6 +236,20 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         root_name,
         "Rigid bodies group parent is not root",
     )
+
+    # The bodies and joints hang in their own IDENTITY sub-groups under the
+    # rigid bodies group, so the Outliner separates them.  Identity matters:
+    # the solver drives the guides in the rigid bodies group's space.
+    sub_groups = cmds.listRelatives(physics_group.name(), children=True) or []
+    bodies_group = next((g for g in sub_groups if g.endswith("_Bodies")), None)
+    joints_group = next((g for g in sub_groups if g.endswith("_Joints")), None)
+    assert_true(bodies_group is not None, f"Bodies sub-group not found ({sub_groups})")
+    assert_true(joints_group is not None, f"Joints sub-group not found ({sub_groups})")
+    for sub in (bodies_group, joints_group):
+        assert_true(
+            approx_equal_tuple(cmds.getAttr(f"{sub}.translate")[0], (0.0, 0.0, 0.0)),
+            f"sub-group {sub} must stay at identity",
+        )
 
     # Exactly one pmxRigidBodyNode solver shape under the group.
     solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
@@ -274,9 +290,16 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         )
         # First body's data mirrors the first PMX rigid body.
         first = pmx_data.rigid_bodies[0]
-        srcs = cmds.listConnections(f"{solver}.bodyShapes[0]", source=True) or []
-        assert_true(bool(srcs), "bodyShapes[0] has no source shape node")
-        base = srcs[0]
+        # Resolve the SHAPE via the plug: listConnections(source=True) resolves
+        # to the top DAG transform, whose SHORT NAME may repeat across the
+        # {model}_Bodies / {model}_Joints sub-groups (a rigid body and a joint
+        # can carry the same PMX name), while the shape name is unique.
+        shape_plugs = (
+            cmds.listConnections(f"{solver}.bodyShapes[0]", source=True, plugs=True)
+            or []
+        )
+        assert_true(bool(shape_plugs), "bodyShapes[0] has no source shape node")
+        base = str(shape_plugs[0]).split(".")[0]
         assert_eq(
             cmds.getAttr(f"{base}.bodyNameLocal"),
             first.name_local,
@@ -286,6 +309,17 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             int(cmds.getAttr(f"{base}.bodyPhysicsMode")),
             int(first.physics_mode.value),
             "first body physics mode",
+        )
+        # The guide transform holding the shape lives in the bodies sub-group
+        # (resolved by DAG path — short names can repeat across sub-groups).
+        body_guide = cmds.listRelatives(base, parent=True, fullPath=True) or []
+        assert_true(bool(body_guide), "body shape should have a guide parent")
+        assert_eq(
+            (cmds.listRelatives(body_guide[0], parent=True, fullPath=True) or [""])[
+                0
+            ].split("|")[-1],
+            bodies_group,
+            "body guide should live in the bodies sub-group",
         )
     else:
         # Models with no rigid bodies still get the node (empty bodyShapes = no-op).
@@ -321,8 +355,17 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         )
         assert_true(bool(joint_plugs), "jointShapes[0] has no source joint node")
         jbase = str(joint_plugs[0]).split(".")[0]
-        guide = cmds.listRelatives(jbase, parent=True) or []
+        guide = cmds.listRelatives(jbase, parent=True, fullPath=True) or []
         assert_true(bool(guide), "joint shape should have a guide parent")
+        # The joint guide lives in the joints sub-group (resolved by DAG path —
+        # short names can repeat across sub-groups).
+        assert_eq(
+            (cmds.listRelatives(guide[0], parent=True, fullPath=True) or [""])[0].split(
+                "|"
+            )[-1],
+            joints_group,
+            "joint guide should live in the joints sub-group",
+        )
         assert_eq(
             int(cmds.getAttr(f"{jbase}.jointBodyA")),
             int(first.rigid_body_index_a),

@@ -636,10 +636,10 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     world.gravity = in.gravity;
 
     // The guide outputs are expressed in the RigidBodies group's space (the
-    // solver's DAG parent — also the parent of every per-body guide
-    // transform).  The Bullet world runs in WORLD space, so each body's
-    // solved pose must be brought into the group's local frame before it can
-    // drive a child of the group.
+    // solver's DAG parent — the guides hang one level deeper, under the
+    // {model}_Bodies sub-group, which must stay at identity).  The Bullet
+    // world runs in WORLD space, so each body's solved pose must be brought
+    // into the group's local frame before it can drive a child of the group.
     {
         MDagPath solverPath;
         if (MDagPath::getAPathTo(node, solverPath) == MS::kSuccess &&

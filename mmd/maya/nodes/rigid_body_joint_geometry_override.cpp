@@ -69,13 +69,13 @@ struct BoxMesh
     std::vector<unsigned int> indices;
 };
 
-void pushQuad(BoxMesh& mesh, const float n[3], const float a[3], const float b[3],
-              const float c[3], const float d[3], unsigned int& base)
+void pushQuad(BoxMesh& mesh, const float n[3], const float a[3], const float b[3], const float c[3],
+              const float d[3], unsigned int& base)
 {
-    mesh.positions.insert(mesh.positions.end(), {a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1],
-                                                 c[2], d[0], d[1], d[2]});
-    mesh.normals.insert(mesh.normals.end(), {n[0], n[1], n[2], n[0], n[1], n[2], n[0], n[1],
-                                             n[2], n[0], n[1], n[2]});
+    mesh.positions.insert(mesh.positions.end(),
+                          {a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], d[0], d[1], d[2]});
+    mesh.normals.insert(mesh.normals.end(),
+                        {n[0], n[1], n[2], n[0], n[1], n[2], n[0], n[1], n[2], n[0], n[1], n[2]});
     mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
     base += 4;
 }
@@ -106,6 +106,24 @@ void pushQuad(BoxMesh& mesh, const float n[3], const float a[3], const float b[3
     pos.y = el.child(RigidBodyNode::aOutGuideTranslateY).asMDistance().asCentimeters();
     pos.z = el.child(RigidBodyNode::aOutGuideTranslateZ).asMDistance().asCentimeters();
     return true;
+}
+
+// The world matrix of the solver's DAG parent — the {model}_RigidBodies group
+// whose space the solver's body-pose outputs (outGuideTranslate/Rotate) are
+// expressed in.  Identity when it cannot be resolved.
+[[nodiscard]] MMatrix solverGroupWorld(const MObject& solver)
+{
+    if (solver.isNull() || !solver.hasFn(MFn::kDagNode))
+        return MMatrix();
+    MStatus stat;
+    MFnDagNode solverFn(solver, &stat);
+    MObject group = stat ? solverFn.parent(0, &stat) : MObject::kNullObj;
+    if (!stat || group.isNull())
+        return MMatrix();
+    MDagPath groupPath;
+    if (MDagPath::getAPathTo(group, groupPath) != MS::kSuccess)
+        return MMatrix();
+    return groupPath.inclusiveMatrix();
 }
 
 // Draw a wireframe box's 12 edges spanning [lo, hi] (axis-aligned).
@@ -261,14 +279,20 @@ void RigidBodyJointGeometryOverride::updateDG()
         const int bodyB = bodyBPlug.isNull() ? -1 : bodyBPlug.asInt();
         fState.hasBodyA = readBodyGuidePose(m_solver, bodyA, fState.bodyAPos);
         fState.hasBodyB = readBodyGuidePose(m_solver, bodyB, fState.bodyBPos);
-        // The frame in GROUP space = the guide's LOCAL translation (the guide
-        // is a direct child of the group).  Used only to size the anchor.
+        // The frame in the SOLVER GROUP's space (the space the body poses
+        // above are read in).  The joint may sit in a {model}_Joints
+        // sub-group, so go through the world matrices instead of assuming
+        // the guide is a direct child of the group.  Used only to size the
+        // anchor.
         MFnDagNode dag(fJoint, &stat);
         MObject guide = stat ? dag.parent(0, &stat) : MObject::kNullObj;
-        if (stat && !guide.isNull() && guide.hasFn(MFn::kTransform))
+        MDagPath guidePath;
+        if (stat && !guide.isNull() && guide.hasFn(MFn::kTransform) &&
+            MDagPath::getAPathTo(guide, guidePath) == MS::kSuccess)
         {
-            MFnTransform tf(guide, &stat);
-            const MVector t = tf.getTranslation(MSpace::kTransform, &stat);
+            const MMatrix groupInv = solverGroupWorld(m_solver).inverse();
+            const MTransformationMatrix gtm(groupInv * guidePath.inclusiveMatrix());
+            const MVector t = gtm.getTranslation(MSpace::kTransform);
             frameGroup = MPoint(t.x, t.y, t.z);
         }
     }
@@ -326,19 +350,7 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
     // connector lines (drawn in addUIDrawables) land where the bodies are.
     // m_toLocal = shapeWorld^-1 * groupWorld (the solver's DAG parent is the
     // RigidBodies group).
-    MMatrix groupWorld;
-    if (!m_solver.isNull() && m_solver.hasFn(MFn::kDagNode))
-    {
-        MStatus stat;
-        MFnDagNode solverFn(m_solver, &stat);
-        MObject group = stat ? solverFn.parent(0, &stat) : MObject::kNullObj;
-        if (stat && !group.isNull())
-        {
-            MDagPath groupPath;
-            if (MDagPath::getAPathTo(group, groupPath) == MS::kSuccess)
-                groupWorld = groupPath.inclusiveMatrix();
-        }
-    }
+    const MMatrix groupWorld = solverGroupWorld(m_solver);
     m_toLocal = dagPath.inclusiveMatrix().inverse() * groupWorld;
     fState.bodyAPos = fState.bodyAPos * m_toLocal;
     fState.bodyBPos = fState.bodyBPos * m_toLocal;
@@ -569,8 +581,8 @@ bool RigidBodyJointGeometryOverride::refineSelectionPath(const MSelectionInfo& /
     return true;
 }
 
-void RigidBodyJointGeometryOverride::updateSelectionGranularity(
-    const MDagPath& /*dagPath*/, MSelectionContext& selectionContext)
+void RigidBodyJointGeometryOverride::updateSelectionGranularity(const MDagPath& /*dagPath*/,
+                                                                MSelectionContext& selectionContext)
 {
     selectionContext.setSelectionLevel(MSelectionContext::kObject);
 }

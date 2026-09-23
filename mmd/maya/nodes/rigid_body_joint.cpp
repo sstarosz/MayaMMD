@@ -11,7 +11,7 @@
  * `jointShapes[]` message array).  The node's DAG TRANSFORM is the joint's
  * FRAME — joints are static config, so moving/rotating the node repositions
  * the constraint, and the solver reads the frame straight from the transform
- * (translate + XYZ rotate in the RigidBodies group's space).  The joint is
+ * in WORLD space (translate + XYZ rotate).  The joint is
  * drawn by a geometry override registered for `drawdb/geometry/
  * pmxRigidBodyJoint` (not here).
  */

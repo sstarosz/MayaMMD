@@ -7,7 +7,8 @@
  * JOINT (constraint), parallel to the per-body pmxRigidBodyShape.
  *
  * Each PMX joint becomes its own MPxLocatorNode under the model's
- * `{model}_RigidBodies` group.  The node is BOTH:
+ * `{model}_Joints` sub-group (inside the `{model}_RigidBodies` group).  The
+ * node is BOTH:
  *   1. a data holder — every PMX joint field except the FRAME is a storable
  *      attribute (the solver reads them through its `jointShapes[]` message
  *      array), and
@@ -15,7 +16,7 @@
  *      ANIMATED by the solver), a joint is static config, so its DAG
  *      transform IS the joint frame: moving/rotating the node repositions
  *      the constraint, and the solver reads the frame straight from the
- *      transform (translate + XYZ rotate, in the RigidBodies group's space).
+ *      transform in WORLD space (translate + XYZ rotate).
  *
  * The joint is drawn by a geometry override registered for this node's
  * classification (`drawdb/geometry/pmxRigidBodyJoint`) — a lit solid showing
@@ -80,8 +81,9 @@ class RigidBodyJoint : public MPxLocatorNode
 
     // Read this node into a core JointDefinition (used by the solver's
     // readJointData — it pulls each joint from its connected joint node).
-    // The FRAME comes from the node's DAG transform (translate + XYZ rotate
-    // in the RigidBodies group's space); the rest from attributes.  Returns
+    // The FRAME comes from the node's DAG transform (read in WORLD space —
+    // the node's parent group, {model}_Joints on import, does not matter);
+    // the rest from attributes.  Returns
     // false when `node` is not a pmxRigidBodyJoint.
     static bool readJointDefinition(const MObject& node,
                                     mmd::core::RigidBodySimulation::JointDefinition& out);
@@ -91,17 +93,17 @@ class RigidBodyJoint : public MPxLocatorNode
     // in pmxRigidBodyNode's joints[] compound).  The joint FRAME (position +
     // orientation) is NOT an attribute — it is the node's DAG transform.
     // ------------------------------------------------------------------
-    static MObject aSolver;            // message -> owning pmxRigidBodyNode (wired at import)
-    static MObject aJointNameLocal;    // string — PMX name_local; "" = none
+    static MObject aSolver;             // message -> owning pmxRigidBodyNode (wired at import)
+    static MObject aJointNameLocal;     // string — PMX name_local; "" = none
     static MObject aJointNameUniversal; // string — PMX name_universal; "" = none
-    static MObject aJointBodyA;        // long — PMX rigid_body_index_a
-    static MObject aJointBodyB;        // long — PMX rigid_body_index_b
-    static MObject aJointType;         // enum — PMX joint type (JointType)
-    static MObject aJointLinearMin;    // float3 — linear limit min (joint-frame offsets)
-    static MObject aJointLinearMax;    // float3 — linear limit max (joint-frame offsets)
-    static MObject aJointAngularMin;   // float3 — angular limit min (radians)
-    static MObject aJointAngularMax;   // float3 — angular limit max (radians)
-    static MObject aJointLinearSpring; // float3 — linear spring constants
+    static MObject aJointBodyA;         // long — PMX rigid_body_index_a
+    static MObject aJointBodyB;         // long — PMX rigid_body_index_b
+    static MObject aJointType;          // enum — PMX joint type (JointType)
+    static MObject aJointLinearMin;     // float3 — linear limit min (joint-frame offsets)
+    static MObject aJointLinearMax;     // float3 — linear limit max (joint-frame offsets)
+    static MObject aJointAngularMin;    // float3 — angular limit min (radians)
+    static MObject aJointAngularMax;    // float3 — angular limit max (radians)
+    static MObject aJointLinearSpring;  // float3 — linear spring constants
     static MObject aJointAngularSpring; // float3 — angular spring constants
-    static MObject aDrawMode;          // enum — viewport draw mode (DrawMode)
+    static MObject aDrawMode;           // enum — viewport draw mode (DrawMode)
 };

@@ -7,7 +7,8 @@
  * (Phase 2 viewport work).
  *
  * Each PMX rigid body becomes its own MPxLocatorNode under the model's
- * `{model}_RigidBodies` group.  The node is BOTH:
+ * `{model}_Bodies` sub-group (inside the `{model}_RigidBodies` group).  The
+ * node is BOTH:
  *   1. a data holder — every PMX body field is a storable attribute (the
  *      solver reads them through its `bodyShapes[]` message array), and
  *   2. the viewport GUIDE — its transform is DRIVEN by the solver each frame

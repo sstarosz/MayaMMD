@@ -171,7 +171,8 @@ class RigidBodyNode : public MPxLocatorNode
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
         // The RigidBodies group's inclusive matrix (the solver's DAG parent —
-        // also the parent of every per-body guide transform).  The guide
+        // the guides hang one level deeper under the {model}_Bodies
+        // sub-group, which must stay at identity).  The guide
         // outputs express each body's WORLD pose in this space, so the driven
         // guide lands where the body actually is even if the group was moved.
         MMatrix groupWorld;

@@ -741,3 +741,25 @@ class PMXNamingManager:
             desired_name = "RigidBodySolver"
 
         return self.make_unique(desired_name)
+
+    def get_bodies_group_name(self) -> str:
+        """Get unique per-body guides group name (child of the RigidBodies group)."""
+        if self.model_name_local:
+            desired_name = f"{self.model_name_local}_Bodies"
+        elif self.model_name_universal:
+            desired_name = f"{self.model_name_universal}_Bodies"
+        else:
+            desired_name = "Bodies"
+
+        return self.make_unique(desired_name)
+
+    def get_joints_group_name(self) -> str:
+        """Get unique per-joint nodes group name (child of the RigidBodies group)."""
+        if self.model_name_local:
+            desired_name = f"{self.model_name_local}_Joints"
+        elif self.model_name_universal:
+            desired_name = f"{self.model_name_universal}_Joints"
+        else:
+            desired_name = "Joints"
+
+        return self.make_unique(desired_name)
