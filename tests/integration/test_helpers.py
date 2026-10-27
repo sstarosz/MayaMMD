@@ -176,6 +176,25 @@ _ROTATE_ORDERS = [
 ]
 
 
+def get_angle3_radians(plug: str) -> tuple[float, float, float]:
+    """Read an angle-triple attribute (e.g. ``jointAngularMin``) in radians.
+
+    ``cmds.getAttr`` returns angles in the UI unit; this converts them back so
+    tests can compare against the radian values PMX stores.
+    """
+    unit = om.MAngle.uiUnit()
+    values = cmds.getAttr(plug)[0]
+    return tuple(om.MAngle(v, unit).asRadians() for v in values)
+
+
+def set_angle3_radians(plug: str, values: tuple[float, float, float]) -> None:
+    """Write an angle-triple attribute from radians (converted to the UI unit)."""
+    unit = om.MAngle.uiUnit()
+    cmds.setAttr(
+        plug, *(om.MAngle(v, om.MAngle.kRadians).asUnits(unit) for v in values)
+    )
+
+
 def euler_degrees_to_quat(
     rx: float, ry: float, rz: float, rotate_order: int = 0
 ) -> om.MQuaternion:

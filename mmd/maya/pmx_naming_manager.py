@@ -37,6 +37,12 @@ IK_SOLVER_SUFFIX = "_CcdSolver"
 # Example: ``Bone_126_TailJnt``
 TAIL_JOINT_SUFFIX = "_TailJnt"
 
+# Suffix for PMX rigid-body joints (pmxRigidBodyJoint transforms).  A PMX
+# joint is often named exactly like the body it moves, and ``_Jnt`` belongs
+# to bones (Maya joints), so constraints carry their own suffix.
+# Example: ``Model_CapeL1_Constraint``
+RIGID_BODY_JOINT_SUFFIX = "_Constraint"
+
 # ---------------------------------------------------------------------------
 # Naming conventions summary
 # ---------------------------------------------------------------------------
@@ -62,6 +68,8 @@ TAIL_JOINT_SUFFIX = "_TailJnt"
 # | Mesh transform        | DAG  | ``{model}_Mesh``                                |
 # | Mesh shape            | DAG  | ``{model}_Mesh_Shape``                          |
 # | Geo group             | DAG  | ``{model}_Geo``                                 |
+# | Rigid body guide      | DAG  | ``{model}_{rigidbody_name}``                    |
+# | Rigid-body joint      | DAG  | ``{model}_{joint_name}_Constraint``             |
 # | rotScale              | DG   | ``{model}_{bone_name}_RotScale``                |
 # | ccdSolver             | DG   | ``{model}_{bone_name}_CcdSolver``               |
 # | BoneMorph node        | DG   | ``{model}_BoneMorph``                           |
@@ -116,6 +124,8 @@ class PMXNamingManager:
         ] = {}  # blendshape_index -> blendshape_name
 
         self._joint_name_map: dict[int, str] = {}  # joint_index -> joint_name #
+
+        self._rigid_body_name_map: dict[int, str] = {}  # rigid_body_index -> name
 
         self._inherit_rotation_controller_map: dict[
             int, str
@@ -242,6 +252,9 @@ class PMXNamingManager:
 
         # Step 6: Pre-process joint names
         self._preprocess_joint_names()
+
+        # Step 7: Pre-process rigid body names
+        self._preprocess_rigid_body_names()
 
         # Step 8: Pre-process inheritCtrl names for inheritance rotation
         self._preprocess_inherit_rotation_controller_names()
@@ -406,6 +419,37 @@ class PMXNamingManager:
 
             # Assign joint name to map
             self._joint_name_map[idx] = unique_joint_name
+
+    def _preprocess_rigid_body_names(self):
+        """Pre-process rigid body names to handle duplicates and special characters."""
+        unique_names = set()
+        count_of_unique = defaultdict(int)
+
+        for idx, body in enumerate(self.pmx_data.rigid_bodies):
+            # Get the base name for this rigid body
+            if body.name_local and self._is_ascii_safe(body.name_local):
+                base_name = self._sanitize_name(body.name_local)
+            elif body.name_universal and self._is_ascii_safe(body.name_universal):
+                base_name = self._sanitize_name(body.name_universal)
+            else:
+                base_name = f"RigidBody_{idx}"
+
+            # Find a unique name
+            occurrence_index = count_of_unique[base_name]
+            unique_body_name = (
+                base_name
+                if occurrence_index == 0
+                else f"{base_name}_{occurrence_index}"
+            )
+            while unique_body_name in unique_names:
+                occurrence_index += 1
+                unique_body_name = f"{base_name}_{occurrence_index}"
+
+            unique_names.add(unique_body_name)
+            count_of_unique[base_name] = occurrence_index + 1
+
+            # Assign rigid body name to map
+            self._rigid_body_name_map[idx] = unique_body_name
 
     def _preprocess_inherit_rotation_controller_names(self):
         """Pre-process inherit rotation controller names for bones with INHERIT_ROTATION flag.
@@ -752,6 +796,29 @@ class PMXNamingManager:
             desired_name = "Bodies"
 
         return self.make_unique(desired_name)
+
+    def get_rigid_body_name(self, body_index: int) -> str:
+        """Get unique ``{model}_{rigidbody_name}`` guide name for a PMX rigid body.
+
+        The ``pmxRigidBodyShape`` guide transform (Maya names its shape).  The
+        body name follows the shared policy: the local name when it is
+        ASCII-safe, else the universal name, else ``RigidBody_{index}``.
+        """
+        body_name = self._rigid_body_name_map.get(body_index, f"RigidBody_{body_index}")
+        return self.make_unique(f"{self.get_model_name()}_{body_name}")
+
+    def get_rigid_body_joint_name(self, joint_index: int) -> str:
+        """Get unique ``{model}_{joint_name}_Constraint`` transform name for a PMX joint.
+
+        The ``pmxRigidBodyJoint`` transform (Maya names its shape).  The joint
+        name follows the shared policy: the local name when it is ASCII-safe,
+        else the universal name, else ``Joint_{index}``.  The suffix keeps it
+        apart from the body it moves, which is often named the same.
+        """
+        joint_name = self._joint_name_map.get(joint_index, f"Joint_{joint_index}")
+        return self.make_unique(
+            f"{self.get_model_name()}_{joint_name}{RIGID_BODY_JOINT_SUFFIX}"
+        )
 
     def get_joints_group_name(self) -> str:
         """Get unique per-joint nodes group name (child of the RigidBodies group)."""

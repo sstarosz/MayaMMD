@@ -5,21 +5,19 @@
  *
  * RigidBodyShapeGeometryOverride — viewport renderer for one pmxRigidBodyShape.
  *
- * Replaces the old flat-solid MUIDrawManager draw override with a proper
- * MPxGeometryOverride so the collider's SOLID surface is lit by the
- * viewport lights (stock k3dIsotropicOpenPBRSurfaceShader — the same OpenPBR
- * material Maya 2026+ uses for its default shader — with a per-frame
- * `baseColor` group colour).  The WIRE outline is still drawn with
- * MUIDrawManager (addUIDrawables), and the render item is pickable so the
- * guide keeps its native selection.
+ * The collider's SOLID surface is lit by the viewport lights (the stock
+ * surface shader of surface_shader.hpp, with a per-frame group colour).  The
+ * WIRE outline is drawn with MUIDrawManager (addUIDrawables), and the render
+ * item is pickable so the guide keeps its native selection.
  *
  * Drawing (in the guide's LOCAL space — the guide transform is the body's
  * current pose, so the collider sits at the local origin):
  *
- *   - solid   -> one MRenderItem (NonMaterialSceneItem, OpenPBR surface
+ *   - solid   -> one MRenderItem (NonMaterialSceneItem, lit surface
  *                shader, sDormantWireDepthPriority so it renders lit AND on
  *                top of the character mesh), position+normal(+uv) streams.
- *   - wire    -> MUIDrawManager lines (same primitive wireframe as before).
+ *   - wire    -> MUIDrawManager lines; a body connected to a selected joint
+ *                is drawn in its A / B role colour (collider_wire.hpp).
  *
  * The draw mode (off / wire / solid / wire+solid) is the shape's `drawMode`
  * attribute; the colour comes from the PMX collision group (16-colour
@@ -108,6 +106,7 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
         short groupId = 0;
         short physicsMode = 0;
         bool enabled = true;
+        unsigned int jointRoles = 0; // selected joints: bit 0 = A, bit 1 = B
     };
 
     MObject fShape;

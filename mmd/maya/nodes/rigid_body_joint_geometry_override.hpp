@@ -3,52 +3,57 @@
  *
  * rigid_body_joint_geometry_override.hpp
  *
- * RigidBodyJointGeometryOverride — lit viewport renderer for one
- * pmxRigidBodyJoint, parallel to RigidBodyShapeGeometryOverride for the
- * per-body colliders.
+ * RigidBodyJointGeometryOverride — viewport renderer for one pmxRigidBodyJoint,
+ * parallel to RigidBodyShapeGeometryOverride for the per-body colliders.
  *
- * The joint node's guide transform IS the joint frame, so the glyph sits at
- * the LOCAL origin.  A joint is a rigid CONSTRAINT BETWEEN TWO BODIES, so the
- * visualization leads with that relationship:
+ * Every joint draws a compact, pickable HUB at its live attachment A: lit in
+ * shaded modes, a wire sphere in wireframe mode.  The hub's colour is the
+ * joint's freedom state (welded / rotates / translates; a joint that does both
+ * shows both colours in alternating wedges, visible from every direction —
+ * joint_palette.hpp), from the shared freedom model (joint_display_ranges.hpp).
  *
- *   - connector -> two thick lines from the two constrained bodies' CURRENT
- *                  positions (read from the solver's outGuideTranslate[]
- *                  outputs, mapped into the shape's local space) through the
- *                  joint frame — you can see at a glance which two bodies a
- *                  joint links, live.
- *   - solid     -> a small anchor cube at the frame, lit with the stock OpenPBR
- *                  surface shader (k3dIsotropicOpenPBRSurfaceShader) and
- *                  coloured by PMX joint type; it is the pickable/selectable
- *                  element.
- *   - wire      -> the linear-limit range as a thin wire box + the frame's
- *                  X/Y/Z orientation triad, via MUIDrawManager.
+ * A joint that constrains nothing (a missing, disabled or shared body, or
+ * two bone-driven bodies) has a hollow dashed hub instead.
  *
- * The draw mode (off / wire / solid / wire+solid) is the joint's `drawMode`
- * attribute; the colour comes from the PMX joint type (6-colour palette).
- * When a joint is selected the anchor keeps its colour and a native
- * selection-colour WIREFRAME is drawn on top (same as any mesh).
+ * A selected joint gets a selection-coloured wire around the hub.  A joint
+ * picked DIRECTLY (itself or its transform, not a parent group: selecting
+ * {model}_Joints would flood the view with ~400 overlays) also adds, as UI
+ * drawables: links from each body's centre to its own attachment (A rings, B
+ * diamonds); in Ranges mode the motion-range guides with each rotation axis's
+ * current angle (joint_guides.hpp); a dashed ghost of the hub at the joint's
+ * transform, tethered to the hub, once body A has carried the hub away from
+ * it; and fallback outlines for connected bodies hidden or isolated out of
+ * the view.  An inactive joint draws only dashed links to its bodies.  The overlay is drawn twice — a faint
+ * X-ray ghost and a depth-tested pass — so joints inside cloth and hair stay
+ * readable.  Nothing depends on the camera: every viewport shows the same
+ * overlay, sized relative to the hub.
  *
- * LIFECYCLE (per the devkit footPrintNode_GeometryOverride sample): the
- * render item is created once and appended to the override's persistent
- * render-item list — VP2 owns it, so the plugin never calls
- * MRenderItem::Destroy.  `cleanUp()` is empty; the stock shader is created
- * lazily and released in the destructor (while Maya is still alive).
+ * Selection events and the shared surface shaders live in
+ * joint_display_context.  Simulation steps reach the joint through its
+ * solverStep input, and RigidBodyJoint marks the drawing dirty.  VP2 owns the
+ * render items.
  *
  * Registered by MayaMMD.mll under the pmxRigidBodyJoint classification.
  */
 
 #pragma once
 
+#include <maya/MColor.h>
 #include <maya/MDagPath.h>
-#include <maya/MFrameContext.h>
 #include <maya/MGeometry.h>
 #include <maya/MHWGeometry.h>
+#include <maya/MMatrix.h>
+#include <maya/MMessage.h>
 #include <maya/MObject.h>
+#include <maya/MObjectHandle.h>
+#include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MPxGeometryOverride.h>
-#include <maya/MShaderManager.h>
-#include <maya/MString.h>
-#include <maya/MUIDrawManager.h>
+
+#include <vector>
+
+#include "joint_glyph_mesh.hpp"
+#include "rigid_body_simulation.hpp"
 
 // ===========================================================================
 // RigidBodyJointGeometryOverride
@@ -63,22 +68,23 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
 
     MHWRender::DrawAPI supportedDrawAPIs() const override;
 
-    // Re-prepare EVERY frame: drawMode / joint type are DG changes that VP2's
-    // DAG dirty tracking may otherwise miss.
+    // Update only when the joint is dirtied (see the .cpp): the hub follows
+    // body A because each solver step dirties the joint, not by polling
+    // every refresh.
     bool requiresGeometryUpdate() const override;
     bool requiresUpdateRenderItems(const MDagPath& dagPath) const override;
 
-    bool hasUIDrawables() const override;
-
     void updateDG() override;
     void updateRenderItems(const MDagPath& dagPath, MRenderItemList& renderItems) override;
+    bool hasUIDrawables() const override;
+    void addUIDrawables(const MDagPath& dagPath, MHWRender::MUIDrawManager& drawManager,
+                        const MHWRender::MFrameContext& frameContext) override;
     void populateGeometry(const MGeometryRequirements& requirements,
                           const MRenderItemList& renderItems, MGeometry& data) override;
-    void addUIDrawables(const MDagPath& objPath, MUIDrawManager& drawMgr,
-                        const MFrameContext& frameContext) override;
     void cleanUp() override;
 
-    // Selection — the solid render item is pickable; granularity is object-level.
+    // Selection — the hub is the only pickable item; the overlays are
+    // unselectable. Granularity is object-level (the joint node is selected).
     bool refineSelectionPath(const MSelectionInfo& selectInfo, const MRenderItem& hitItem,
                              MDagPath& dagPath, MObject& geomComponents,
                              MSelectionMask& objectMask) override;
@@ -86,35 +92,131 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
                                     MSelectionContext& selectionContext) override;
 
   private:
-    // Joint colour (palette by PMX joint type) — the SOLID always keeps it;
-    // selection is shown as a wireframe overlay instead.
-    void jointColor(float& r, float& g, float& b) const;
-    // Selection helpers (render thread — displayStatus/wireframeColor safe).
-    static bool isSelected(const MDagPath& path);
-    static void selectionColor(const MDagPath& path, float& r, float& g, float& b);
+    // A selected joint watches its own bodies' DAG ancestors (hide/show).
+    static void dependencyDirty(MObject&, MPlug&, void* clientData);
+    void invalidateDrawables();
+    struct OutlineCandidate
+    {
+        MDagPath path;
+        unsigned int roles = 0;
+        bool visible = false; // resolved in updateDG, not while drawing
+    };
+    struct DependencyWatch
+    {
+        MObjectHandle node;
+        MCallbackId callback = 0;
+    };
+    std::vector<DependencyWatch> fOutlineWatches;
+    void updateOutlineWatches();
+    struct BodyOutline
+    {
+        MDagPath path; // the connected pmxRigidBodyShape
+        MPoint size;
+        short type = 0;
+        MMatrix world;
+        bool visible = false; // resolved in updateDG, not while drawing
+        bool valid = false;
+        std::vector<OutlineCandidate> candidates;
+    };
+    BodyOutline fBodyOutlines[2];
+    void drawIsolatedBodyOutlines(MHWRender::MUIDrawManager& drawManager,
+                                  const MHWRender::MFrameContext& frameContext,
+                                  const MMatrix& worldToLocal) const;
 
-    // Per-frame data pulled from the joint node in updateDG().
+    // Constraint STATE — what kind of motion the joint permits.  This is the
+    // hub's COLOUR channel (joint_palette.hpp); an inactive joint's hub is
+    // hollow instead.
+    enum JointState : short
+    {
+        kStateWelded = 0,        // no freedom at all: a rigid link
+        kStateRotates,           // rotation only
+        kStateTranslates,        // translation only
+        kStateRotatesTranslates, // both
+        kStateInactive,          // constrains nothing (RigidBodySimulation::JointStatus)
+    };
+
+    using Mesh = mmd::maya::joint_glyph::Mesh;
+
+    // The joint's plugs, resolved once (the attributes never change).  The
+    // bodies are connections, read with RigidBodyJoint::bodyShape.
+    struct Plugs
+    {
+        MPlug drawMode, type;
+        MPlug linearMin, linearMax, angularMin, angularMax;
+        MPlug linearStiffness, angularStiffness;
+        MPlug solver, solverStep;
+    };
+
+    // Per-update data pulled from the joint node in updateDG().
     struct DrawState
     {
         short drawMode = 0;
-        short type = 0; // PMX JointType (0..5)
-        MPoint linearMin;
-        MPoint linearMax;
-        // The two constrained bodies' CURRENT positions (RigidBodies GROUP
-        // space), from the solver's outGuideTranslate outputs — the connector
-        // shows which two bodies this joint links.
-        MPoint bodyAPos;
-        MPoint bodyBPos;
-        bool hasBodyA = false;
-        bool hasBodyB = false;
-        double anchorHalf = 0.04; // solid anchor-cube half-extent (adaptive)
+        // Picked directly (joint_display_context), not merely drawn as
+        // selected because a parent group is: only a direct pick draws the
+        // overlay.
+        bool picked = false;
+        // Limits, stiffness and bodies as the solver reads them (angles in
+        // radians); the frame is only filled for the solver query.
+        mmd::core::RigidBodySimulation::JointDefinition definition;
+        // The joint constrains something (JointStatus::eActive); an inactive
+        // joint draws a hollow hub and, when picked, only dashed links to
+        // the bodies it names.
+        bool active = false;
+
+        // The two constrained bodies' CURRENT poses and attachment frames
+        // (world space), from the solver's live simulation.
+        bool hasAttachments = false;
+        MMatrix attachmentAWorld;
+        MMatrix attachmentBWorld;
+        MPoint bodyAWorld;
+        MPoint bodyBWorld;
+
+        // From the solver: one hub radius per model (0 = no world yet) and
+        // the user's jointDisplayScale multiplier.
+        double modelHubRadius = 0.0;
+        double hubScale = 1.0;
+
+        // Derived (see classifyState / deriveSizes).
+        double hubRadius = 0.03; // the rendered sphere radius
+        short state = kStateWelded;
     };
 
+    // Constraint state from the limits/springs the solver actually reads.
+    void classifyState();
+    // The model's hub size x the user's scale.
+    void deriveSizes();
+    // Hub colour of the even and odd wedges; they differ only for a joint
+    // that rotates AND translates.
+    void stateColors(MColor& primary, MColor& secondary) const;
+    // Rebuild the cached hub mesh and its per-item index lists.
+    void buildHubMesh();
+    void drawMotionRanges(MHWRender::MUIDrawManager& drawManager, float alpha) const;
+    // Three rings of `radius` (world units) around `local`, in the world's
+    // axis planes, each one line strip so a dash pattern runs round it.
+    void drawRings(MHWRender::MUIDrawManager& drawManager, const MPoint& local, double radius,
+                   int segments) const;
+
+    // Selection helpers (render thread — displayStatus/wireframeColor safe).
+    static bool isSelected(const MDagPath& path);
+    static MColor selectionColor(const MDagPath& path);
+
     MObject fJoint;
-    MObject m_solver; // owning pmxRigidBodyNode (resolved in updateDG)
+    Plugs fPlugs;
+    MObject fSolver; // owning pmxRigidBodyNode (resolved in updateDG)
     DrawState fState;
-    // Group-space body poses -> the shape's LOCAL space (for the connector
-    // lines), computed in updateRenderItems() from the DAG-path matrices.
-    MMatrix m_toLocal;
-    MHWRender::MShaderInstance* fSolidShader = nullptr;
+
+    // Body centres and attachment points in the node's LOCAL space (the space
+    // the render item's geometry is built in — VP2 applies the joint's DAG matrix).
+    MPoint fLocalA;
+    MPoint fLocalB;
+    MPoint fAttachmentA;
+    MPoint fAttachmentB;
+    MMatrix fHubToLocal;
+    MMatrix fLocalToWorld; // the joint's DAG matrix, cached in updateRenderItems()
+
+    // Cached hub geometry, built for fHubBuiltRadius; one index list per
+    // render item (even/odd wedges x shaded/wire, see kHubItems).
+    Mesh fHub;
+    double fHubBuiltRadius = -1.0;
+    std::vector<unsigned int> fHubIndices[4];
 };

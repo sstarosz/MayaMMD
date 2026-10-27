@@ -30,27 +30,20 @@ using namespace mmd::core::physics_math;
 
 namespace
 {
-// PMX JointType -> Bullet constraint selection
+// PMX 2.0 has a single joint type (Spring6Dof).  The PMX 2.1 types (1..5)
+// are not supported yet; joints of those types are skipped.
 constexpr int kJointSpring6Dof = 0;
-constexpr int kJointSixDof = 1;
-constexpr int kJointP2P = 2;
-constexpr int kJointConeTwist = 3;
-constexpr int kJointSlider = 4;
-constexpr int kJointHinge = 5;
 
 // RigidBodySimulation stepping constants (see initialize()/step()).
-constexpr int kSolverIterations = 30;         // > Bullet's default 10 — long rigid chains need it
+constexpr int kSolverIterations = 10;         // Bullet's default, as MMD uses
 constexpr int kMaxSubSteps = 8;               // max internal steps per step()
 constexpr double kMaxStepTime = 0.5;          // clamp for huge time jumps (scrub/tab)
 constexpr double kMinShapeSize = 1e-4;        // floor for shape sizes — 0 would make Bullet assert
-constexpr float kConstraintSoftness = 0.3F;   // cone/hinge limit softness (Bullet tuning)
 constexpr double kAnchorMoveDistEpsSq = 1e-6; // squared-distance threshold for anchor movement
 constexpr double kAnchorMoveRotEps = 1e-5;    // column-dot threshold for anchor rotation
 
-// Shared 6DOF linear/angular limit setup — identical for the SPRING_6DOF
-// (btGeneric6DofSpring2Constraint) and 6DOF (btGeneric6DofConstraint) cases.
-template <typename ConstraintT>
-void applySixDofLimits(ConstraintT& constraint,
+// SPRING_6DOF linear/angular limits, verbatim from the joint definition.
+void applySixDofLimits(btGeneric6DofSpringConstraint& constraint,
                        const mmd::core::RigidBodySimulation::JointDefinition& j)
 {
     constraint.setLinearLowerLimit(btVector3(static_cast<btScalar>(j.linearMin.x),
@@ -173,7 +166,11 @@ bool RigidBodySimulation::RigidBodySimulationImpl::initialize(const Definition& 
 
     for (const JointDefinition& j : definition.joints)
     {
-        createJoint(j);
+        const JointStatus status = jointStatus(j, definition.bodies);
+        if (status == JointStatus::eActive || status == JointStatus::eBothKinematic)
+        {
+            createJoint(j);
+        }
     }
 
     mWorldBuilt = true;
@@ -192,9 +189,10 @@ void RigidBodySimulation::RigidBodySimulationImpl::createWorld(const Double3& gr
     mWorld.emplace(&*mDispatcher, &*mBroadphase, &*mConstraintSolver, &*mCollisionConfig);
     mWorld->setGravity(btVector3(static_cast<btScalar>(gravity.x), static_cast<btScalar>(gravity.y),
                                  static_cast<btScalar>(gravity.z)));
-    // Long rigid chains (MMD skirt/hair/ponytail strands are 10-30 links) need
-    // more constraint iterations than Bullet's default 10, or the tension never
-    // propagates and the chain detaches from its kinematic anchor (free-falls).
+    // MMD keeps Bullet's default iteration count, and the joints (springs
+    // included) only behave as in MMD with the same solver settings.  (30 was
+    // needed while joints were Spring2 constraints, whose long chains
+    // detached from their anchors at 10; the Spring6Dof chains hold.)
     mWorld->getSolverInfo().m_numIterations = kSolverIterations;
 }
 
@@ -326,19 +324,11 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
     }
 }
 
+// The caller has checked jointStatus(): both bodies exist, differ, are
+// enabled, and the type is Spring6Dof.
 void RigidBodySimulation::RigidBodySimulationImpl::createJoint(const JointDefinition& j)
 {
     if (!mWorld)
-    {
-        return;
-    }
-    if (j.bodyA < 0 || j.bodyB < 0 || j.bodyA >= static_cast<long>(mRigidBodies.size()) ||
-        j.bodyB >= static_cast<long>(mRigidBodies.size()))
-    {
-        return;
-    }
-    // Skip joints that reference a disabled (removed) body.
-    if (!mBodies[j.bodyA].def.enabled || !mBodies[j.bodyB].def.enabled)
     {
         return;
     }
@@ -349,88 +339,32 @@ void RigidBodySimulation::RigidBodySimulationImpl::createJoint(const JointDefini
     const btTransform frameInA = rbA->getWorldTransform().inverse() * frameWorld;
     const btTransform frameInB = rbB->getWorldTransform().inverse() * frameWorld;
 
-    std::unique_ptr<btTypedConstraint> con;
-    switch (j.type)
+    // MMD (Bullet 2.75) creates every SPRING_6DOF joint as a
+    // btGeneric6DofSpringConstraint with linear limits in body A's frame, so
+    // this does too.  Its limit motors treat upper == lower as LOCKED and
+    // lower > upper as FREE, so:
+    //   * zero springs + zero limits -> proper RIGID WELD (locked);
+    //   * zero springs + real limits -> flexible 6DOF (limited);
+    //   * nonzero springs            -> springy (PMX stiffness, equilibrium 0).
+    // Rotation is measured as XYZ Euler angles: Y stays within +-90 degrees.
+    auto con = std::make_unique<btGeneric6DofSpringConstraint>(*rbA, *rbB, frameInA, frameInB,
+                                                               /*useLinearReferenceFrameA=*/true);
+    applySixDofLimits(*con, j);
+    for (int ax = 0; ax < 3; ++ax)
     {
-    case kJointSpring6Dof:
-    {
-        // MMD maps EVERY SPRING_6DOF joint to btGeneric6DofSpring2Constraint —
-        // that is exactly what its physics engine creates.  The spring-2
-        // limit motor treats upper==lower as LOCKED (see
-        // btTranslationalLimitMotor2), so:
-        //   * zero springs + zero limits -> proper RIGID WELD (locked),
-        //     without btFixedConstraint's infinite-stiffness spring creep;
-        //   * zero springs + real limits -> flexible 6DOF (limited);
-        //   * nonzero springs            -> springy (PMX stiffness).
-        // This is the single mapping that matches MMD's behaviour for the
-        // whole joints data (rigid hair/cape chains, springy skirt, etc.).
-        auto g6 = std::make_unique<btGeneric6DofSpring2Constraint>(*rbA, *rbB, frameInA, frameInB);
-        applySixDofLimits(*g6, j);
-        for (int ax = 0; ax < 3; ++ax)
+        if (j.linearStiffness[ax] != 0)
         {
-            if (j.linearSpring[ax] != 0)
-            {
-                g6->enableSpring(ax, true);
-                g6->setStiffness(ax, static_cast<btScalar>(j.linearSpring[ax]));
-            }
-            if (j.angularSpring[ax] != 0)
-            {
-                g6->enableSpring(ax + 3, true);
-                g6->setStiffness(ax + 3, static_cast<btScalar>(j.angularSpring[ax]));
-            }
+            con->enableSpring(ax, true);
+            con->setStiffness(ax, static_cast<btScalar>(j.linearStiffness[ax]));
         }
-        con = std::move(g6);
-        break;
+        if (j.angularStiffness[ax] != 0)
+        {
+            con->enableSpring(ax + 3, true);
+            con->setStiffness(ax + 3, static_cast<btScalar>(j.angularStiffness[ax]));
+        }
     }
-    case kJointSixDof:
-    {
-        auto g6 = std::make_unique<btGeneric6DofConstraint>(*rbA, *rbB, frameInA, frameInB, true);
-        applySixDofLimits(*g6, j);
-        con = std::move(g6);
-        break;
-    }
-    case kJointP2P:
-    {
-        const btVector3 pivotInA = frameInA.getOrigin();
-        const btVector3 pivotInB = frameInB.getOrigin();
-        con = std::make_unique<btPoint2PointConstraint>(*rbA, *rbB, pivotInA, pivotInB);
-        break;
-    }
-    case kJointConeTwist:
-    {
-        auto ct = std::make_unique<btConeTwistConstraint>(*rbA, *rbB, frameInA, frameInB);
-        ct->setLimit(static_cast<btScalar>(j.angularMin.y), static_cast<btScalar>(j.angularMax.y),
-                     0.0F, kConstraintSoftness, 0.0F, 1.0F);
-        con = std::move(ct);
-        break;
-    }
-    case kJointSlider:
-    {
-        auto sl = std::make_unique<btSliderConstraint>(*rbA, *rbB, frameInA, frameInB, true);
-        sl->setLowerLinLimit(static_cast<btScalar>(j.linearMin.y));
-        sl->setUpperLinLimit(static_cast<btScalar>(j.linearMax.y));
-        sl->setLowerAngLimit(static_cast<btScalar>(j.angularMin.y));
-        sl->setUpperAngLimit(static_cast<btScalar>(j.angularMax.y));
-        con = std::move(sl);
-        break;
-    }
-    case kJointHinge:
-    {
-        auto hi = std::make_unique<btHingeConstraint>(*rbA, *rbB, frameInA, frameInB, true);
-        hi->setLimit(static_cast<btScalar>(j.angularMin.y), static_cast<btScalar>(j.angularMax.y),
-                     kConstraintSoftness, 0.0F, 1.0F);
-        con = std::move(hi);
-        break;
-    }
-    default:
-        break;
-    }
-
-    if (con)
-    {
-        mWorld->addConstraint(con.get(), /*disableCollisionsBetweenLinkedBodies=*/true);
-        mConstraints.push_back(std::move(con));
-    }
+    mWorld->addConstraint(con.get(), /*disableCollisionsBetweenLinkedBodies=*/true);
+    mConstraints.push_back(std::move(con));
 }
 
 bool RigidBodySimulation::RigidBodySimulationImpl::initialized() const
@@ -757,6 +691,41 @@ void RigidBodySimulation::rideUnanchoredBodiesFromRest(const Pose& move)
 RigidBodySimulation::Pose RigidBodySimulation::bodyPose(size_t bodyIndex) const
 {
     return mImpl->bodyPose(bodyIndex);
+}
+
+bool RigidBodySimulation::attachmentPose(size_t bodyIndex, const Double3& frameT,
+                                         const Double3& frameR, Pose& out) const
+{
+    if (!mImpl->mWorld || bodyIndex >= mImpl->mRigidBodies.size() ||
+        !mImpl->mRigidBodies[bodyIndex])
+        return false;
+    const auto& body = mImpl->mBodies[bodyIndex].def;
+    const btTransform local =
+        transformFromRest(body.restPos, body.restRot).inverse() * transformFromRest(frameT, frameR);
+    const btTransform current = mImpl->mRigidBodies[bodyIndex]->getWorldTransform() * local;
+    storePose(out.pos, out.quat, current);
+    return true;
+}
+
+RigidBodySimulation::JointStatus
+RigidBodySimulation::jointStatus(const JointDefinition& joint,
+                                 const std::vector<BodyDefinition>& bodies)
+{
+    const auto valid = [&](long index)
+    { return index >= 0 && index < static_cast<long>(bodies.size()); };
+    if (!valid(joint.bodyA) || !valid(joint.bodyB))
+        return JointStatus::eMissingBody;
+    if (joint.bodyA == joint.bodyB)
+        return JointStatus::eSameBody;
+    const BodyDefinition& a = bodies[joint.bodyA];
+    const BodyDefinition& b = bodies[joint.bodyB];
+    if (!a.enabled || !b.enabled)
+        return JointStatus::eDisabledBody;
+    if (joint.type != kJointSpring6Dof)
+        return JointStatus::eUnsupportedType;
+    if (a.isKinematic() && b.isKinematic())
+        return JointStatus::eBothKinematic;
+    return JointStatus::eActive;
 }
 
 } // namespace mmd::core

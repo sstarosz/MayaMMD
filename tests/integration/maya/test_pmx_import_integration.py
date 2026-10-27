@@ -18,6 +18,7 @@ from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
     assert_true,
+    get_angle3_radians,
     step_physics,
 )
 
@@ -250,6 +251,15 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             approx_equal_tuple(cmds.getAttr(f"{sub}.translate")[0], (0.0, 0.0, 0.0)),
             f"sub-group {sub} must stay at identity",
         )
+    # The group and its sub-groups only follow the model root: their
+    # transform channels are locked.
+    for group in (physics_group.name(), bodies_group, joints_group):
+        for channel in ("translate", "rotate", "scale"):
+            for plug in (channel, *(channel + axis for axis in "XYZ")):
+                assert_true(
+                    cmds.getAttr(f"{group}.{plug}", lock=True),
+                    f"{group}.{plug} should be locked",
+                )
 
     # Exactly one pmxRigidBodyNode solver shape under the group.
     solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
@@ -332,8 +342,10 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
     # The jointShapes message array mirrors the PMX rigid-body constraints
     # (one pmxRigidBodyJoint node per PMX joint, in PMX order — created by the
     # native pmxRigidBodyConstraint command after every body exists; each
-    # joint node's transform IS the joint frame).
-    expected_joints = len(pmx_data.joints)
+    # joint node's transform IS the joint frame).  PMX 2.1 joint types are
+    # not supported yet and are skipped on import.
+    supported_joints = [j for j in pmx_data.joints if int(j.type.value) == 0]
+    expected_joints = len(supported_joints)
     assert_true(
         cmds.attributeQuery("jointShapes", node=solver, exists=True),
         "solver has no jointShapes attribute",
@@ -348,7 +360,7 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         # name, and the frame/limit conversion (Z-flip on position; angular
         # limits reflected through F = diag(1,1,-1): X/Y negated + swapped,
         # Z unchanged).
-        first = pmx_data.joints[0]
+        first = supported_joints[0]
         joint_plugs = (
             cmds.listConnections(f"{solver}.jointShapes[0]", source=True, plugs=True)
             or []
@@ -366,16 +378,23 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             joints_group,
             "joint guide should live in the joints sub-group",
         )
-        assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointBodyA")),
-            int(first.rigid_body_index_a),
-            "first joint bodyA",
-        )
-        assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointBodyB")),
-            int(first.rigid_body_index_b),
-            "first joint bodyB",
-        )
+        # The bodies are linked by connection: jointBodyA / B come from the
+        # shapes in the solver's bodyShapes[] slots for the PMX indices.
+        for end, pmx_index in (
+            ("A", first.rigid_body_index_a),
+            ("B", first.rigid_body_index_b),
+        ):
+            linked = (
+                cmds.listConnections(f"{jbase}.jointBody{end}", source=True) or []
+            )
+            expected = (
+                cmds.listConnections(
+                    f"{solver}.bodyShapes[{int(pmx_index)}]", source=True
+                )
+                or []
+            )
+            assert_true(bool(linked), f"first joint body {end} should be connected")
+            assert_eq(linked, expected, f"first joint body {end}")
         assert_eq(
             int(cmds.getAttr(f"{jbase}.jointType")),
             int(first.type.value),
@@ -397,7 +416,7 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         )
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointAngularMin")[0],
+                get_angle3_radians(f"{jbase}.jointAngularMin"),
                 (
                     -first.rotation_max.x,
                     -first.rotation_max.y,
@@ -405,11 +424,11 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
                 ),
             ),
             f"first joint angularMin reflection wrong "
-            f"{cmds.getAttr(f'{jbase}.jointAngularMin')}",
+            f"{get_angle3_radians(f'{jbase}.jointAngularMin')}",
         )
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointAngularMax")[0],
+                get_angle3_radians(f"{jbase}.jointAngularMax"),
                 (
                     -first.rotation_min.x,
                     -first.rotation_min.y,
@@ -417,7 +436,7 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
                 ),
             ),
             f"first joint angularMax reflection wrong "
-            f"{cmds.getAttr(f'{jbase}.jointAngularMax')}",
+            f"{get_angle3_radians(f'{jbase}.jointAngularMax')}",
         )
     else:
         # Models with no joints get an empty jointShapes array.

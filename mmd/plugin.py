@@ -372,16 +372,18 @@ def _register_ae_template_path() -> None:
         try:
             # Shape node: the grouped "Body" XML view stays the default.
             mel.eval('optionVar -sv AEpmxRigidBodyShapeCustomView "Body"')
-            # Joint node: the grouped "Body" XML view stays the default.
-            mel.eval('optionVar -sv AEpmxRigidBodyJointCustomView "Body"')
-            # Solver node: deliberately NO XML-view optionVar.  A named view
-            # routes the AE to the (gravity-only) XML template, bypassing
-            # createEditor — but the solver AE is the MEL template, which the
-            # AE only invokes through createEditor when no custom view is
-            # active.  Clear the legacy "Solver" value so the MEL template is
-            # used.
-            if mel.eval("optionVar -q AEpmxRigidBodyNodeCustomView") == "Solver":
-                mel.eval("optionVar -rm AEpmxRigidBodyNodeCustomView")
+            # Solver and joint nodes: deliberately NO XML-view optionVar.  A
+            # named view routes the AE to an XML template, bypassing
+            # createEditor — but their AEs are MEL templates, which the AE
+            # only invokes through createEditor when no custom view is
+            # active.  Clear the legacy values so the MEL templates are used.
+            for node_type, legacy_view in (
+                ("pmxRigidBodyNode", "Solver"),
+                ("pmxRigidBodyJoint", "Body"),
+            ):
+                option = f"AE{node_type}CustomView"
+                if mel.eval(f"optionVar -q {option}") == legacy_view:
+                    mel.eval(f"optionVar -rm {option}")
         except Exception:
             log.debug("Could not set default AE views", exc_info=True)
         return
@@ -389,9 +391,10 @@ def _register_ae_template_path() -> None:
 
 
 # Classic MEL Attribute-Editor template for the solver node: a small
-# scrollLayout that shows ``gravity`` and suppresses the solver's message
+# scrollLayout that shows ``gravity`` and the joint hub size, and suppresses
+# the solver's message
 # arrays / outputs (the per-body and per-joint data lives on the connected
-# pmxRigidBodyShape / pmxRigidBodyJoint nodes, each with its own grouped XML
+# pmxRigidBodyShape / pmxRigidBodyJoint nodes, each with its own grouped
 # template).  The proc is only invoked when the plugin clears the
 # ``AEpmxRigidBodyNodeCustomView`` optionVar, so the AE takes the
 # ``createEditor`` path (a named view would route it to the XML template
@@ -408,6 +411,57 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
     editorTemplate -beginLayout "Solver" -collapse 0;
         editorTemplate -addControl "gravity";
     editorTemplate -endLayout;
+    editorTemplate -beginLayout "Display" -collapse 0;
+        editorTemplate -addControl "jointDisplayScale" -label "Joint Hub Size";
+    editorTemplate -endLayout;
+    editorTemplate -addExtraControls;
+    editorTemplate -endScrollLayout;
+}
+"""
+
+
+# Classic MEL Attribute-Editor template for the per-joint node.  The joint
+# links its bodies by message connection (``jointBodyA`` / ``jointBodyB`` <-
+# each pmxRigidBodyShape's ``message``), and an XML template cannot show a
+# connection, so — like the solver — this node uses a MEL template: Body A /
+# Body B are ``attrNavigationControlGrp`` fields that name the connected body
+# and jump to it.  The transform above the shape is the joint frame (its
+# standard Translate / Rotate controls).
+_AE_JOINT_TEMPLATE_MEL = """\
+global proc AEpmxRigidBodyJointBodyNew( string $plug ) {
+    string $attr = `plugAttr $plug`;
+    string $label = ($attr == "jointBodyA") ? "Body A" : "Body B";
+    attrNavigationControlGrp -label $label -attribute $plug ("AEpmxRigidBodyJoint_" + $attr);
+}
+global proc AEpmxRigidBodyJointBodyReplace( string $plug ) {
+    string $attr = `plugAttr $plug`;
+    attrNavigationControlGrp -edit -attribute $plug ("AEpmxRigidBodyJoint_" + $attr);
+}
+global proc AEpmxRigidBodyJointTemplate( string $nodeName ) {
+    editorTemplate -beginScrollLayout;
+    editorTemplate -suppress "solver";
+    editorTemplate -beginLayout "Joint" -collapse 0;
+        editorTemplate -addControl "jointNameLocal" -label "Local Name";
+        editorTemplate -addControl "jointNameUniversal" -label "Universal Name";
+        editorTemplate -addControl "jointType" -label "Type";
+        editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
+            "AEpmxRigidBodyJointBodyReplace" "jointBodyA";
+        editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
+            "AEpmxRigidBodyJointBodyReplace" "jointBodyB";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Limits" -collapse 0;
+        editorTemplate -addControl "jointLinearMin" -label "Linear Min";
+        editorTemplate -addControl "jointLinearMax" -label "Linear Max";
+        editorTemplate -addControl "jointAngularMin" -label "Angular Min";
+        editorTemplate -addControl "jointAngularMax" -label "Angular Max";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Stiffness" -collapse 0;
+        editorTemplate -addControl "jointLinearStiffness" -label "Linear Stiffness";
+        editorTemplate -addControl "jointAngularStiffness" -label "Angular Stiffness";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Display" -collapse 0;
+        editorTemplate -addControl "drawMode" -label "Draw Mode";
+    editorTemplate -endLayout;
     editorTemplate -addExtraControls;
     editorTemplate -endScrollLayout;
 }
@@ -415,8 +469,9 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
 
 
 def _register_ae_mel_templates() -> None:
-    """Define the solver's MEL AE template (gravity + suppressed arrays)."""
+    """Define the solver's and the joint's MEL AE templates."""
     mel.eval(_AE_SOLVER_TEMPLATE_MEL)
+    mel.eval(_AE_JOINT_TEMPLATE_MEL)
 
 
 def initializePlugin() -> None:
@@ -454,8 +509,8 @@ def initializePlugin() -> None:
         except Exception:
             log.debug("Could not set MAYA_CUSTOM_TEMPLATE_PATH", exc_info=True)
 
-        # Solver node: XML AE templates can't render the joints compound-array,
-        # so define the classic MEL AE template (default Multi control).
+        # Solver and joint nodes: classic MEL AE templates (see
+        # _AE_SOLVER_TEMPLATE_MEL / _AE_JOINT_TEMPLATE_MEL).
         try:
             _register_ae_mel_templates()
         except Exception:

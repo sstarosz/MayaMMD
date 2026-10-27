@@ -25,12 +25,14 @@
 #include <maya/MEvaluationNode.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
+#include <maya/MObjectHandle.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
 #include <cstddef>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 // The engine header is Bullet-free (the engine itself is a PIMPL), so pulling
@@ -85,11 +87,53 @@ class RigidBodyNode : public MPxLocatorNode
     static void* creator();
     static MStatus initialize();
 
+    // Read-only viewport snapshot of one joint's bodies and attachment frames
+    // (world space).  Read the joint's solverStep first: that evaluates this
+    // solver for the current time.
+    bool jointViewportFrames(const mmd::core::RigidBodySimulation::JointDefinition& joint,
+                             MMatrix& bodyA, MMatrix& bodyB, MMatrix& attachmentA,
+                             MMatrix& attachmentB) const;
+    // The hub radius shared by every joint of this model (before the user's
+    // jointDisplayScale); 0 while there is no simulation world.
+    double jointHubRadius() const { return mWorld ? mWorld->jointHubRadius : 0.0; }
+    // The simulation's body index of a pmxRigidBodyShape (what a joint's
+    // jointBodyA/B connection resolves to); -1 when the shape is not one of
+    // this solver's bodies or there is no world.
+    long bodyIndex(const MObject& shape) const
+    {
+        return mWorld ? mWorld->bodyShapes.indexOf(shape) : -1;
+    }
+    // Whether a joint (bodies resolved with bodyIndex) constrains anything in
+    // this solver's world; eMissingBody when there is no world.
+    mmd::core::RigidBodySimulation::JointStatus
+    jointStatus(const mmd::core::RigidBodySimulation::JointDefinition& joint) const
+    {
+        return mWorld ? mmd::core::RigidBodySimulation::jointStatus(joint, mWorld->bodies)
+                      : mmd::core::RigidBodySimulation::JointStatus::eMissingBody;
+    }
+
+    // World matrix of the solver's DAG parent (the {model}_RigidBodies
+    // group), identity when it has none.  Joint frames are measured in this
+    // space (RigidBodyJoint::readJointFrame) and the guide outputs are
+    // expressed in it.
+    static MMatrix groupWorldMatrix(const MObject& solver);
+
     // ------------------------------------------------------------------
     // Attributes
     // ------------------------------------------------------------------
     static MObject aTime;
     static MObject aGravity;
+
+    // Viewport-only: the joint glyphs' SIZE multiplier (a plain double, read
+    // by RigidBodyJointGeometryOverride through each joint's `solver` message).
+    // The model's glyph size is otherwise derived from its rest poses
+    // (jointHubRadius) — this is the user's taste knob, per model.
+    static MObject aJointDisplayScale;
+
+    // Output -> every joint's solverStep: the joints' viewport dependency on
+    // the simulation (see RigidBodyJoint::aSolverStep).  Holds the evaluated
+    // time in seconds.
+    static MObject aOutStep;
 
     // Per-body message array: aBodyShapes[i] -> the pmxRigidBodyShape node
     // for PMX body i (PMX order — one selectable/movable locator per body).
@@ -138,6 +182,16 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aOutGuideRotateY; // kAngle child
     static MObject aOutGuideRotateZ; // kAngle child
 
+    // The connected pmxRigidBodyShape nodes in body order, with a lookup from
+    // a shape to its body index (joints link bodies by connection).
+    struct BodyShapes
+    {
+        std::vector<MObjectHandle> nodes;
+        std::unordered_map<unsigned int, long> byHash; // MObjectHandle::hashCode -> index
+        void add(const MObject& shape);
+        [[nodiscard]] long indexOf(const MObject& shape) const;
+    };
+
     // The full per-node simulation state: the Bullet world plus the config,
     // wiring, and derived write-back offsets it was built with, bundled and
     // replaced ATOMICALLY on rebuild.  A plain data record — public only so
@@ -147,8 +201,12 @@ class RigidBodyNode : public MPxLocatorNode
     {
         mmd::core::RigidBodySimulation sim;
         std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies; // wired config
+        BodyShapes bodyShapes; // the shape node of each body
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
+        // One hub radius for the model's joints, from the rest poses
+        // (joint_display::modelHubRadius); recomputed with every rebuild.
+        double jointHubRadius = 0.0;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
         // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.
@@ -170,12 +228,6 @@ class RigidBodyNode : public MPxLocatorNode
         // solved bone world as a joint-local pose.  Invalid for bodies with no
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
-        // The RigidBodies group's inclusive matrix (the solver's DAG parent —
-        // the guides hang one level deeper under the {model}_Bodies
-        // sub-group, which must stay at identity).  The guide
-        // outputs express each body's WORLD pose in this space, so the driven
-        // guide lands where the body actually is even if the group was moved.
-        MMatrix groupWorld;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };

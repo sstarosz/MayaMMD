@@ -7,7 +7,7 @@
   Attribute-Editor template for the `pmxRigidBodyNode` solver.  The solver
   only exposes `gravity` plus its message arrays / outputs (the per-body and
   per-joint data lives on the connected `pmxRigidBodyShape` /
-  `pmxRigidBodyJoint` nodes, each with its own grouped XML template), so its
+  `pmxRigidBodyJoint` nodes, each with its own grouped template), so its
   editor is a small classic MEL AE template defined by the plugin — see
   `mmd/plugin.py` (`_AE_SOLVER_TEMPLATE_MEL`).  The plugin clears the
   `AEpmxRigidBodyNodeCustomView` optionVar so that MEL template (via
@@ -22,12 +22,19 @@
     <attribute name='gravity' type='maya.double3'>
       <label>Gravity</label>
     </attribute>
+    <attribute name='jointDisplayScale' type='maya.double'>
+      <label>Joint Hub Size</label>
+    </attribute>
   </template>
 
   <view name='Solver' template='AEpmxRigidBodyNode'>
     <group name='solver'>
       <label>Solver</label>
       <property name='gravity'/>
+    </group>
+    <group name='display'>
+      <label>Display</label>
+      <property name='jointDisplayScale'/>
     </group>
   </view>
 </templates>

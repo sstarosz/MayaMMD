@@ -935,11 +935,32 @@ def test_bone_index_no_match_no_wiring():
     return True
 
 
+def test_body_node_naming():
+    """Body guides follow the naming manager's policy.
+
+    ``-nodeName`` (what the importer passes) is used as given.  Without it the
+    command names the guide ``{model}_{body}``: the local name when it is
+    ASCII-safe, else the universal name, else ``RigidBody_{index}``.
+    """
+    _group, solver, _ja, _jb = _make_physics_scene()
+    cases = [
+        ({"nodeName": "Given_Name"}, "Given_Name"),
+        ({"name": "Cape L1"}, "testSolver_Cape_L1"),
+        ({"name": "スカート前", "nameUniversal": "Skirt front"}, "testSolver_Skirt_front"),
+        ({"name": "髪"}, "testSolver_RigidBody_3"),
+    ]
+    for index, (flags, expected) in enumerate(cases):
+        cmds.pmxRigidBody(solver, physicsMode="physics", **flags)
+        assert_eq(_guide_at(solver, index), expected, f"body {index} name")
+    return True
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
 
 _TESTS = [
+    ("Body node naming", test_body_node_naming),
     ("Append body stores data", test_append_body_data),
     ("FOLLOW_BONE binds anchor", test_follow_bone_binds_anchor),
     ("No-bone body has no write-back", test_no_bone_body_has_no_write_back),

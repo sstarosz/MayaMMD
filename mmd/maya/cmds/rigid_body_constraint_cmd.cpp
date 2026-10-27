@@ -4,18 +4,20 @@
  * rigid_body_constraint_cmd.cpp
  *
  * Native C++ implementation of the ``pmxRigidBodyConstraint`` command (create
- * mode — the default).  Writes ONE PMX joint into a pmxRigidBodyNode's
- * ``joints`` array at the next free index, replacing the former Python
- * ``_set_joint_attributes``.
+ * mode — the default).  Creates ONE PMX joint as a pmxRigidBodyJoint node,
+ * registered at the solver's next free ``jointShapes`` index and linked to
+ * its two bodies' pmxRigidBodyShape nodes by message connections.
  *
  * Data conversions (Z-flip + MMD radians -> Maya degrees handedness flip)
  * and the reflection applied to the LIMITS:
  *   frame translate = (px, py, -pz)            (Z-flip)
  *   frame rotate    = (-rx, -ry, +rz) degrees  (MMD radians -> Maya degrees)
- *   frame stored in WORLD space (same as pmxRigidBody)
+ *   frame stored in the rigid bodies group's space (the bodies' rest space)
  *   linearMin/Max   = Z component negated + min/max swapped
  *   angularMin/Max  = X/Y negated + min/max swapped, Z unchanged (radians)
- *   springs         = verbatim (magnitudes, invariant under the reflection)
+ *   stiffness       = verbatim (invariant magnitudes)
+ * Only PMX 2.0's Spring6Dof (type 0) is accepted; the PMX 2.1 types are not
+ * supported yet.
  *
  * WHY the limits are reflected: the MMD->Maya conversion is the reflection
  * F = diag(1, 1, -1) (Z-flip on position, rotation negated on X/Y).  The
@@ -33,30 +35,29 @@
  */
 
 #include "rigid_body_constraint_cmd.hpp"
+#include "joint_parameters.hpp"
 #include "pmx_rigid_body_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
-#include <maya/MDagPath.h>
 #include <maya/MEulerRotation.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnTransform.h>
 #include <maya/MGlobal.h>
-#include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
-#include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
 #include "maya_utils.hpp"
 #include "nodes/rigid_body_joint.hpp"
 #include "nodes/rigid_body_node.hpp"
 
-#include <cstring>
 #include <string>
+#include <utility>
 
 using mmd::core::Double3;
 
@@ -79,47 +80,14 @@ constexpr const char* kLinearMinFlag = "lmi";
 constexpr const char* kLinearMaxFlag = "lma";
 constexpr const char* kAngularMinFlag = "ami";
 constexpr const char* kAngularMaxFlag = "ama";
-constexpr const char* kLinearSpringFlag = "ls";
-constexpr const char* kAngularSpringFlag = "as";
+constexpr const char* kLinearStiffnessFlag = "lsk";
+constexpr const char* kAngularStiffnessFlag = "ask";
+constexpr const char* kNodeNameFlag = "nn";
 
-// Highest PMX joint type value (JointType::HINGE).
-constexpr int kMaxJointType = 5;
-
-// ASCII-safe node-name segment for the joint DAG node (keeps only
-// [A-Za-z0-9_]) — Maya cannot store non-ASCII object names and the PMX joint
-// names arrive through mayapy possibly mangled; falls back to "Jnt_<n>" when
-// nothing survives.
-[[nodiscard]] std::string sanitizeNodeNameSegment(const MString& name)
-{
-    std::string out;
-    const char* bytes = name.asUTF8();
-    const size_t len = bytes ? std::strlen(bytes) : 0;
-    for (size_t i = 0; i < len; ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(bytes[i]);
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
-        {
-            out.push_back(static_cast<char>(c));
-        }
-    }
-    return out;
-}
-
-// The joint DAG node name: `{model}_{sanitizedJointName}` (model prefix from
-// the solver's name "{model}_RigidBodySolver").  Maya auto-uniquifies.
-[[nodiscard]] MString makeJointNodeName(const MObject& solverNode, int n, const MString& nameLocal)
-{
-    MFnDependencyNode fn(solverNode);
-    MString prefix = fn.name();
-    const int suffix = prefix.rindexW("_RigidBodySolver");
-    if (suffix >= 0)
-        prefix = prefix.substringW(0, suffix - 1);
-
-    std::string segment = sanitizeNodeNameSegment(nameLocal);
-    if (segment.empty())
-        segment = "Jnt_" + std::to_string(n);
-    return prefix + "_" + segment.c_str();
-}
+// PMXNamingManager's RIGID_BODY_JOINT_SUFFIX: a joint is named after the
+// body it moves often enough that the bare name would clash with that body,
+// and bones already own "_Jnt".
+constexpr const char* kJointNodeSuffix = "_Constraint";
 
 // ===========================================================================
 // Create mode
@@ -148,6 +116,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         nameLocal = parser.flagArgumentString(kNameFlag, 0);
     if (parser.isFlagSet(kNameUniversalFlag))
         nameUniversal = parser.flagArgumentString(kNameUniversalFlag, 0);
+    MString nodeName;
+    if (parser.isFlagSet(kNodeNameFlag))
+        nodeName = parser.flagArgumentString(kNodeNameFlag, 0);
 
     Double3 pos;
     Double3 rot;
@@ -187,22 +158,23 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         for (int i = 0; i < 3; ++i)
             amax0[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
     }
-    if (parser.isFlagSet(kLinearSpringFlag))
+    if (parser.isFlagSet(kLinearStiffnessFlag))
     {
         for (int i = 0; i < 3; ++i)
-            ls[i] = parser.flagArgumentDouble(kLinearSpringFlag, i);
+            ls[i] = parser.flagArgumentDouble(kLinearStiffnessFlag, i);
     }
-    if (parser.isFlagSet(kAngularSpringFlag))
+    if (parser.isFlagSet(kAngularStiffnessFlag))
     {
         for (int i = 0; i < 3; ++i)
-            as[i] = parser.flagArgumentDouble(kAngularSpringFlag, i);
+            as[i] = parser.flagArgumentDouble(kAngularStiffnessFlag, i);
     }
 
-    // ── Joint type validation (PMX JointType 0..5) ──
-    if (type < 0 || type > kMaxJointType)
+    // ── Joint type validation (PMX 2.0: Spring6Dof only) ──
+    if (type != RigidBodyJoint::kSpring6Dof)
     {
-        MGlobal::displayError("Unknown joint type '" + MString(std::to_string(type).c_str()) +
-                              "' — expected 0..5 (SPRING_6DOF/6DOF/P2P/CONETWIST/SLIDER/HINGE)");
+        MGlobal::displayError("Unsupported joint type '" + MString(std::to_string(type).c_str()) +
+                              "' — only 0 (SPRING_6DOF) is supported; PMX 2.1 joint types "
+                              "are not supported yet");
         return MS::kFailure;
     }
 
@@ -261,23 +233,53 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         MGlobal::displayError(msg);
         return MS::kFailure;
     }
+    // The joint links the bodies' SHAPE nodes (message connections), not
+    // their indices: the shape in each bodyShapes[] slot.
+    const auto bodyShapeAt = [&shapesPlug](int index)
+    {
+        MPlugArray sources;
+        shapesPlug.elementByLogicalIndex(index).connectedTo(sources, true, false);
+        return sources.length() > 0 ? sources[0].node() : MObject::kNullObj;
+    };
+    const MObject shapeA = bodyShapeAt(bodyA);
+    const MObject shapeB = bodyShapeAt(bodyB);
+    for (const auto& [slot, shape] : {std::pair(bodyA, shapeA), std::pair(bodyB, shapeB)})
+    {
+        if (shape.isNull())
+        {
+            MGlobal::displayError(MString("pmxRigidBodyConstraint: bodyShapes[") +
+                                  MString(std::to_string(slot).c_str()) +
+                                  "] has no connected pmxRigidBodyShape");
+            return MS::kFailure;
+        }
+    }
 
-    // ── World-space frame ──
-    // The Bullet world runs in world space (bodies store world-space rest
-    // poses), so the joint frame must too — the PMX frame is stored as-is.
-    // Rest pose in world space (MMD ⇒ Maya: Z-flip + handedness).
-    const Double3 worldT = mmd::maya::mmdToMayaTranslate(pos);
-    const Double3 worldR = mmd::maya::mmdToMayaRotateDeg(rot);
+    // ── Frame, in the space of the bodies' rest poses ──
+    // Bodies store their PMX rest poses in the model space, so the joint
+    // frame is stored in it too (MMD ⇒ Maya: Z-flip + handedness).
+    const Double3 frameT = mmd::maya::mmdToMayaTranslate(pos);
+    const Double3 frameR = mmd::maya::mmdToMayaRotateDeg(rot);
 
     // ── Limits through the MMD→Maya reflection F = diag(1, 1, -1) ──
     // Linear: X/Y unchanged; local Z reverses so its interval negates AND
     // swaps.  Angular: rotations about local X/Y negate (F·Rx·F⁻¹ = Rx(-θ)) so
     // their intervals negate AND swap; rotation about Z is invariant.  Springs
     // are magnitudes — invariant, passed through.
-    const Double3 lmin(lmin0.x, lmin0.y, -lmax0.z);
-    const Double3 lmax(lmax0.x, lmax0.y, -lmin0.z);
-    const Double3 amin(-amax0.x, -amax0.y, amin0.z);
-    const Double3 amax(-amin0.x, -amin0.y, amax0.z);
+    mmd::core::RigidBodySimulation::JointDefinition parameters;
+    parameters.type = type;
+    parameters.linearMin = lmin0;
+    parameters.linearMax = lmax0;
+    parameters.angularMin = amin0;
+    parameters.angularMax = amax0;
+    parameters.linearStiffness = ls;
+    parameters.angularStiffness = as;
+    mmd::core::reflectJointParameters(parameters);
+    const auto& lmin = parameters.linearMin;
+    const auto& lmax = parameters.linearMax;
+    const auto& amin = parameters.angularMin;
+    const auto& amax = parameters.angularMax;
+    ls = parameters.linearStiffness;
+    as = parameters.angularStiffness;
 
     // ── Create the per-joint node (pmxRigidBodyJoint) ──
     // One selectable joint per PMX constraint: a plain TRANSFORM holding the
@@ -288,7 +290,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // via solver.jointShapes[n].
     MFnDagNode solverDagFn(solverNode, &plugStat);
     MObject groupObj = solverDagFn.parent(0, &plugStat);
-    const MString jointName = makeJointNodeName(solverNode, n, nameLocal);
+    const MString jointName =
+        nodeName.length() > 0 ? nodeName
+                              : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
+                                                       "Joint_" + std::to_string(n),
+                                                       kJointNodeSuffix);
     MObject guideParent = groupObj;
     MFnTransform jointTf;
     MObject jointTransform = jointTf.create(guideParent, &plugStat);
@@ -306,34 +312,29 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         jointDagFn.create(RigidBodyJoint::kNodeName, MString(), shapeParent, &plugStat);
     if (jointObj.isNull())
     {
-        MGlobal::displayError("pmxRigidBodyConstraint: could not create the pmxRigidBodyJoint node");
+        MGlobal::displayError(
+            "pmxRigidBodyConstraint: could not create the pmxRigidBodyJoint node");
         return MS::kFailure;
     }
-    // The joint's WORLD transform IS the frame.  The solver reads world space
-    // (consistent with the bodies' world-fixed rest poses), so the LOCAL
-    // transform is set to ``group^-1 * worldFrame`` — the node then sits at
-    // the PMX world frame under the group regardless of where the group is
-    // (the sim stays independent of the group).
+    // The joint transform's LOCAL value under the group IS the frame: the
+    // solver measures frames in the group's space, the space of the bodies'
+    // rest poses (RigidBodyJoint::readJointFrame), so wherever the group or
+    // the model root sits, the constraint stays where the PMX puts it.
     const double kDegToRad = 3.14159265358979323846 / 180.0;
-    MTransformationMatrix worldTm;
-    worldTm.setTranslation(MVector(worldT.x, worldT.y, worldT.z), MSpace::kTransform);
-    const double worldRot[3] = {worldR.x * kDegToRad, worldR.y * kDegToRad,
-                                worldR.z * kDegToRad};
-    worldTm.setRotation(worldRot, MTransformationMatrix::kXYZ);
-    MDagPath groupPath;
-    MDagPath::getAPathTo(groupObj, groupPath);
-    const MMatrix groupWorld = groupPath.inclusiveMatrix();
-    const MTransformationMatrix localTm(groupWorld.inverse() * worldTm.asMatrix());
-    jointTf.setTranslation(localTm.getTranslation(MSpace::kTransform), MSpace::kTransform);
-    jointTf.setRotation(localTm.eulerRotation().asQuaternion(), MSpace::kTransform);
+    jointTf.setTranslation(MVector(frameT.x, frameT.y, frameT.z), MSpace::kTransform);
+    jointTf.setRotation(MEulerRotation(frameR.x * kDegToRad, frameR.y * kDegToRad,
+                                       frameR.z * kDegToRad, MEulerRotation::kXYZ));
 
     MFnDependencyNode jointFn(jointObj);
     const auto jointPlug = [&jointFn, &plugStat](const MObject& a) -> MPlug
     { return jointFn.findPlug(a, true, &plugStat); };
     jointPlug(RigidBodyJoint::aJointNameLocal).setString(nameLocal);
     jointPlug(RigidBodyJoint::aJointNameUniversal).setString(nameUniversal);
-    jointPlug(RigidBodyJoint::aJointBodyA).setInt(bodyA);
-    jointPlug(RigidBodyJoint::aJointBodyB).setInt(bodyB);
+    // The linked bodies: shape.message -> joint.jointBodyA / jointBodyB.
+    mmd::maya::connectOrReplace(MFnDependencyNode(shapeA).findPlug("message", true, &plugStat),
+                                jointPlug(RigidBodyJoint::aJointBodyA));
+    mmd::maya::connectOrReplace(MFnDependencyNode(shapeB).findPlug("message", true, &plugStat),
+                                jointPlug(RigidBodyJoint::aJointBodyB));
     // jointType is an enum attribute — write through setShort (like the
     // bodyGroupId enum).
     jointPlug(RigidBodyJoint::aJointType).setShort(static_cast<short>(type));
@@ -341,15 +342,24 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearMax), lmax);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularMin), amin);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularMax), amax);
-    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearSpring), ls);
-    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularSpring), as);
+    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearStiffness), ls);
+    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularStiffness), as);
     // Visible by default (solid + wire) so imported constraints show up.
-    jointPlug(RigidBodyJoint::aDrawMode).setShort(RigidBodyJoint::kDrawWireSolid);
+    jointPlug(RigidBodyJoint::aDrawMode).setShort(RigidBodyJoint::kDrawRanges);
 
     // Register the joint on the solver: joint.solver -> solver.jointShapes[n]
     // (PMX order — the solver pulls each joint from its node in readJointData).
     mmd::maya::connectOrReplace(jointPlug(RigidBodyJoint::aSolver),
                                 jointShapesPlug.elementByLogicalIndex(n));
+    // Redraw the joint after every solver step: solver.outStep -> joint.solverStep.
+    mmd::maya::connectOrReplace(MPlug(solverNode, RigidBodyNode::aOutStep),
+                                jointPlug(RigidBodyJoint::aSolverStep));
+    // Re-run the solver when the frame moves: transform.worldMatrix[0] ->
+    // joint.frameMatrix.
+    const MPlug frameWorld =
+        MFnDependencyNode(jointTransform).findPlug("worldMatrix", true, &plugStat);
+    mmd::maya::connectOrReplace(frameWorld.elementByLogicalIndex(0),
+                                jointPlug(RigidBodyJoint::aFrameMatrix));
 
     outIndex = n;
     return MS::kSuccess;
@@ -375,6 +385,7 @@ MSyntax RigidBodyConstraintCmd::syntaxCreator()
     syntax.addFlag(kIndexFlag, "index", MSyntax::kLong);
     syntax.addFlag(kNameFlag, "name", MSyntax::kString);
     syntax.addFlag(kNameUniversalFlag, "nameUniversal", MSyntax::kString);
+    syntax.addFlag(kNodeNameFlag, "nodeName", MSyntax::kString);
     syntax.addFlag(kBodyAFlag, "bodyA", MSyntax::kLong);
     syntax.addFlag(kBodyBFlag, "bodyB", MSyntax::kLong);
     syntax.addFlag(kTypeFlag, "type", MSyntax::kLong);
@@ -388,9 +399,9 @@ MSyntax RigidBodyConstraintCmd::syntaxCreator()
                    MSyntax::kDouble);
     syntax.addFlag(kAngularMaxFlag, "angularMax", MSyntax::kDouble, MSyntax::kDouble,
                    MSyntax::kDouble);
-    syntax.addFlag(kLinearSpringFlag, "linearSpring", MSyntax::kDouble, MSyntax::kDouble,
+    syntax.addFlag(kLinearStiffnessFlag, "linearStiffness", MSyntax::kDouble, MSyntax::kDouble,
                    MSyntax::kDouble);
-    syntax.addFlag(kAngularSpringFlag, "angularSpring", MSyntax::kDouble, MSyntax::kDouble,
+    syntax.addFlag(kAngularStiffnessFlag, "angularStiffness", MSyntax::kDouble, MSyntax::kDouble,
                    MSyntax::kDouble);
 
     syntax.enableEdit(true);

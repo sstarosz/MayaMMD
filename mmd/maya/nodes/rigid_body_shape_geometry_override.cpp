@@ -6,9 +6,9 @@
  * RigidBodyShapeGeometryOverride — lit viewport renderer for one
  * pmxRigidBodyShape (see the header for the design summary).
  *
- * The collider's SOLID surface is drawn with the stock OpenPBR surface
- * shader (k3dIsotropicOpenPBRSurfaceShader) so it responds to the viewport
- * lights; the WIRE outline is drawn with MUIDrawManager (as before).  Both
+ * The collider's SOLID surface is drawn with the lit stock surface shader
+ * (surface_shader.hpp) so it responds to the viewport lights; the WIRE
+ * outline is drawn with MUIDrawManager.  Both
  * are in the guide's LOCAL space (the
  * guide transform is the body's current pose), so the render-item matrix is
  * the identity and the collider follows the animated guide automatically.
@@ -19,6 +19,11 @@
  */
 
 #include "rigid_body_shape_geometry_override.hpp"
+#include "collider_wire.hpp"
+#include "joint_display_context.hpp"
+#include "joint_palette.hpp"
+#include "maya_utils.hpp"
+#include "surface_shader.hpp"
 
 #include "rigid_body_shape.hpp"
 
@@ -234,30 +239,10 @@ void buildCollider(short colliderType, const MPoint& size, ColliderMesh& mesh)
 // Read a k3Double plug into an MPoint (x, y, z).
 [[nodiscard]] MPoint readPoint3(const MPlug& plug)
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = plug.asMDataHandle().asDouble3();
-    return MPoint(v[0], v[1], v[2]);
+    const mmd::core::Double3 v = mmd::maya::readPlugDouble3(plug);
+    return MPoint(v.x, v.y, v.z);
 }
 
-// Draw one collider's WIRE outline in the guide's local space (MUIDrawManager
-// primitives, same as the old draw override).
-void drawColliderWire(MHWRender::MUIDrawManager& drawMgr, const MPoint& size, short colliderType)
-{
-    switch (colliderType)
-    {
-    case RigidBodyShape::kColliderBox:
-        drawMgr.box(MPoint(0.0, 0.0, 0.0), MVector(0.0, 1.0, 0.0), MVector(1.0, 0.0, 0.0), size.x,
-                    size.y, size.z, /*solid=*/false);
-        break;
-    case RigidBodyShape::kColliderSphere:
-        drawMgr.sphere(MPoint(0.0, 0.0, 0.0), size.x, /*solid=*/false);
-        break;
-    default: // kColliderCapsule
-        drawMgr.capsule(MPoint(0.0, 0.0, 0.0), MVector(0.0, 1.0, 0.0), size.x, size.y, 12, 8,
-                        /*solid=*/false);
-        break;
-    }
-}
 } // namespace
 
 // ===========================================================================
@@ -271,6 +256,9 @@ MHWRender::MPxGeometryOverride* RigidBodyShapeGeometryOverride::creator(const MO
 RigidBodyShapeGeometryOverride::RigidBodyShapeGeometryOverride(const MObject& obj)
     : MHWRender::MPxGeometryOverride(obj), fShape(obj)
 {
+    // Selecting a joint does not dirty its connected bodies (selection is not
+    // a DG dependency): joint_display_context dirties exactly the bodies whose
+    // A/B role changes.
 }
 
 RigidBodyShapeGeometryOverride::~RigidBodyShapeGeometryOverride()
@@ -335,6 +323,7 @@ void RigidBodyShapeGeometryOverride::updateDG()
     fState.groupId = groupPlug.isNull() ? 0 : static_cast<short>(groupPlug.asShort());
     fState.physicsMode = pmPlug.isNull() ? 0 : static_cast<short>(pmPlug.asShort());
     fState.enabled = enabledPlug.isNull() ? true : enabledPlug.asBool();
+    fState.jointRoles = mmd::maya::joint_display::bodyRoles(fShape);
 }
 
 void RigidBodyShapeGeometryOverride::groupColor(float& cr, float& cg, float& cb) const
@@ -425,22 +414,19 @@ void RigidBodyShapeGeometryOverride::updateRenderItems(const MDagPath& /*dagPath
         {
             const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
             if (shaderMgr != nullptr)
-                // OpenPBR — Maya 2026+'s default material (matches the imported
-                // meshes' openPBRSurface look); baseColor param is float3.
-                fSolidShader = shaderMgr->getStockShader(
-                    MHWRender::MShaderManager::k3dIsotropicOpenPBRSurfaceShader);
+                fSolidShader = mmd::maya::createSurfaceShader(*shaderMgr);
         }
-        if (fSolidShader != nullptr)
-            fSolidItem->setShader(fSolidShader);
     }
+    // VP2 may replace a render item while this override retains its shader.
+    // Bind to the current item even when no new shader had to be allocated.
+    if (fSolidShader != nullptr)
+        fSolidItem->setShader(fSolidShader);
 
     float cr = 1.0f, cg = 0.25f, cb = 0.25f;
     groupColor(cr, cg, cb); // solid keeps its group colour even when selected
     fSolidItem->enable(drawSolid);
     if (drawSolid && fSolidShader != nullptr)
-    {
-        fSolidShader->setParameter("baseColor", MFloatVector(cr, cg, cb));
-    }
+        mmd::maya::setSurfaceColor(*fSolidShader, MColor(cr, cg, cb));
 }
 
 void RigidBodyShapeGeometryOverride::addUIDrawables(
@@ -451,19 +437,32 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
     // Maya's selection colour) regardless of drawMode — like any mesh.
     // Unselected bodies show their group-colour wire only in wire modes.
     const bool selected = isSelected(objPath);
-    const bool drawWire = selected || (fState.drawMode == RigidBodyShape::kDrawWire ||
-                                       fState.drawMode == RigidBodyShape::kDrawWireSolid);
+    const bool related = fState.jointRoles != 0;
+    const bool drawWire = selected || related ||
+                          (fState.drawMode == RigidBodyShape::kDrawWire ||
+                           fState.drawMode == RigidBodyShape::kDrawWireSolid);
     if (!drawWire)
         return;
 
-    float cr = 1.0f, cg = 0.25f, cb = 0.25f;
-    if (selected)
-        selectionColor(objPath, cr, cg, cb);
-    else
-        groupColor(cr, cg, cb);
     drawMgr.beginDrawable();
-    drawMgr.setColor(MColor(cr, cg, cb));
-    drawColliderWire(drawMgr, fState.size, fState.colliderType);
+    if (related && !selected)
+    {
+        // A / B role across the selected joints, striped for both (joint_palette.hpp).
+        drawMgr.setLineWidth(4.0f);
+        mmd::maya::drawRoleColliderWire(drawMgr, fState.size, fState.colliderType,
+                                        fState.jointRoles);
+    }
+    else
+    {
+        float cr = 1.0f, cg = 0.25f, cb = 0.25f;
+        if (selected)
+            selectionColor(objPath, cr, cg, cb);
+        else
+            groupColor(cr, cg, cb);
+        drawMgr.setLineWidth(selected ? 1.75f : 1.25f);
+        drawMgr.setColor(MColor(cr, cg, cb));
+        mmd::maya::drawColliderWire(drawMgr, fState.size, fState.colliderType);
+    }
     drawMgr.endDrawable();
 }
 
@@ -496,7 +495,7 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     const unsigned int numVerts = static_cast<unsigned int>(mesh.positions.size() / 3);
 
     // Create vertex buffers from the shader's OWN requirements (position +
-    // normal [+ uv] for the stock OpenPBR surface) so the stream
+    // normal [+ uv] for the stock surface shader) so the stream
     // names/semantics always match what the item's shader expects.  Fall back
     // to manual position + normal + uv descriptors if the requirements come
     // back empty (can happen for custom render items).
@@ -519,7 +518,7 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
             case MGeometry::kTexture:
             {
                 // Solid colour needs no real UVs — provide a zeroed float2
-                // stream so the OpenPBR shader has everything it declares.
+                // stream so the shader has everything it declares.
                 const std::vector<float> dummyUvs(numVerts * 2, 0.0f);
                 fillVertexBuffer(data.createVertexBuffer(desc), dummyUvs, numVerts, 2, desc);
                 break;

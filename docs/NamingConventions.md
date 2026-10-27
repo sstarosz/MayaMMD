@@ -26,7 +26,7 @@ All suffixes start with a capital letter for consistency.
 | RigidBodySolver (pmxRigidBodyNode)  | DAG  | `{model}_RigidBodySolver`              | `GirlsFrontline_TololoDefault_RigidBodySolver`   |
 | RigidBody guide (transform)         | DAG  | `{model}_{rigidbody_name}`             | `GirlsFrontline_TololoDefault_leg_rb`            |
 | RigidBodyShape (pmxRigidBodyShape)  | DAG  | `{model}_{rigidbody_name}Shape`        | `GirlsFrontline_TololoDefault_leg_rbShape`       |
-| RigidBody joint (pmxRigidBodyJoint) | DAG  | `{model}_{joint_name}`                 | `GirlsFrontline_TololoDefault_CapeL1`            |
+| RigidBody joint (pmxRigidBodyJoint) | DAG  | `{model}_{joint_name}_Constraint`      | `GirlsFrontline_TololoDefault_CapeL1_Constraint` |
 | rotScale (multiplyDivide)           | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
 | ccdSolver                           | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
 | BoneMorph node                      | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
@@ -37,12 +37,16 @@ All suffixes start with a capital letter for consistency.
 | Place2dTexture                      | DG   | `{model}_{texture_name}_Place2D`       | `GirlsFrontline_TololoDefault_body_Place2D`      |
 | Blendshape target                   | attr | `{morph_name}` (attribute, not a node) | `eye_blink`                                      |
 
-**Rigid-body short names can repeat across sub-groups.** A PMX model often
-names a rigid body and a joint identically (e.g. `CapeL1`) — after the
-`{model}_Bodies` / `{model}_Joints` split, both live under the same model but in
-different groups, so the SHORT name is ambiguous. Resolve those nodes by DAG
-path (`cmds.listRelatives(..., fullPath=True)`) or through the solver's
-`bodyShapes[]` / `jointShapes[]` connections — the `pmxRigidBodyShape` /
+**Rigid bodies and their joints** are named by `PMXNamingManager`
+(`get_rigid_body_name` / `get_rigid_body_joint_name`; the importer passes them
+to `pmxRigidBody` / `pmxRigidBodyConstraint -nodeName`, and both commands
+apply the same policy when called without it): the local name when it is
+ASCII-safe, else the universal name, else `RigidBody_{index}` /
+`Joint_{index}`. A PMX model often names a joint exactly like the rigid body
+it moves (e.g. `CapeL1`), so joints carry `RIGID_BODY_JOINT_SUFFIX`
+(`_Constraint`; `_Jnt` already means a bone). Resolve rigid-body nodes through
+the solver's `bodyShapes[]` / `jointShapes[]` connections, or by DAG path
+(`cmds.listRelatives(..., fullPath=True)`); the `pmxRigidBodyShape` /
 `pmxRigidBodyJoint` SHAPE names (auto-generated, unique) are also safe.
 
 ## Why DAG nodes omit the model prefix

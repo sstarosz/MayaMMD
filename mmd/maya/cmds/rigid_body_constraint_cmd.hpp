@@ -4,7 +4,8 @@
  * rigid_body_constraint_cmd.hpp
  *
  * RigidBodyConstraintCmd — native C++ command for appending PMX joints
- * (rigid-body CONSTRAINTS) to a pmxRigidBodyNode's ``joints`` array.
+ * (rigid-body CONSTRAINTS) to a pmxRigidBodyNode: one pmxRigidBodyJoint node
+ * per joint, registered in the solver's ``jointShapes`` array.
  *
  * WHY C++ (not a Python MPxCommand): identical rationale to ``pmxRigidBody``
  * (see rigid_body_cmd.hpp) — the Python command layer crashes inside
@@ -19,12 +20,20 @@
  *     pmxRigidBodyConstraint <solver | modelRoot>
  *         -index <int>              optional target index (must be the next
  *                                   free index; omit to auto-append)
- *         -name <string>            PMX joint name (local) → joints[j].jointNameLocal
- *         -nameUniversal <string>   PMX joint name (universal) → joints[j].jointNameUniversal
+ *         -nodeName <string>        the joint transform's name (the importer
+ *                                   passes PMXNamingManager's); default
+ *                                   `{model}_{joint}_Constraint` by the same
+ *                                   policy
+ *         -name <string>            PMX joint name (local) → jointNameLocal
+ *         -nameUniversal <string>   PMX joint name (universal) → jointNameUniversal
  *         -bodyA <int> -bodyB <int>   PMX rigid-body indices the joint links
  *                                   (validated against the current body
- *                                   count; bodyA must differ from bodyB)
- *         -type <int>               PMX joint type 0..5 (validated)
+ *                                   count; bodyA must differ from bodyB).
+ *                                   The joint stores CONNECTIONS, not the
+ *                                   indices: bodyShapes[i]'s shape.message ->
+ *                                   jointBodyA / jointBodyB
+ *         -type <int>               PMX joint type; only 0 (Spring6Dof) is
+ *                                   accepted (PMX 2.1 types not supported yet)
  *                                   SPRING_6DOF=0 / 6DOF=1 / P2P=2 /
  *                                   CONETWIST=3 / SLIDER=4 / HINGE=5
  *         -position <x y z>         joint frame position (MMD space; Z-flip)
@@ -41,10 +50,10 @@
  *                                   the node hands angular values to Bullet
  *                                   unchanged (they are NOT converted to
  *                                   degrees)
- *         -linearSpring <x y z> -angularSpring <x y z>
- *                                   PMX verbatim (spring stiffness — a
- *                                   magnitude, invariant under the
- *                                   reflection)
+ *         -linearStiffness <x y z> -angularStiffness <x y z>
+ *                                   PMX verbatim (Bullet axis stiffness from
+ *                                   the PMX spring constant — a magnitude,
+ *                                   invariant under the reflection)
  *
  * Create writes the joint DATA so the node holds the full constraint set;
  * no solver stepping happens here (the ``time`` input is connected by the

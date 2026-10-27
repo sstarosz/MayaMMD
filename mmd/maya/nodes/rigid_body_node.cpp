@@ -17,6 +17,7 @@
 
 #include "rigid_body_node.hpp"
 
+#include "joint_display_sizes.hpp"
 #include "maya_utils.hpp"
 #include "rigid_body_joint.hpp"
 #include "rigid_body_shape.hpp"
@@ -79,6 +80,8 @@ const MTypeId RigidBodyNode::kTypeId(0x0011C105); // unique Maya node type id fo
 // ===========================================================================
 MObject RigidBodyNode::aTime;
 MObject RigidBodyNode::aGravity;
+MObject RigidBodyNode::aJointDisplayScale;
+MObject RigidBodyNode::aOutStep;
 
 MObject RigidBodyNode::aBodyShapes;
 
@@ -114,6 +117,7 @@ namespace
 struct Inputs
 {
     std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies;
+    RigidBodyNode::BodyShapes bodyShapes; // the shape node of each body
     std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
     mmd::core::Double3 gravity;
 };
@@ -287,8 +291,10 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
 // node provides one BodyDefinition (PMX-verbatim fields; the REST pose comes
 // from the shape's bodyRestTranslate/bodyRestRotate attributes, not the
 // guide transform, which holds the CURRENT pose).  Unconnected slots are
-// skipped, keeping the body index == connected-shape order.
-[[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition> readBodyData(const MObject& node)
+// skipped, keeping the body index == connected-shape order; `shapes` gets
+// each body's shape node in the same order.
+[[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition>
+readBodyData(const MObject& node, RigidBodyNode::BodyShapes& shapes)
 {
     std::vector<RigidBodySimulation::BodyDefinition> out;
     MPlug shapesPlug(node, RigidBodyNode::aBodyShapes);
@@ -302,7 +308,10 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
             continue;
         RigidBodySimulation::BodyDefinition b;
         if (RigidBodyShape::readBodyDefinition(sources[0].node(), b))
+        {
             out.push_back(b);
+            shapes.add(sources[0].node());
+        }
     }
     return out;
 }
@@ -368,14 +377,18 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
 // Read the solver's joint list from its jointShapes[] message array (PMX
 // order — written DENSELY by the builder): each connected pmxRigidBodyJoint
 // node provides one JointDefinition via RigidBodyJoint::readJointDefinition
-// (the FRAME comes from the joint node's DAG transform; the rest from its
-// attributes).  Unconnected slots are skipped, keeping the joint index ==
-// connected-joint order.
-[[nodiscard]] std::vector<RigidBodySimulation::JointDefinition> readJointData(const MObject& node)
+// (the FRAME comes from the joint node's DAG transform, in the rigid bodies
+// group's space; the rest from its attributes).  Unconnected slots are
+// skipped, keeping the joint index ==
+// connected-joint order.  The joint's bodies are connections to shape nodes,
+// resolved to body indices through `shapes` (-1 for a missing body).
+[[nodiscard]] std::vector<RigidBodySimulation::JointDefinition>
+readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
 {
     std::vector<RigidBodySimulation::JointDefinition> out;
     MPlug shapesPlug(node, RigidBodyNode::aJointShapes);
     const unsigned int jointCount = shapesPlug.evaluateNumElements();
+    const MMatrix groupWorld = RigidBodyNode::groupWorldMatrix(node);
     out.reserve(jointCount);
     for (unsigned int i = 0; i < jointCount; ++i)
     {
@@ -383,9 +396,13 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
         shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
         if (sources.length() == 0)
             continue;
+        const MObject joint = sources[0].node();
         RigidBodySimulation::JointDefinition j;
-        if (RigidBodyJoint::readJointDefinition(sources[0].node(), j))
-            out.push_back(j);
+        if (!RigidBodyJoint::readJointDefinition(joint, groupWorld, j))
+            continue;
+        j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
+        j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));
+        out.push_back(j);
     }
     return out;
 }
@@ -400,7 +417,7 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
 bool isOutputPlug(const MPlug& plug)
 {
     return plug == RigidBodyNode::aOutTranslate || plug == RigidBodyNode::aOutRotate ||
-           plug.isElement() || plug.isChild();
+           plug == RigidBodyNode::aOutStep || plug.isElement() || plug.isChild();
 }
 
 // ===========================================================================
@@ -410,8 +427,8 @@ bool isOutputPlug(const MPlug& plug)
 [[nodiscard]] Inputs readInputs(const MObject& node, MDataBlock& dataBlock)
 {
     Inputs in;
-    in.bodies = readBodyData(node);
-    in.joints = readJointData(node);
+    in.bodies = readBodyData(node, in.bodyShapes);
+    in.joints = readJointData(node, in.bodyShapes);
     in.gravity = readGravity(dataBlock);
     return in;
 }
@@ -474,8 +491,7 @@ bool updateKinematicAnchors(World& world, const MObject& node)
         const MObject shape = bodyShapeNode(node, (unsigned int) i);
         if (shape.isNull())
             continue;
-        MPlug anchorPlug(shape, RigidBodyShape::aBodyAnchorWorld);
-        MMatrix w = anchorPlug.asMDataHandle().asMatrix();
+        MMatrix w = mmd::maya::readPlugMatrix(MPlug(shape, RigidBodyShape::aBodyAnchorWorld));
         // RAW rigid attachment (row-vector): the body is a child of its joint
         // at a constant local offset, so bodyWorld = bodyRest * anchorRest^-1 *
         // anchorWorld (bodyRest on the LEFT).  At rest this is bodyRest; under
@@ -514,8 +530,7 @@ bool updateKinematicAnchors(World& world, const MObject& node)
         const MObject shape = bodyShapeNode(node, (unsigned int) i);
         if (shape.isNull())
             continue;
-        MPlug anchorPlug(shape, RigidBodyShape::aBodyAnchorWorld);
-        out.push_back(anchorPlug.asMDataHandle().asMatrix());
+        out.push_back(mmd::maya::readPlugMatrix(MPlug(shape, RigidBodyShape::aBodyAnchorWorld)));
     }
     return out;
 }
@@ -632,27 +647,10 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     result.emplace();
     World& world = *result;
     world.bodies = in.bodies;
+    world.bodyShapes = in.bodyShapes;
     world.joints = in.joints;
     world.gravity = in.gravity;
-
-    // The guide outputs are expressed in the RigidBodies group's space (the
-    // solver's DAG parent — the guides hang one level deeper, under the
-    // {model}_Bodies sub-group, which must stay at identity).  The Bullet
-    // world runs in WORLD space, so each body's solved pose must be brought
-    // into the group's local frame before it can drive a child of the group.
-    {
-        MDagPath solverPath;
-        if (MDagPath::getAPathTo(node, solverPath) == MS::kSuccess &&
-            solverPath.pop() == MS::kSuccess)
-        {
-            // inclusiveMatrix() lives on MDagPath (not the function set).
-            world.groupWorld = solverPath.inclusiveMatrix();
-        }
-        else
-        {
-            world.groupWorld = MMatrix::identity;
-        }
-    }
+    world.jointHubRadius = mmd::core::joint_display::modelHubRadius(in.bodies, in.joints);
 
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);
@@ -850,7 +848,16 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 
 // Write each dynamic body's solved local pose to outTranslate/outRotate.
 // An empty world (no bodies) writes empty arrays.
-MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
+//
+// The guide outputs are expressed in the RigidBodies group's space (the
+// solver's DAG parent — the guides hang one level deeper, under the
+// {model}_Bodies sub-group, which must stay at identity).  The Bullet world
+// runs in WORLD space, so each body's solved pose is brought into the
+// group's frame.  `groupWorld` is the group's CURRENT world matrix: one
+// cached at build time would show a model-root move twice (the solved pose
+// already carries it, and the guide's parent moves with the root too).
+MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorld,
+                     MDataBlock& dataBlock)
 {
     const unsigned int bodyCount = world ? static_cast<unsigned int>(world->bodies.size()) : 0U;
     MArrayDataBuilder tBuilder(&dataBlock, RigidBodyNode::aOutTranslate, bodyCount);
@@ -1061,7 +1068,7 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
     if (world)
     {
         constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
-        const MMatrix groupInv = world->groupWorld.inverse();
+        const MMatrix groupInv = groupWorld.inverse();
         for (unsigned int i = 0; i < bodyCount; ++i)
         {
             const RigidBodySimulation::Pose wp = world->sim.bodyPose(i);
@@ -1107,6 +1114,60 @@ MStatus writeOutputs(const std::optional<World>& world, MDataBlock& dataBlock)
 // Node lifecycle
 // ===========================================================================
 RigidBodyNode::RigidBodyNode() = default;
+
+void RigidBodyNode::BodyShapes::add(const MObject& shape)
+{
+    byHash.emplace(MObjectHandle(shape).hashCode(), static_cast<long>(nodes.size()));
+    nodes.emplace_back(shape);
+}
+
+long RigidBodyNode::BodyShapes::indexOf(const MObject& shape) const
+{
+    if (shape.isNull())
+        return -1;
+    // Hash codes can collide: confirm the hit, and scan when it is not ours.
+    const auto it = byHash.find(MObjectHandle(shape).hashCode());
+    if (it != byHash.end() && nodes[static_cast<size_t>(it->second)].object() == shape)
+        return it->second;
+    for (size_t i = 0; i < nodes.size(); ++i)
+        if (nodes[i].object() == shape)
+            return static_cast<long>(i);
+    return -1;
+}
+
+MMatrix RigidBodyNode::groupWorldMatrix(const MObject& solver)
+{
+    MDagPath solverPath;
+    if (MDagPath::getAPathTo(solver, solverPath) != MS::kSuccess ||
+        solverPath.pop() != MS::kSuccess)
+        return MMatrix::identity;
+    // inclusiveMatrix() lives on MDagPath (not the function set).
+    return solverPath.inclusiveMatrix();
+}
+
+bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefinition& def,
+                                        MMatrix& bodyA, MMatrix& bodyB, MMatrix& attachmentA,
+                                        MMatrix& attachmentB) const
+{
+    if (!mWorld || def.bodyA < 0 || def.bodyB < 0)
+        return false;
+    RigidBodySimulation::Pose a, b;
+    if (!mWorld->sim.attachmentPose(def.bodyA, def.frameT, def.frameR, a) ||
+        !mWorld->sim.attachmentPose(def.bodyB, def.frameT, def.frameR, b))
+        return false;
+    const auto poseMatrix = [](const RigidBodySimulation::Pose& pose)
+    {
+        MTransformationMatrix tm;
+        tm.setRotationQuaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w);
+        tm.setTranslation(MVector(pose.pos.x, pose.pos.y, pose.pos.z), MSpace::kTransform);
+        return tm.asMatrix();
+    };
+    bodyA = poseMatrix(mWorld->sim.bodyPose(def.bodyA));
+    bodyB = poseMatrix(mWorld->sim.bodyPose(def.bodyB));
+    attachmentA = poseMatrix(a);
+    attachmentB = poseMatrix(b);
+    return true;
+}
 
 // Defaulted out-of-line: the node is destroyed polymorphically through its
 // MPxNode base, and the default teardown is exactly what we want — mWorld's
@@ -1169,6 +1230,19 @@ MStatus RigidBodyNode::initialize()
     // --- gravity ---
     aGravity = makeNumeric(nAttr, "gravity", "grav", MFnNumericData::k3Double, 0.0);
     nAttr.setDefault(0.0, -9.8, 0.0); // MMD's physics engine uses exactly -9.8
+
+    // --- joint glyph size multiplier (viewport only) ---
+    aJointDisplayScale =
+        makeNumeric(nAttr, "jointDisplayScale", "jdsc", MFnNumericData::kDouble, 1.0);
+    nAttr.setMin(0.05);
+    nAttr.setDefault(1.0);
+
+    // --- joints' viewport dependency on the simulation (see header) ---
+    aOutStep = nAttr.create("outStep", "ostp", MFnNumericData::kDouble, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setWritable(false);
+    nAttr.setStorable(false);
+    nAttr.setHidden(true);
 
     // --- per-body shape message array (PMX order) ---
     // Each element connects to a pmxRigidBodyShape node that holds that body's
@@ -1296,6 +1370,10 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aGravity);
     MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aJointDisplayScale);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutStep);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyShapes);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointShapes);
@@ -1322,7 +1400,8 @@ MStatus RigidBodyNode::initialize()
     // Every config input drives the outputs too, so compute() re-runs on a
     // body/joint/gravity edit (config change detection) and on a kinematic
     // bone drag at a fixed time (the anchor lives on the shape's
-    // bodyAnchorWorld).
+    // bodyAnchorWorld).  Body and joint edits arrive through the message
+    // arrays: each shape/joint input affects its own `solver` message plug.
     stat = attributeAffects(aGravity, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
@@ -1347,6 +1426,14 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJointShapes, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
+    // The joints redraw only when their solverStep input is dirtied, so
+    // everything they draw from the solver — including the hub size knob —
+    // must reach outStep.
+    for (const MObject& input : {aTime, aGravity, aBodyShapes, aJointShapes, aJointDisplayScale})
+    {
+        stat = attributeAffects(input, aOutStep);
+        MMD_CHECK_MSTATUS(stat);
+    }
 
     return MS::kSuccess;
 }
@@ -1377,10 +1464,22 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 
     const MTime now = dataBlock.inputValue(aTime).asTime();
 
+    // Pull the message arrays through the data block.  Nothing is read from
+    // them (bodies and joints are read through their plugs), but the pull
+    // cleans their dirt paths (e.g. shape.bodyAnchorWorld -> shape.solver ->
+    // bodyShapes[i]): Maya stops propagating at a plug that is still dirty,
+    // so without it only the FIRST bone drag or edit at a paused frame would
+    // reach the solver.
+    dataBlock.inputArrayValue(aBodyShapes);
+    dataBlock.inputArrayValue(aJointShapes);
+
     // Frame transition: read the PMX-verbatim inputs, then (re)build or
     // advance the world.  The new world atomically replaces the old one.
     const Inputs in = readInputs(thisMObject(), dataBlock);
     mWorld = frame(std::move(mWorld), in, thisMObject(), now);
 
-    return writeOutputs(mWorld, dataBlock);
+    MDataHandle step = dataBlock.outputValue(aOutStep);
+    step.setDouble(now.as(MTime::kSeconds));
+    step.setClean();
+    return writeOutputs(mWorld, groupWorldMatrix(thisMObject()), dataBlock);
 }

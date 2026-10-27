@@ -49,25 +49,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the plugin pre-sets the per-type view optionVar the AE's Views menu uses,
   because the AE only builds a custom XML view when a named view is active
   (otherwise it shows the plain editor with Extra Attributes).  The
-  `pmxRigidBodyNode` solver is editable too: a "Solver" section with
-  `gravity` plus a **Joints** section listing every physics constraint
-  (name, body indices, type, frame, linear/angular limits and springs) with
-  Add/Remove buttons.  Because Maya's XML AE templates cannot render
-  compound-array attributes (a `joints` property builds an empty control
-  with no add button), the solver AE is built with the Python AE framework
-  Maya's own plugins use (`maya.app.flux.ae`, registered at plugin load via
-  `AEpmxRigidBodyNodeTemplate`).  The plugin deliberately clears the
-  `AEpmxRigidBodyNodeCustomView` optionVar (showEditor.mel routes a node to
-  its XML view whenever that optionVar names one, which would bypass the
-  Flux editor entirely); the XML template is kept gravity-only and is only
-  used if the view is picked manually.  The internal arrays/outputs stay
-  hidden in both cases.
+  `pmxRigidBodyNode` solver gets a small classic MEL template (Solver:
+  `gravity`; Display: Joint Hub Size) that hides its internal arrays and
+  outputs; the per-body and per-joint data lives on the connected
+  `pmxRigidBodyShape` (grouped XML template) / `pmxRigidBodyJoint` nodes.
+  The joint also gets a MEL template (Joint / Limits / Stiffness / Display),
+  because its Body A / Body B are message connections, which only a MEL
+  navigation control can show.
 - **`pmxRigidBodyShape` native node** — a C++ `MPxLocatorNode` that carries
   one PMX body's data (PMX-verbatim fields) and is drawn by a registered
   `MPxDrawOverride`.
+- **`pmxRigidBodyNode.jointDisplayScale`** (double, default `1.0`, AE "Joint
+  Hub Size") — a viewport-only multiplier for the joint hubs.  All hubs of a
+  model otherwise share one size, derived from the median rest distance
+  between the bodies its joints link; this is the per-model knob when the
+  joints read too small or too large.
+- **Joint visualization** (`RigidBodyJointGeometryOverride`; see
+  `docs/JointVisualization.md`):
+  - every joint draws a pickable **hub** at its live attachment A, coloured by
+    what the joint permits — welded (grey) / rotates (cyan) / translates
+    (rose); a joint that does both shows both colours in alternating wedges,
+    so both read from every direction.  In wireframe mode the hub is a wire
+    sphere, so it stays visible and pickable.  A joint is bounded around its
+    live hub, so Frame Selected (F) works on it;
+  - a joint **picked directly** (its hub or transform) shows its body links
+    (A violet rings, B gold diamonds), its connected colliders' outlines
+    (striped violet/gold for a
+    body that is A for one selected joint and B for another), and in the
+    Ranges draw mode its **motion ranges**: real-size translation regions and
+    per-axis angle arcs in local X/Y/Z colours, each with a **needle** at the
+    joint's current angle; a sprung rotation axis draws its arc as a zigzag
+    over the allowed span, a sprung translation axis gets a zigzag badge.
+    Arcs are drawn where the body really turns (Bullet's joint angles have
+    the opposite sign of a right-handed rotation, so a limit `[lo, hi]` is
+    drawn at `[-hi, -lo]`).  The overlay has a faint X-ray ghost so joints inside
+    cloth and hair stay readable.  Its size follows the hub, not the camera,
+    so every viewport shows the same overlay.  A joint selected only through a
+    parent group (e.g. all of `{model}_Joints`) keeps the selection wire but
+    draws no overlay;
+  - the Y rotation dial is cut at ±90°, the furthest the constraint's Euler
+    decomposition reaches; the configured part beyond that is dashed, with
+    no end stop at the cut.  A free Y with free X and Z is a full ring (the
+    Euler angles flip instead of stopping);
+  - the rotation dials nest like a **gimbal**, in the order Bullet measures
+    the angles: Z in body A's frame, Y turned by the current Z, X turned by Z
+    and Y, so every needle points where the body really is;
+  - a limit the body **presses on is drawn bold**: the needle and its end
+    stop, or the translation ruler's end / the region's faces in that axis's
+    colour;
+  - a joint that **constrains nothing** (a missing, disabled or shared body,
+    or two bone-driven bodies — `RigidBodySimulation::jointStatus`) has a
+    hollow dashed hub, and when picked draws only dashed links to its bodies;
+  - a picked joint whose hub body A has carried away from the joint's
+    transform shows a dashed **ghost of the hub at the frame**, tethered to
+    the hub, so the Move/Rotate manipulator's position makes sense;
+  - hidden or isolated-out connected bodies are still outlined for the
+    selected joint (isolate-select detection needs Maya 2026+; older versions
+    outline hidden bodies only);
+  - the display follows Bullet's freedom rules exactly, at Bullet's float
+    precision: equal limits lock, any `min < max` range moves (no
+    thresholds), inverted limits are free, and stiffness on a locked axis is
+    not shown as a spring (it has no effect);
+  - joints redraw after every solver step: a real DG connection
+    (`pmxRigidBodyNode.outStep` → `pmxRigidBodyJoint.solverStep`) brings
+    each step to the joint, which marks its drawing dirty in
+    `setDependentsDirty` (DG) and `postEvaluation` (Evaluation Manager), so
+    hubs follow the simulation during Parallel / Serial playback too.  They
+    do not redraw on camera moves.
 
 ### Changed
 
+- **Breaking: joint "spring" attributes/flags renamed to "stiffness"** — the
+  value is Bullet's axis stiffness (`btGeneric6DofSpringConstraint::setStiffness`),
+  not a physical spring constant, so the user-facing names now say so:
+  - node attributes `jointLinearSpring` / `jointAngularSpring` →
+    `jointLinearStiffness` / `jointAngularStiffness` (shorts `jls` / `jas` →
+    `jlsk` / `jask`);
+  - command flags `-linearSpring` / `-angularSpring` →
+    `-linearStiffness` / `-angularStiffness` (shorts `-ls` / `-as` → `-lsk` / `-ask`);
+  - AE labels "Linear/Angular Spring" (group "Springs") → "Linear/Angular
+    Stiffness" (group "Stiffness").
+
+  Re-import required (saved scenes referencing the old attribute names must be
+  rebuilt).  The PMX source fields (`position_spring_constant`,
+  `rotation_spring_constant`) and the joint type `Spring6Dof` are unchanged.
+- **Joints are simulated with `btGeneric6DofSpringConstraint`** (was
+  `btGeneric6DofSpring2Constraint`), the constraint MMD's Bullet 2.75
+  creates, with linear limits in body A's frame.
+- **The solver runs Bullet's default 10 iterations, as MMD does** (was 30).
+  The 30 were needed for the Spring2 constraints, whose long chains
+  detached from their anchors at 10; the Spring6Dof chains hold (no
+  physics-driven bone stretched over 0.08 units in two test models).
+- **A joint's frame is its transform in the `{model}_RigidBodies` group's
+  space**, the space of the bodies' rest poses, so moving the model root no
+  longer moves the pivots off their bodies.  The collider guides are
+  written against the group's current world matrix, so they follow a
+  model-root move once (they showed it twice until a rebuild).
+- **The `{model}_RigidBodies` group and its `{model}_Bodies` /
+  `{model}_Joints` sub-groups have locked transform channels**: they only
+  follow the model root.
+- **Joint `drawMode` is now Off / Hub / Ranges** (was Off / Wire / Solid /
+  WireSolid).  New joints default to Ranges.
+- **Breaking: joints link their bodies by connection.**
+  `pmxRigidBodyJoint.jointBodyA` / `jointBodyB` are message attributes
+  connected from the bodies' `pmxRigidBodyShape.message` (they were PMX body
+  indices).  Deleting or reordering bodies no longer re-targets joints; a
+  joint that loses a body is drawn inactive.  `pmxRigidBodyConstraint
+  -bodyA/-bodyB` still take PMX indices and make the connections.
+  Re-import required.
+- **Rigid bodies and joints are named by `PMXNamingManager`**: the local
+  name when it is ASCII-safe, else the universal name, else
+  `RigidBody_{index}` / `Joint_{index}` (bodies used to keep only the ASCII
+  characters of the local name, falling back to `RB_<n>`).  Joints are
+  `{model}_{joint}_Constraint`: PMX models often name a joint like the body
+  it moves, and `_Jnt` already marks bones.  `pmxRigidBody` and
+  `pmxRigidBodyConstraint` gained `-nodeName`, which the importer uses; both
+  fall back to the same policy without it.
+- **Breaking: `jointAngularMin` / `jointAngularMax` are angle attributes** — the
+  Attribute Editor and `cmds.getAttr`/`setAttr` use Maya's UI angle unit
+  (degrees by default) instead of raw radians.  The stored value and the
+  `pmxRigidBodyConstraint` flags are still radians.  Re-import required.
+- **Breaking: only PMX 2.0 joints (Spring6Dof) are supported.**  The importer
+  skips PMX 2.1 joint types (6Dof, P2P, ConeTwist, Slider, Hinge) with a
+  warning, `pmxRigidBodyConstraint -type` accepts only `0`, and `jointType`
+  has a single `Spring6Dof` field.  The 2.1 types reuse the limit/stiffness
+  fields with different meanings, so they are not misread as Spring6Dof.
 - **Rigid-body schema: `bodies[]` compound → `bodyShapes[]` + per-body nodes**
   (breaking — re-import required).  `pmxRigidBodyNode.bodyShapes[]` is now a
   message array connected to one `pmxRigidBodyShape` per body; the body's
@@ -83,6 +189,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rigid bodies could stay undrawn after isolate select** (e.g. select a
+  joint, Ctrl+1, deselect, Ctrl+1) until something refreshed them, such as
+  selecting the model root.  Every model-editor change (isolate on or off,
+  display mode) now redraws all rigid-body shapes and joints.
 - **Box colliders were half their MMD size** — the PMX box `shape_size` IS the
   Bullet half-extent (MMD feeds it verbatim to `btBoxShape`; nanoem /
   MMDAI / blender_mmd_tools agree), but both the engine (`applyShapeSize`)
@@ -97,6 +207,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. when the solver had no time connection yet).  The next-free index is
   now derived from `evaluateNumElements()`, which materializes the array's
   backing store so each body lands on its own element.
+- **Bone drags and edits at a paused frame now re-run the simulation** —
+  the solver reads bodies and joints through its `bodyShapes[]` /
+  `jointShapes[]` message arrays, so moving a bone, editing a body or joint
+  attribute, or moving a joint's transform never dirtied it: the rigid
+  bodies and the joint hubs on them stayed put until the time changed.
+  Every body and joint input now affects its node's `solver` message plug
+  (a joint's transform through the new hidden `frameMatrix` input), and the
+  solver pulls both arrays on every evaluation so the path is clean for the
+  next edit (Maya stops propagating at a plug left dirty).
+- **Memory leak on every solver evaluation** — body, joint and anchor values
+  were read through `MPlug::asMDataHandle()` without releasing the handle.
 
 ---
 

@@ -674,11 +674,27 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     """
     Builds the PMX scene in Maya from the given PMX data.
 
+    The user's selection is left as it was: Maya commands used while building
+    (``parent``, ``createNode``) select what they touch, which would otherwise
+    leave e.g. every rigid-body joint selected after the import.
+
     Args:
         pmx_data (PmxModel): The PMX model data.
     Returns:
         MayaPmxData: The Maya PMX data containing created objects.
     """
+    selection = cmds.ls(selection=True, long=True) or []
+    try:
+        return _build_pmx_scene(pmx_data)
+    finally:
+        if selection:
+            cmds.select(selection, replace=True)
+        else:
+            cmds.select(clear=True)
+
+
+def _build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
+    """The body of :func:`build_pmx_scene`."""
     # TODO: Pre-process PMX data to detect naming issues or any other problems which can
     # cause issues during scene building in Maya.
     # TODO: pre-process should also detect duplicated names and rename them accordingly

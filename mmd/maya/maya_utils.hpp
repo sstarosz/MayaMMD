@@ -7,6 +7,7 @@
 
 #include <maya/MDGModifier.h>
 #include <maya/MDagPath.h>
+#include <maya/MDataHandle.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnMatrixData.h>
 #include <maya/MFnNumericData.h>
@@ -73,6 +74,27 @@ inline void setPlugDouble3(MPlug plug, const mmd::core::Double3& v)
     const MObject obj = data.create(MFnNumericData::k3Double);
     data.setData3Double(v.x, v.y, v.z);
     plug.setValue(obj);
+}
+
+// Read another node's plug value outside compute().  MPlug::asMDataHandle()
+// allocates the handle it returns, so it must go back through
+// destructHandle() — the solver reads every body and joint this way on each
+// evaluation, and an unreleased handle leaks each time.
+inline mmd::core::Double3 readPlugDouble3(const MPlug& plug)
+{
+    MDataHandle handle = plug.asMDataHandle();
+    const double3& v = handle.asDouble3();
+    const mmd::core::Double3 out(v[0], v[1], v[2]);
+    plug.destructHandle(handle);
+    return out;
+}
+
+inline MMatrix readPlugMatrix(const MPlug& plug)
+{
+    MDataHandle handle = plug.asMDataHandle();
+    const MMatrix out = handle.asMatrix();
+    plug.destructHandle(handle);
+    return out;
 }
 
 // 4x4 row-vector matrix from translate + XYZ euler DEGREES.  Shared by the

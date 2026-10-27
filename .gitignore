@@ -73,3 +73,6 @@ assets/vpd_pose_files.py
 !assets/models_database/README.md
 !assets/motions_database/README.md
 !assets/poses_database/README.md
+
+# pytest temporary directories (--basetemp in the repo)
+pytest-of-*/
