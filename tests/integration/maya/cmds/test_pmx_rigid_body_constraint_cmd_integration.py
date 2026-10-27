@@ -629,6 +629,29 @@ def test_joint_gallery_effective_modes():
         "Rotate X: FREE" in summary and "wrapped" in summary,
         "wrapped angular limit explanation",
     )
+    # The explanation follows the viewport's model: a Y range past +/-90
+    # degrees is capped, stiffness on a locked axis has no effect, and a
+    # joint between two bone-driven bodies (case 18) is inactive.
+    set_angle3_radians(joint + ".jointAngularMax", (0.6, 2.0, 0.9))
+    assert_true(
+        "+/-90" in api["describe_joint"](joint).split("Rotate Y:")[1].split("\n")[0],
+        "Y range past 90 degrees is capped",
+    )
+    welded = gallery["cases"][0]["joint"]
+    cmds.setAttr(welded + ".jointLinearStiffness", 5, 0, 0, type="double3")
+    assert_true(
+        "X=5 (no effect: locked)" in api["describe_joint"](welded),
+        "stiffness on a locked axis has no effect",
+    )
+    assert_true(
+        "INACTIVE: both bodies follow their bones"
+        in api["describe_joint"](gallery["cases"][17]["joint"]),
+        "case 18 is inactive",
+    )
+    assert_true(
+        "INACTIVE" not in api["describe_joint"](gallery["cases"][1]["joint"]),
+        "an ordinary case is active",
+    )
     api["step"](gallery, 30)
     for entry in gallery["cases"]:
         for body in (0, 1):

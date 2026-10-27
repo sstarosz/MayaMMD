@@ -13,6 +13,7 @@ viewport labels. Select a case to reveal its motion guides (Ranges draw mode).
 from __future__ import annotations
 
 import math
+import struct
 from maya import cmds
 from maya.api import OpenMaya as om
 
@@ -59,7 +60,7 @@ CASES = [
          angularMin=(-.5, -.5, -.5), angularMax=(.5, .5, .5),
          note="Hybrid B writes simulated rotation to its visible driver bone, while that bone's translation remains animation-driven. This is a body mode, not a different joint type."),
     case("18 Separated attachments diagnostic", modes=("followBone", "followBone"),
-         separated=True, note="Both bodies are animation-driven; B's driver is displaced deliberately. Bullet cannot correct this pair."),
+         separated=True, note="Both bodies are animation-driven; B's driver is displaced deliberately. Bullet cannot correct this pair, so the joint is inactive: its hub is hollow and dashed."),
 ]
 
 
@@ -182,34 +183,79 @@ def inspect(gallery, index):
     return entry
 
 
+def _scalar(value):
+    """Bullet stores limits as 32-bit floats: compare them at that precision."""
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def _inactive_reason(joint):
+    """Why the joint constrains nothing (RigidBodySimulation::jointStatus), or None."""
+    bodies = [(cmds.listConnections(f"{joint}.jointBody{end}", s=True, d=False, plugs=True) or [""])[0]
+              .rsplit(".", 1)[0] for end in "AB"]
+    if not all(bodies):
+        return "a body is missing"
+    if bodies[0] == bodies[1]:
+        return "both ends are the same body"
+    if not all(cmds.getAttr(body + ".bodyEnabled") for body in bodies):
+        return "a body is disabled"
+    if all(cmds.getAttr(body + ".bodyPhysicsMode") == 0 for body in bodies):
+        return "both bodies follow their bones"
+    return None
+
+
 def describe_joint(joint):
-    """Read current attributes; display effective modes without altering inputs."""
+    """Read current attributes; display effective modes without altering inputs.
+
+    Follows the viewport's freedom model (mmd/core/joint_display_ranges.hpp):
+    limits compared at Bullet's float precision, angles wrapped to +/-180
+    degrees, the measured Y angle held within +/-90 degrees, and stiffness on
+    a locked axis reported as having no effect.
+    """
     values = {key: cmds.getAttr(joint + ".joint" + key[0].upper() + key[1:])[0]
               for key in _LIMITS}
     unit = om.MAngle.uiUnit()
     for key in ("angularMin", "angularMax"):
         values[key] = tuple(om.MAngle(v, unit).asRadians() for v in values[key])
-    lines = ["Spring 6DOF", "Distances: cm | angles: degrees", ""]
+    inactive = _inactive_reason(joint)
+    lines = ["Spring 6DOF" + (f" - INACTIVE: {inactive}" if inactive else ""),
+             "Distances: cm | angles: degrees", ""]
 
-    def mode(lo, hi, angular=False):
-        original = (lo, hi)
+    def kind(lo, hi, angular=False):
         if angular:
             lo, hi = (math.atan2(math.sin(v), math.cos(v)) for v in (lo, hi))
-        warning = " [wrapped from outside +/-180 deg]" if angular and any(abs(v) > math.pi for v in original) else ""
+        lo, hi = _scalar(lo), _scalar(hi)
+        return ("FREE" if lo > hi else "LOCKED" if lo == hi else "LIMITED"), lo, hi
+
+    def mode(axis, prefix):
+        angular = prefix == "angular"
+        lo, hi = values[prefix + "Min"][axis], values[prefix + "Max"][axis]
+        wrapped = angular and any(abs(v) > math.pi for v in (lo, hi))
+        name, lo, hi = kind(lo, hi, angular)
         scale = 180 / math.pi if angular else 1
-        if lo > hi:
-            return "FREE" + warning
-        if lo == hi:
-            return f"LOCKED at {lo * scale:.2f}" + warning
-        return f"LIMITED {lo * scale:.2f} to {hi * scale:.2f}" + warning
+        text = {"FREE": "FREE", "LOCKED": f"LOCKED at {lo * scale:.2f}",
+                "LIMITED": f"LIMITED {lo * scale:.2f} to {hi * scale:.2f}"}[name]
+        if angular and axis == 1:
+            # The measured Y angle cannot pass +/-90 degrees; a free Y still
+            # turns all the way round when X and Z are free too.
+            flips = all(kind(values["angularMin"][a], values["angularMax"][a], True)[0] == "FREE"
+                        for a in (0, 2))
+            if (name == "LIMITED" and max(-lo, hi) > math.pi / 2) or (name == "FREE" and not flips):
+                text += " [reaches only +/-90 deg]"
+        return text + (" [wrapped from outside +/-180 deg]" if wrapped else "")
 
     for axis, name in enumerate("XYZ"):
-        lines.append(f"Move {name}: " + mode(values["linearMin"][axis], values["linearMax"][axis]))
+        lines.append(f"Move {name}: " + mode(axis, "linear"))
     for axis, name in enumerate("XYZ"):
-        lines.append(f"Rotate {name}: " + mode(values["angularMin"][axis], values["angularMax"][axis], True))
-    lines.append("Angular dials show settings, not measured current angles.")
-    for key, label in (("linearStiffness", "Translation springs"), ("angularStiffness", "Rotation springs")):
-        lines.append(label + ": " + ", ".join(f"{axis}={v:g}" for axis, v in zip("XYZ", values[key])))
+        lines.append(f"Rotate {name}: " + mode(axis, "angular"))
+    lines.append("Needles show the current angles; a limit the body presses on is drawn bold.")
+    for prefix, label in (("linear", "Translation springs"), ("angular", "Rotation springs")):
+        springs = []
+        for axis, name in enumerate("XYZ"):
+            stiffness = values[prefix + "Stiffness"][axis]
+            locked = kind(values[prefix + "Min"][axis], values[prefix + "Max"][axis],
+                          prefix == "angular")[0] == "LOCKED"
+            springs.append(f"{name}={stiffness:g}" + (" (no effect: locked)" if stiffness and locked else ""))
+        lines.append(label + ": " + ", ".join(springs))
     return "\n".join(lines)
 
 

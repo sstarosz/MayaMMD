@@ -33,16 +33,21 @@ Outliner to inspect bone write-back. Case names and descriptions live in the
 browser and on each case group's `description`.
 
 The explanation panel reads the selected case's current attributes and reports
-LOCKED / LIMITED / FREE with angles in degrees. Use **Refresh parameter explanation
-after editing** to update it without reframing. Values outside +/-180 degrees are
-reported as wrapped; the script does not clamp or rewrite parameters.
+LOCKED / LIMITED / FREE with angles in degrees, by the same rules as the
+viewport: limits are compared at Bullet's float precision, a Y range past
++/-90 degrees is marked as reaching only +/-90, stiffness on a locked axis is
+marked as having no effect, and a joint that constrains nothing is reported as
+INACTIVE with the reason. Use **Refresh parameter explanation after editing**
+to update it without reframing. Values outside +/-180 degrees are reported as
+wrapped; the script does not clamp or rewrite parameters.
 
 Case 05 uses a white cube for the required B attachment position. The gold
 diamond is its actual position; the dashed line measures the error. Case 10's
 dashed angular sweep measures a fixed angle and does not mean an allowed range.
 Case 16 starts with a fixed offset error so stepping shows both bodies share the
 correction. Case 17 exposes its hybrid driver bone. Case 18 is intentionally
-unsatisfiable because both bodies are driven by animation.
+unsatisfiable because both bodies are driven by animation, so its joint is
+inactive (a hollow, dashed hub).
 
 For scripting without the browser:
 
