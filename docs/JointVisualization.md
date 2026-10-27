@@ -234,10 +234,9 @@ rotated frames, body modes). It never modifies existing scene content:
 | `mmd/core/joint_highlight.hpp` | which selected joint outlines a shared hidden body |
 | `mmd/maya/nodes/joint_display_context.*` | selection and isolate-select events, and shared shaders, handled once per session |
 | `mmd/maya/nodes/joint_palette.hpp` | every colour, one channel per hue |
-| `mmd/maya/nodes/joint_glyph_mesh.*` | the hub mesh (triangles and wire) |
 | `mmd/maya/nodes/collider_wire.hpp` | collider outlines, including A/B role colours |
 | `mmd/maya/nodes/surface_shader.hpp` | the lit stock shader (OpenPBR on 2026+, Blinn before) |
-| `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override |
+| `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override, including the hub mesh (triangles and wire) |
 
 Headless tests cannot show viewport output. After changing the display, check
 it interactively: select and deselect joints, select several, play and rewind

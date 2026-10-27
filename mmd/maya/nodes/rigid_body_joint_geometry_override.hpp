@@ -52,7 +52,6 @@
 
 #include <vector>
 
-#include "joint_glyph_mesh.hpp"
 #include "rigid_body_simulation.hpp"
 
 // ===========================================================================
@@ -135,8 +134,6 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         kStateInactive,          // constrains nothing (RigidBodySimulation::JointStatus)
     };
 
-    using Mesh = mmd::maya::joint_glyph::Mesh;
-
     // The joint's plugs, resolved once (the attributes never change).  The
     // bodies are connections, read with RigidBodyJoint::bodyShape.
     struct Plugs
@@ -188,8 +185,6 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // Hub colour of the even and odd wedges; they differ only for a joint
     // that rotates AND translates.
     void stateColors(MColor& primary, MColor& secondary) const;
-    // Rebuild the cached hub mesh and its per-item index lists.
-    void buildHubMesh();
     void drawMotionRanges(MHWRender::MUIDrawManager& drawManager, float alpha) const;
     // Three rings of `radius` (world units) around `local`, in the world's
     // axis planes, each one line strip so a dash pattern runs round it.
@@ -213,10 +208,4 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     MPoint fAttachmentB;
     MMatrix fHubToLocal;
     MMatrix fLocalToWorld; // the joint's DAG matrix, cached in updateRenderItems()
-
-    // Cached hub geometry, built for fHubBuiltRadius; one index list per
-    // render item (even/odd wedges x shaded/wire, see kHubItems).
-    Mesh fHub;
-    double fHubBuiltRadius = -1.0;
-    std::vector<unsigned int> fHubIndices[4];
 };

@@ -73,6 +73,154 @@ constexpr int kHubWedges = 8;
 // Opacity of the selected joint's X-ray ghost pass (see addUIDrawables).
 constexpr float kGhostAlpha = 0.3f;
 
+// A mesh: xyz-interleaved positions + normals, a triangle index list, and a
+// line index list over the same vertices (the wireframe-mode hub).
+struct Mesh
+{
+    std::vector<float> positions; // xyz interleaved
+    std::vector<float> normals;   // xyz interleaved
+    std::vector<unsigned int> indices;
+    std::vector<unsigned int> lines;
+
+    // Append one vertex, returning its index.
+    unsigned int vertex(const MPoint& p, const MVector& n)
+    {
+        const unsigned int i = static_cast<unsigned int>(positions.size() / 3);
+        positions.insert(positions.end(), {static_cast<float>(p.x), static_cast<float>(p.y),
+                                           static_cast<float>(p.z)});
+        normals.insert(normals.end(), {static_cast<float>(n.x), static_cast<float>(n.y),
+                                       static_cast<float>(n.z)});
+        return i;
+    }
+    void tri(unsigned int a, unsigned int b, unsigned int c)
+    {
+        indices.insert(indices.end(), {a, b, c});
+    }
+    void line(unsigned int a, unsigned int b) { lines.insert(lines.end(), {a, b}); }
+
+    // A UV sphere with smooth normals; its wire is the latitude and longitude
+    // lines.  Winding: outward, so back-face culling shows its outside — the
+    // collider override's sphere (RigidBodyShapeGeometryOverride::buildSphere)
+    // emits the same triangles with the opposite winding, i.e. inward.
+    void appendSphere(const MPoint& center, double radius, int slices, int stacks)
+    {
+        if (radius <= 0.0 || slices < 3 || stacks < 2)
+            return;
+
+        // Interior rings; the poles are single vertices, so the caps have no
+        // degenerate (zero-area) triangles.
+        const auto ringVertex = [&](int i, int j)
+        {
+            const double phi = M_PI * i / stacks;
+            const double y = std::cos(phi);
+            const double ringR = std::sin(phi);
+            const double theta = 2.0 * M_PI * j / slices;
+            const MVector dir(ringR * std::cos(theta), y, ringR * std::sin(theta));
+            return vertex(center + dir * radius, dir);
+        };
+
+        const unsigned int top = ringVertex(0, 0);         // +Y pole
+        const unsigned int bottom = ringVertex(stacks, 0); // -Y pole
+        std::vector<std::vector<unsigned int>> rows(static_cast<std::size_t>(stacks) - 1);
+        for (int i = 1; i < stacks; ++i)
+        {
+            std::vector<unsigned int>& row = rows[static_cast<std::size_t>(i) - 1];
+            row.reserve(static_cast<std::size_t>(slices) + 1);
+            for (int j = 0; j <= slices; ++j)
+                row.push_back(ringVertex(i, j));
+        }
+
+        for (int j = 0; j < slices; ++j)
+        {
+            const auto col = static_cast<std::size_t>(j);
+            tri(top, rows[0][col + 1], rows[0][col]);
+            const std::vector<unsigned int>& last = rows.back();
+            tri(bottom, last[col], last[col + 1]);
+        }
+        // Stitch the rows (each `slices + 1` vertices, the last repeating the
+        // first position) into quads.  Rows advance the way a UV sphere's rows
+        // do (+Y pole downwards on the outer side), so these face outward.
+        for (std::size_t i = 0; i + 1 < rows.size(); ++i)
+        {
+            for (int j = 0; j < slices; ++j)
+            {
+                const auto col = static_cast<std::size_t>(j);
+                const unsigned int a = rows[i][col];
+                const unsigned int d = rows[i][col + 1];
+                const unsigned int b = rows[i + 1][col];
+                const unsigned int c = rows[i + 1][col + 1];
+                tri(a, d, b);
+                tri(b, d, c);
+            }
+        }
+
+        // Wire: every latitude ring, and every meridian from pole to pole.
+        for (int j = 0; j < slices; ++j)
+        {
+            const auto col = static_cast<std::size_t>(j);
+            line(top, rows[0][col]);
+            for (std::size_t i = 0; i < rows.size(); ++i)
+            {
+                line(rows[i][col], rows[i][col + 1]);
+                if (i + 1 < rows.size())
+                    line(rows[i][col], rows[i + 1][col]);
+            }
+            line(rows.back()[col], bottom);
+        }
+    }
+};
+
+// The hub at UNIT radius in its attachment-A frame, split into the
+// alternating wedges of kHubItems (one index list per item).  It is the same
+// for every joint, so it is built once; populateGeometry scales it by the
+// joint's hub radius as it bakes it into the joint's LOCAL space.
+struct Hub
+{
+    Mesh mesh;
+    std::vector<unsigned int> indices[4];
+};
+const Hub& unitHub()
+{
+    static const Hub hub = []
+    {
+        Hub out;
+        // A compact pickable hub at attachment A.  Springs and limits are
+        // drawn per axis only for selected joints (drawMotionRanges): a single
+        // marker here could not say WHICH axis is sprung.
+        out.mesh.appendSphere(MPoint::origin, 1.0, kHubWedges, 6);
+
+        // A primitive belongs to an even wedge when its centroid's azimuth
+        // about the sphere's axis falls in one: wedges alternate all around
+        // the hub, so every view direction sees both colours (a top/bottom
+        // split would show one colour from above and the other from below).
+        const auto evenWedge =
+            [&](const std::vector<unsigned int>& list, std::size_t first, std::size_t count)
+        {
+            double x = 0.0, z = 0.0;
+            for (std::size_t k = 0; k < count; ++k)
+            {
+                x += out.mesh.positions[list[first + k] * 3];
+                z += out.mesh.positions[list[first + k] * 3 + 2];
+            }
+            const double azimuth = std::atan2(z, x) + (z < 0.0 ? 2.0 * M_PI : 0.0);
+            return static_cast<int>(azimuth / (2.0 * M_PI / kHubWedges)) % 2 == 0;
+        };
+        for (std::size_t item = 0; item < 4; ++item)
+        {
+            const HubItem& spec = kHubItems[item];
+            const std::vector<unsigned int>& source = spec.wire ? out.mesh.lines : out.mesh.indices;
+            const std::size_t stride = spec.wire ? 2 : 3;
+            for (std::size_t i = 0; i + stride <= source.size(); i += stride)
+                if (evenWedge(source, i, stride) == spec.primary)
+                    out.indices[item].insert(
+                        out.indices[item].end(), source.begin() + static_cast<std::ptrdiff_t>(i),
+                        source.begin() + static_cast<std::ptrdiff_t>(i + stride));
+        }
+        return out;
+    }();
+    return hub;
+}
+
 // Read a k3Double (or angle3) plug; a missing plug reads as zero.
 [[nodiscard]] mmd::core::Double3 readDouble3(const MPlug& plug)
 {
@@ -435,48 +583,6 @@ void RigidBodyJointGeometryOverride::stateColors(MColor& primary, MColor& second
     }
 }
 
-// The hub mesh, built in the attachment-A frame (baked into the node's LOCAL
-// space in populateGeometry), split into the alternating wedges of kHubItems.
-void RigidBodyJointGeometryOverride::buildHubMesh()
-{
-    fHub = Mesh();
-    for (auto& indices : fHubIndices)
-        indices.clear();
-    // A compact pickable hub at attachment A.  Springs and limits are drawn
-    // per axis only for selected joints (drawMotionRanges): a single marker
-    // here could not say WHICH axis is sprung.
-    mmd::maya::joint_glyph::appendSphere(fHub, MPoint::origin, fState.hubRadius, kHubWedges, 6);
-
-    // A primitive belongs to an even wedge when its centroid's azimuth about
-    // the sphere's axis falls in one: wedges alternate all around the hub, so
-    // every view direction sees both colours (a top/bottom split would show
-    // one colour from above and the other from below).
-    const auto evenWedge =
-        [&](const std::vector<unsigned int>& list, std::size_t first, std::size_t count)
-    {
-        double x = 0.0, z = 0.0;
-        for (std::size_t k = 0; k < count; ++k)
-        {
-            x += fHub.positions[list[first + k] * 3];
-            z += fHub.positions[list[first + k] * 3 + 2];
-        }
-        const double azimuth = std::atan2(z, x) + (z < 0.0 ? 2.0 * M_PI : 0.0);
-        return static_cast<int>(azimuth / (2.0 * M_PI / kHubWedges)) % 2 == 0;
-    };
-    for (std::size_t item = 0; item < 4; ++item)
-    {
-        const HubItem& spec = kHubItems[item];
-        const std::vector<unsigned int>& source = spec.wire ? fHub.lines : fHub.indices;
-        const std::size_t stride = spec.wire ? 2 : 3;
-        for (std::size_t i = 0; i + stride <= source.size(); i += stride)
-            if (evenWedge(source, i, stride) == spec.primary)
-                fHubIndices[item].insert(fHubIndices[item].end(),
-                                         source.begin() + static_cast<std::ptrdiff_t>(i),
-                                         source.begin() + static_cast<std::ptrdiff_t>(i + stride));
-    }
-    fHubBuiltRadius = fState.hubRadius;
-}
-
 bool RigidBodyJointGeometryOverride::isSelected(const MDagPath& path)
 {
     const MHWRender::DisplayStatus status = MHWRender::MGeometryUtilities::displayStatus(path);
@@ -561,10 +667,6 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
         if (shader != nullptr)
             item->setShader(shader);
     }
-
-    // Rebuild the cached hub only when its size changed.
-    if (fState.hubRadius != fHubBuiltRadius)
-        buildHubMesh();
 }
 
 bool RigidBodyJointGeometryOverride::hasUIDrawables() const
@@ -833,18 +935,21 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
                                                       const MRenderItemList& renderItems,
                                                       MGeometry& data)
 {
-    if (fState.drawMode == RigidBodyJoint::kDrawOff || fHub.positions.empty())
+    if (fState.drawMode == RigidBodyJoint::kDrawOff)
         return;
 
-    // Transform a COPY of the cached attachment-space mesh. Never accumulate
-    // the animated pose into the cache. VP2 applies the DAG matrix once:
+    // Scale a COPY of the shared unit hub to this joint's radius and bake it
+    // into the joint's LOCAL space. VP2 applies the DAG matrix once:
     // vertex * attachmentWorld * inverse(jointWorld) * jointWorld.
-    Mesh mesh = fHub;
+    const Hub& hub = unitHub();
+    Mesh mesh = hub.mesh;
+    const double radius = fState.hubRadius;
     const MMatrix normalToLocal = fHubToLocal.inverse().transpose();
     for (std::size_t i = 0; i < mesh.positions.size(); i += 3)
     {
-        const MPoint p =
-            MPoint(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]) * fHubToLocal;
+        const MPoint p = MPoint(mesh.positions[i] * radius, mesh.positions[i + 1] * radius,
+                                mesh.positions[i + 2] * radius) *
+                         fHubToLocal;
         const MVector n =
             (MVector(mesh.normals[i], mesh.normals[i + 1], mesh.normals[i + 2]) * normalToLocal)
                 .normal();
@@ -908,9 +1013,9 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
             continue;
         for (std::size_t k = 0; k < 4; ++k)
         {
-            if (item->name() != kHubItems[k].name || fHubIndices[k].empty())
+            if (item->name() != kHubItems[k].name || hub.indices[k].empty())
                 continue;
-            const auto& indices = fHubIndices[k];
+            const auto& indices = hub.indices[k];
             MIndexBuffer* indexBuf = data.createIndexBuffer(MGeometry::kUnsignedInt32);
             if (indexBuf == nullptr)
                 break;
