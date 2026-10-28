@@ -21,11 +21,10 @@
  * {model}_Joints would flood the view with ~400 overlays) also adds, as UI
  * drawables: links from each body's centre to its own attachment (A rings, B
  * diamonds); in Ranges mode the motion-range guides with each rotation axis's
- * current angle (joint_display.hpp); a dashed ghost of the hub at the joint's
- * transform, tethered to the hub, once body A has carried the hub away from
- * it; and fallback outlines for connected bodies hidden or isolated out of
- * the view.  An inactive joint draws only dashed links to its bodies.  The overlay is drawn twice — a faint
- * X-ray ghost and a depth-tested pass — so joints inside cloth and hair stay
+ * current angle (joint_display.hpp); and fallback outlines for connected
+ * bodies hidden or isolated out of the view.  An inactive joint draws only
+ * dashed links to its bodies.  The overlay is drawn twice — a faint X-ray
+ * ghost and a depth-tested pass — so joints inside cloth and hair stay
  * readable.  Nothing depends on the camera: every viewport shows the same
  * overlay, sized relative to the hub.
  *
@@ -53,6 +52,7 @@
 
 #include <vector>
 
+#include "joint_display.hpp"
 #include "rigid_body_simulation.hpp"
 
 // ===========================================================================
@@ -175,7 +175,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         double hubScale = 1.0;
 
         // Derived (see classifyState / deriveSizes).
-        double hubRadius = 0.03; // the rendered sphere radius
+        double hubRadius =
+            mmd::core::joint_display::kFallbackHubRadius; // the rendered sphere radius
         short state = kStateWelded;
     };
 

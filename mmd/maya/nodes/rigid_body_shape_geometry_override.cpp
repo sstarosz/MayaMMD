@@ -124,6 +124,7 @@ void buildBox(float hx, float hy, float hz, ColliderMesh& mesh)
 }
 
 // Sphere: radius = size.x, smooth normals (position normalized).
+// Wound outward (CCW seen from outside), matching buildBox / buildCapsule.
 void buildSphere(float r, int stacks, int slices, ColliderMesh& mesh)
 {
     const auto at = [&](int i, int j) { return i * (slices + 1) + j; };
@@ -150,7 +151,7 @@ void buildSphere(float r, int stacks, int slices, ColliderMesh& mesh)
             const unsigned int b = at(i + 1, j);
             const unsigned int c = at(i + 1, j + 1);
             const unsigned int d = at(i, j + 1);
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, b, c, d});
+            mesh.indices.insert(mesh.indices.end(), {a, d, b, b, d, c});
         }
     }
 }

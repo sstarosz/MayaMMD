@@ -98,9 +98,7 @@ struct Mesh
     void line(unsigned int a, unsigned int b) { lines.insert(lines.end(), {a, b}); }
 
     // A UV sphere with smooth normals; its wire is the latitude and longitude
-    // lines.  Winding: outward, so back-face culling shows its outside — the
-    // collider override's sphere (RigidBodyShapeGeometryOverride::buildSphere)
-    // emits the same triangles with the opposite winding, i.e. inward.
+    // lines.  Winding: outward, so back-face culling shows its outside.
     void appendSphere(const MPoint& center, double radius, int slices, int stacks)
     {
         if (radius <= 0.0 || slices < 3 || stacks < 2)
@@ -311,7 +309,9 @@ class ViewFilter
             MDagPath ancestor = path;
             while (ancestor.length() > 0)
             {
-                if (!fChildren && ancestor.length() + 1 < path.length())
+                // With "show children" off only the selected node itself is
+                // drawn, so an ancestor selection must not count as shown.
+                if (!fChildren && ancestor.length() < path.length())
                     break;
                 if (ancestor == member)
                     return true;
@@ -771,33 +771,11 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
             marker(body, end == 1, sizes.bodyMarker);
         }
     };
-    // The frame is the joint's transform, where the Move manipulator sits,
-    // but the hub rides on body A.  Once they part, a dashed ghost of the hub
-    // at the frame, tethered to the hub, shows where the frame is.
-    const bool frameApart =
-        ((fAttachmentA - MPoint::origin) * localToWorld).length() > fState.hubRadius * 1.5;
-    const auto restFrame = [&](float alpha)
-    {
-        if (!frameApart)
-            return;
-        MColor color = palette::kGuide;
-        color.a *= alpha;
-        drawManager.setColor(color);
-        drawManager.setLineWidth(1.5f);
-        drawManager.setLineStyle(MHWRender::MUIDrawManager::kDashed);
-        drawRings(drawManager, MPoint::origin, fState.hubRadius, 24);
-        MPointArray tether;
-        tether.append(MPoint::origin);
-        tether.append(fAttachmentA);
-        drawManager.mesh(MHWRender::MUIDrawManager::kLines, tether);
-        drawManager.setLineStyle(MHWRender::MUIDrawManager::kSolid);
-    };
     const double separation = ((fAttachmentA - fAttachmentB) * localToWorld).length();
     const bool separate = separation > std::max(1e-5, fState.hubRadius * 0.08);
     const auto overlay = [&](float alpha)
     {
         drawManager.setLineStyle(MHWRender::MUIDrawManager::kSolid);
-        restFrame(alpha);
         if (!fState.active || !fState.hasAttachments)
         {
             inactiveLinks(alpha);

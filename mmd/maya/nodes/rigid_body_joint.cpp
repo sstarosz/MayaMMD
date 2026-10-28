@@ -294,13 +294,18 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
 // Bounds
 // ===========================================================================
 // Everything the joint can draw, in the shape's object space: the hub and its
-// guides around the LIVE attachment on body A, plus attachment B, the body
-// centres a selected joint links, and the rest-frame ghost at the transform.
-// Without a solver world the hub sits at the frame.
+// guides around the LIVE attachment on body A, plus attachment B and the body
+// centres a selected joint links.  Without a solver world the hub sits at the
+// frame.
 MBoundingBox RigidBodyJoint::boundingBox() const
 {
     using namespace mmd::core::joint_display;
     const MObject node = thisMObject();
+    // Reading the solverStep input evaluates the owning solver (outStep ->
+    // solverStep), so the world queried below is the current one.
+    const MPlug solverStep(node, aSolverStep);
+    if (!solverStep.isNull())
+        solverStep.asDouble();
     MDagPath path;
     if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
         return {};
@@ -352,9 +357,6 @@ MBoundingBox RigidBodyJoint::boundingBox() const
     if (live)
         for (const MMatrix* m : {&attachmentB, &bodyA, &bodyB})
             box.expand(MPoint::origin * *m * worldToLocal);
-    // The rest-frame ghost at the transform, for when the hub has left it.
-    box.expand(MPoint(hub, hub, hub));
-    box.expand(MPoint(-hub, -hub, -hub));
     return box;
 }
 
@@ -367,7 +369,7 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
         return false;
     MFnDependencyNode depFn(node);
-    if (depFn.typeName() != kNodeName)
+    if (depFn.typeId() != kTypeId)
         return false;
 
     MStatus stat;

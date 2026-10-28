@@ -97,10 +97,6 @@ Selecting a joint (its hub, or its transform) adds overlays:
   colours, and a body that is A for one selected joint and B for another is
   **striped violet and gold**. An inactive joint draws only **dashed** links
   from its hub to the bodies it names, and no motion ranges.
-- **Rest frame**: the joint's transform is its frame, and the Move and Rotate
-  manipulators sit there, but the hub rides on body A. Once body A has
-  carried the hub away, a dashed white **ghost** of the hub marks the frame,
-  with a dashed tether to the hub.
 - **Motion ranges** (Ranges draw mode), drawn at attachment A: translation in
   its frame, rotation on nested dials (below). Red, green and blue mean local
   **X, Y, Z**:
@@ -182,7 +178,7 @@ connects to the transform's `worldMatrix`.
 | Value | Label  | Draws                                                            |
 | ----- | ------ | ---------------------------------------------------------------- |
 | 0     | Off    | nothing                                                          |
-| 1     | Hub    | the hub; when selected, the body links, outlines and rest frame  |
+| 1     | Hub    | the hub; when selected, the body links and outlines              |
 | 2     | Ranges | Hub, plus the selected joint's motion ranges (the default)       |
 
 ## Size
@@ -200,7 +196,10 @@ hub in that model.
   the space of the bodies' rest poses, so moving the model root never
   re-rigs a joint. The group and its `{model}_Bodies` / `{model}_Joints`
   sub-groups follow the model root only: their transform channels are locked
-  at import.
+  at import. The stored frame is the **authored** frame: once body A moves,
+  the live constraint frame is the hub (where the guides are drawn), which
+  moves with A, while the transform and its manipulators stay where the joint
+  was authored.
 - A joint is bounded around its live hub, so Frame Selected (F) works on it.
 - `jointBodyA` / `jointBodyB` are **message connections** from the bodies'
   `pmxRigidBodyShape.message`, not indices. The Attribute Editor shows each
@@ -237,5 +236,5 @@ it interactively: select and deselect joints, select several, play and rewind
 (also with Parallel Evaluation), switch to wireframe and pick a hub, use
 several viewports, isolate-select and Show All, hide a connected body, and
 look at joints inside cloth (the X-ray ghost). Also delete a body (its
-joints turn hollow), play until a body presses on a limit (bold needle or
-face), and pause mid-animation to see the rest-frame ghost and tether.
+joints turn hollow) and play until a body presses on a limit (bold needle or
+face).

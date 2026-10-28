@@ -100,9 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a joint that **constrains nothing** (a missing, disabled or shared body,
     or two bone-driven bodies — `RigidBodySimulation::jointStatus`) has a
     hollow dashed hub, and when picked draws only dashed links to its bodies;
-  - a picked joint whose hub body A has carried away from the joint's
-    transform shows a dashed **ghost of the hub at the frame**, tethered to
-    the hub, so the Move/Rotate manipulator's position makes sense;
   - hidden or isolated-out connected bodies are still outlined for the
     selected joint (isolate-select detection needs Maya 2026+; older versions
     outline hidden bodies only);
