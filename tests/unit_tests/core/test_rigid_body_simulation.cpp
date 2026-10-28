@@ -12,7 +12,6 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "joint_display.hpp"
-#include "joint_parameters.hpp"
 #include "physics_math.hpp"
 #include "rigid_body_simulation.hpp"
 
@@ -370,27 +369,6 @@ TEST_CASE("Motion guides: Y stops only at real limits; free XYZ makes Y a ring",
     REQUIRE(ticks(segments) == 1);
     j.angularMax.y = 0.5;
     REQUIRE(ticks(guidesFor(j)) == 2);
-}
-
-TEST_CASE("PMX reflection negates and swaps linear Z and angular X/Y", "[joint-display][sim]")
-{
-    RigidBodySimulation::JointDefinition j;
-    j.linearMin = Double3(.2, 3, 1);
-    j.linearMax = Double3(.4, 5, 9);
-    j.angularMin = Double3(.1, .2, .3);
-    j.angularMax = Double3(.4, .5, .6);
-    j.linearStiffness = Double3(1, 2, 3);
-    j.angularStiffness = Double3(4, 5, 6);
-    auto reflected = j;
-    mmd::core::reflectJointParameters(reflected);
-    requireDouble3(reflected.linearMin, Double3(.2, 3, -9));
-    requireDouble3(reflected.linearMax, Double3(.4, 5, -1));
-    requireDouble3(reflected.angularMin, Double3(-.4, -.5, .3));
-    requireDouble3(reflected.angularMax, Double3(-.1, -.2, .6));
-    requireDouble3(reflected.linearStiffness, j.linearStiffness);
-    requireDouble3(reflected.angularStiffness, j.angularStiffness);
-    mmd::core::reflectJointParameters(reflected);
-    REQUIRE(reflected == j);
 }
 
 TEST_CASE("Angular wrapping reveals free axes rather than an apparent limited arc",

@@ -35,7 +35,7 @@
  */
 
 #include "rigid_body_constraint_cmd.hpp"
-#include "joint_parameters.hpp"
+#include "common.hpp"
 #include "pmx_rigid_body_cmd_utils.hpp"
 
 #include <maya/MArgList.h>
@@ -88,6 +88,23 @@ constexpr const char* kNodeNameFlag = "nn";
 // body it moves often enough that the bare name would clash with that body,
 // and bones already own "_Jnt".
 constexpr const char* kJointNodeSuffix = "_Constraint";
+
+// Reflect Spring6Dof PMX limits into Maya's right-handed joint frame
+// (F = diag(1, 1, -1)): linear Z and angular X/Y intervals negate and swap.
+// Linear X/Y and angular Z are invariant.
+void reflectJointLimits(Double3& linearMin, Double3& linearMax, Double3& angularMin,
+                        Double3& angularMax)
+{
+    const auto flip = [](double& lo, double& hi)
+    {
+        std::swap(lo, hi);
+        lo = -lo;
+        hi = -hi;
+    };
+    flip(linearMin.z, linearMax.z);
+    flip(angularMin.x, angularMax.x);
+    flip(angularMin.y, angularMax.y);
+}
 
 // ===========================================================================
 // Create mode
@@ -265,21 +282,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // swaps.  Angular: rotations about local X/Y negate (F·Rx·F⁻¹ = Rx(-θ)) so
     // their intervals negate AND swap; rotation about Z is invariant.  Springs
     // are magnitudes — invariant, passed through.
-    mmd::core::RigidBodySimulation::JointDefinition parameters;
-    parameters.type = type;
-    parameters.linearMin = lmin0;
-    parameters.linearMax = lmax0;
-    parameters.angularMin = amin0;
-    parameters.angularMax = amax0;
-    parameters.linearStiffness = ls;
-    parameters.angularStiffness = as;
-    mmd::core::reflectJointParameters(parameters);
-    const auto& lmin = parameters.linearMin;
-    const auto& lmax = parameters.linearMax;
-    const auto& amin = parameters.angularMin;
-    const auto& amax = parameters.angularMax;
-    ls = parameters.linearStiffness;
-    as = parameters.angularStiffness;
+    reflectJointLimits(lmin0, lmax0, amin0, amax0);
+    const Double3& lmin = lmin0;
+    const Double3& lmax = lmax0;
+    const Double3& amin = amin0;
+    const Double3& amax = amax0;
 
     // ── Create the per-joint node (pmxRigidBodyJoint) ──
     // One selectable joint per PMX constraint: a plain TRANSFORM holding the
