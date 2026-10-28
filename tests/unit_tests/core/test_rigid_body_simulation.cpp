@@ -124,35 +124,6 @@ TEST_CASE("Joint display distinguishes fixed offsets, tiny ranges and free axes"
     REQUIRE(describe(j).linearSpring[2]); // free axes can be sprung too
 }
 
-TEST_CASE("Joint freedom summary reports the kinds of motion", "[joint-display]")
-{
-    using namespace mmd::core::joint_display;
-    RigidBodySimulation::JointDefinition j;
-    auto f = summarize(describe(j));
-    REQUIRE_FALSE(f.translates);
-    REQUIRE_FALSE(f.rotates);
-
-    // Welded but with stiffness everywhere: still welded.
-    j.linearStiffness = Double3(10, 10, 10);
-    j.angularStiffness = Double3(10, 10, 10);
-    f = summarize(describe(j));
-    REQUIRE_FALSE(f.translates);
-    REQUIRE_FALSE(f.rotates);
-
-    // A tiny (sub-degree) range is real freedom.
-    j.angularMin.z = -.005;
-    j.angularMax.z = .005;
-    f = summarize(describe(j));
-    REQUIRE(f.rotates);
-    REQUIRE_FALSE(f.translates);
-
-    j.linearMin.x = 1;
-    j.linearMax.x = -1;
-    f = summarize(describe(j));
-    REQUIRE(f.translates);
-    REQUIRE(f.rotates);
-}
-
 namespace
 {
 using mmd::core::joint_display::GuideColor;

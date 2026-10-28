@@ -247,6 +247,28 @@ void fillVertexBuffer(MVertexBuffer* buffer, const std::vector<float>& data, uns
     buffer->commit(ptr);
 }
 
+// Whole-joint summary for the unselected state display: which kinds of
+// motion the joint permits.  Same freedom model as the selected motion
+// guides (joint_display.hpp); a joint that constrains nothing has no
+// freedom to show.
+struct Freedom
+{
+    bool translates = false; // some linear axis is limited or free
+    bool rotates = false;    // some angular axis is limited or free
+};
+Freedom summarize(const mmd::core::joint_display::Ranges& ranges)
+{
+    Freedom out;
+    for (int i = 0; i < 3; ++i)
+    {
+        out.translates =
+            out.translates || ranges.linear[i].kind() != mmd::core::joint_display::RangeKind::Fixed;
+        out.rotates =
+            out.rotates || ranges.angular[i].kind() != mmd::core::joint_display::RangeKind::Fixed;
+    }
+    return out;
+}
+
 // Isolate-select state of the viewport being drawn.  Maya < 2026 cannot query
 // it through M3dView, so there every view counts as showing everything and
 // only hidden bodies get a fallback outline.
@@ -540,15 +562,14 @@ void RigidBodyJointGeometryOverride::classifyState()
         fState.state = kStateInactive;
         return;
     }
-    const auto freedom =
-        mmd::core::joint_display::summarize(mmd::core::joint_display::describe(fState.definition));
+    const Freedom freedom = summarize(mmd::core::joint_display::describe(fState.definition));
     fState.state = freedom.translates
                        ? (freedom.rotates ? kStateRotatesTranslates : kStateTranslates)
                        : (freedom.rotates ? kStateRotates : kStateWelded);
 }
 
 // Every joint of a model shares one hub size, derived by the solver from the
-// model's rest poses (joint_display::modelHubRadius), so the hubs look alike
+// model's rest poses (RigidBodyNode's modelHubRadius), so the hubs look alike
 // and never change with the simulation.  The solver's jointDisplayScale
 // stays live.
 void RigidBodyJointGeometryOverride::deriveSizes()

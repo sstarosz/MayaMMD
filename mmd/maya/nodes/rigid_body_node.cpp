@@ -23,6 +23,8 @@
 #include "rigid_body_shape.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 
 #include <maya/MAngle.h>
 #include <maya/MArrayDataBuilder.h>
@@ -616,6 +618,36 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     return common;
 }
 
+// One hub radius for every joint of a model, from the median REST distance
+// between the bodies its joints link (about 0.5 units in real models), so
+// the hubs read at any model scale, all look alike, and never depend on the
+// simulation state.  The user's jointDisplayScale multiplies the result.
+[[nodiscard]] double modelHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                                    const std::vector<RigidBodySimulation::JointDefinition>& joints)
+{
+    std::vector<double> links;
+    links.reserve(joints.size());
+    const auto valid = [&](long index)
+    { return index >= 0 && index < static_cast<long>(bodies.size()); };
+    for (const auto& joint : joints)
+    {
+        if (!valid(joint.bodyA) || !valid(joint.bodyB))
+            continue;
+        const Double3& a = bodies[joint.bodyA].restPos;
+        const Double3& b = bodies[joint.bodyB].restPos;
+        const double link = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                                      (a.z - b.z) * (a.z - b.z));
+        if (link > 1e-4)
+            links.push_back(link);
+    }
+    if (links.empty())
+        return mmd::core::joint_display::kFallbackHubRadius;
+    const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
+    std::nth_element(links.begin(), middle, links.end());
+    // Keep the hub compact in dense rigs: a fraction of the median link.
+    return std::clamp(*middle * 0.35, 0.05, 0.5) * mmd::core::joint_display::kHubSizeFactor;
+}
+
 // Build a fresh world from the PMX-verbatim inputs: resolve the DAG wiring,
 // derive the write-back offsets K, initialize the Bullet engine, and pin the
 // chains to the CURRENT skeleton pose (a posed skeleton must not snap to
@@ -650,7 +682,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     world.bodyShapes = in.bodyShapes;
     world.joints = in.joints;
     world.gravity = in.gravity;
-    world.jointHubRadius = mmd::core::joint_display::modelHubRadius(in.bodies, in.joints);
+    world.jointHubRadius = modelHubRadius(in.bodies, in.joints);
 
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);

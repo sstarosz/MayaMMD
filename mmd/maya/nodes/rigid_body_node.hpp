@@ -205,7 +205,7 @@ class RigidBodyNode : public MPxLocatorNode
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
         // One hub radius for the model's joints, from the rest poses
-        // (joint_display::modelHubRadius); recomputed with every rebuild.
+        // (modelHubRadius in rigid_body_node.cpp); recomputed with every rebuild.
         double jointHubRadius = 0.0;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
         // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
