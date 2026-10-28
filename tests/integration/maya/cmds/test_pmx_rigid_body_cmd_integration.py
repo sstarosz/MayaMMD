@@ -946,7 +946,10 @@ def test_body_node_naming():
     cases = [
         ({"nodeName": "Given_Name"}, "Given_Name"),
         ({"name": "Cape L1"}, "testSolver_Cape_L1"),
-        ({"name": "スカート前", "nameUniversal": "Skirt front"}, "testSolver_Skirt_front"),
+        (
+            {"name": "スカート前", "nameUniversal": "Skirt front"},
+            "testSolver_Skirt_front",
+        ),
         ({"name": "髪"}, "testSolver_RigidBody_3"),
     ]
     for index, (flags, expected) in enumerate(cases):

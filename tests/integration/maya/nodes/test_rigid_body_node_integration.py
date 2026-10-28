@@ -725,14 +725,18 @@ def test_paused_frame_edits_rerun_solver():
             cmds.currentTime(frame)
             cmds.getAttr(f"{node}.outTranslate[1]")
         fallen = cmds.getAttr(f"{node}.outTranslate[1]")[0][1]
-        assert_true(fallen < 0.95, f"before the {label} edit the body falls (y={fallen:.3f})")
+        assert_true(
+            fallen < 0.95, f"before the {label} edit the body falls (y={fallen:.3f})"
+        )
         edit()
         rebuilt = cmds.getAttr(f"{node}.outTranslate[1]")[0][1]
         assert_true(
             abs(rebuilt - 1.0) < 0.01,
             f"{label} edit at a paused frame should rebuild to rest y=1 (got {rebuilt:.3f})",
         )
-    print("✓ joint limit, joint frame and body edits re-run the solver at a paused frame")
+    print(
+        "✓ joint limit, joint frame and body edits re-run the solver at a paused frame"
+    )
     return True
 
 
@@ -755,7 +759,8 @@ def test_joint_bounds_follow_the_hub():
     cmds.getAttr(f"{node}.outTranslate[1]")
     rest = cmds.exactWorldBoundingBox(joint)
     assert_true(
-        rest[1] < 0.5 < rest[4], f"bounds should hold the hub at the frame y=0.5 ({rest})"
+        rest[1] < 0.5 < rest[4],
+        f"bounds should hold the hub at the frame y=0.5 ({rest})",
     )
 
     # Lift the kinematic anchor by 3: the welded hub rides up to y=3.5.
@@ -769,8 +774,10 @@ def test_joint_bounds_follow_the_hub():
         moved[1] < 3.5 < moved[4] and moved[4] > rest[4] + 2.5,
         f"bounds should follow the hub to y=3.5 ({moved})",
     )
-    print(f"✓ joint bounds followed the hub: y {rest[1]:.2f}..{rest[4]:.2f} -> "
-          f"{moved[1]:.2f}..{moved[4]:.2f}")
+    print(
+        f"✓ joint bounds followed the hub: y {rest[1]:.2f}..{rest[4]:.2f} -> "
+        f"{moved[1]:.2f}..{moved[4]:.2f}"
+    )
     return True
 
 
@@ -811,7 +818,9 @@ def test_model_root_move_keeps_guides_on_bodies():
         abs(after[0] - 5.0) < 1e-3 and abs(after[1] - 1.0) < 1e-3,
         f"guide should follow the root to (5, 1) once, not twice (got {after})",
     )
-    print(f"✓ collider guide followed the root move once: ({after[0]:.3f}, {after[1]:.3f})")
+    print(
+        f"✓ collider guide followed the root move once: ({after[0]:.3f}, {after[1]:.3f})"
+    )
     return True
 
 
@@ -856,7 +865,9 @@ def test_model_root_move_keeps_joint_pivot():
         abs(bob[0] - 3.0) < 0.05 and abs(bob[1] + 1.0) < 0.05,
         f"pendulum should hang still below the moved pivot at (3, -1) (got {bob})",
     )
-    print(f"✓ moved model root kept the joint pivot: bob at ({bob[0]:.3f}, {bob[1]:.3f})")
+    print(
+        f"✓ moved model root kept the joint pivot: bob at ({bob[0]:.3f}, {bob[1]:.3f})"
+    )
     return True
 
 
@@ -1363,7 +1374,10 @@ _TESTS = [
         test_paused_frame_edits_rerun_solver,
     ),
     ("Joint Bounds Follow the Hub", test_joint_bounds_follow_the_hub),
-    ("Model Root Move Keeps Guides on Bodies", test_model_root_move_keeps_guides_on_bodies),
+    (
+        "Model Root Move Keeps Guides on Bodies",
+        test_model_root_move_keeps_guides_on_bodies,
+    ),
     ("Model Root Move Keeps Joint Pivot", test_model_root_move_keeps_joint_pivot),
     (
         "Rewind Rebuild Keeps Character Move (no persistent jump)",

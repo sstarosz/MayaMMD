@@ -402,7 +402,12 @@ class TestPMXNamingStrategy(unittest.TestCase):
         pmx_model.rigid_bodies = entries
         pmx_model.joints = entries
         naming_manager = PMXNamingManager(pmx_model)
-        bodies = ["Phys_CapeL1", "Phys_Skirt_front", "Phys_RigidBody_2", "Phys_CapeL1_1"]
+        bodies = [
+            "Phys_CapeL1",
+            "Phys_Skirt_front",
+            "Phys_RigidBody_2",
+            "Phys_CapeL1_1",
+        ]
         for idx, name in enumerate(bodies):
             self.assertEqual(naming_manager.get_rigid_body_name(idx), name)
             self.assertEqual(

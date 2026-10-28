@@ -384,9 +384,7 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             ("A", first.rigid_body_index_a),
             ("B", first.rigid_body_index_b),
         ):
-            linked = (
-                cmds.listConnections(f"{jbase}.jointBody{end}", source=True) or []
-            )
+            linked = cmds.listConnections(f"{jbase}.jointBody{end}", source=True) or []
             expected = (
                 cmds.listConnections(
                     f"{solver}.bodyShapes[{int(pmx_index)}]", source=True
