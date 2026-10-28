@@ -23,7 +23,7 @@ fields with different meanings. The importer skips them with a warning, and
 
 ## How freedom is decided
 
-Every part of the display uses one model (`mmd/core/joint_display_ranges.hpp`).
+Every part of the display uses one model (`mmd/core/joint_display.hpp`).
 It follows Bullet exactly, with no display thresholds:
 
 | Limits on an axis         | Meaning                                               |
@@ -227,10 +227,9 @@ rotated frames, body modes). It never modifies existing scene content:
 
 | File | Role |
 | ---- | ---- |
-| `mmd/core/joint_display_ranges.hpp` | the freedom model (per-axis kinds, effective springs, summary) |
+| `mmd/core/joint_display.hpp` | the Maya-free display model: the freedom model (per-axis kinds, effective springs, summary, constraint angles), hub-relative sizes, and the motion-range guide geometry as line segments (unit-tested) |
 | `mmd/core/rigid_body_simulation.hpp` | `jointStatus`: whether a joint constrains anything (inactive hubs) |
-| `mmd/core/joint_guides.hpp` | motion-range guide geometry as line segments, gimbal dials and limit hits (unit-tested) |
-| `mmd/core/joint_display_sizes.hpp` | hub-relative sizes for guides and markers |
+| `mmd/core/joint_parameters.hpp` | PMX limits reflected into Maya's right-handed joint frame (used by the constraint command, not the display) |
 | `mmd/maya/nodes/rigid_body_display.*` | everything both overrides share: the palette (every colour, one channel per hue), collider outlines and the A/B role wire, the lit stock shader (OpenPBR on 2026+, Blinn before), selection and isolate-select events handled once per session, shared shaders, and which selected joint outlines a shared hidden body |
 | `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override: the hub mesh (triangles and wire) and the joint-specific drawing on top of the shared display module |
 

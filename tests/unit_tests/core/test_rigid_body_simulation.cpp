@@ -11,9 +11,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "joint_display_ranges.hpp"
-#include "joint_display_sizes.hpp"
-#include "joint_guides.hpp"
+#include "joint_display.hpp"
 #include "joint_parameters.hpp"
 #include "physics_math.hpp"
 #include "rigid_body_simulation.hpp"
@@ -1125,7 +1123,7 @@ template <typename Configure> double sagUnderGravity(Configure configure)
 } // namespace
 
 // These pin the Bullet behaviour the joint display model relies on
-// (joint_display_ranges.hpp): equal endpoints lock, tiny ranges move,
+// (joint_display.hpp): equal endpoints lock, tiny ranges move,
 // inverted endpoints are free, and stiffness on a locked axis does nothing.
 TEST_CASE("Spring6Dof freedom matches the joint display model", "[sim][joint-display]")
 {

@@ -11,7 +11,7 @@
  * joint's freedom state (welded / rotates / translates; a joint that does both
  * shows both colours in alternating wedges, visible from every direction; the
  * palette is at the top of the .cpp), from the shared freedom model
- * (joint_display_ranges.hpp).
+ * (joint_display.hpp).
  *
  * A joint that constrains nothing (a missing, disabled or shared body, or
  * two bone-driven bodies) has a hollow dashed hub instead.
@@ -21,7 +21,7 @@
  * {model}_Joints would flood the view with ~400 overlays) also adds, as UI
  * drawables: links from each body's centre to its own attachment (A rings, B
  * diamonds); in Ranges mode the motion-range guides with each rotation axis's
- * current angle (joint_guides.hpp); a dashed ghost of the hub at the joint's
+ * current angle (joint_display.hpp); a dashed ghost of the hub at the joint's
  * transform, tethered to the hub, once body A has carried the hub away from
  * it; and fallback outlines for connected bodies hidden or isolated out of
  * the view.  An inactive joint draws only dashed links to its bodies.  The overlay is drawn twice — a faint

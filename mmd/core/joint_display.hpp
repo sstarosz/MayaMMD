@@ -1,5 +1,236 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * joint_display.hpp
+ *
+ * The Maya-free joint display model shared by the viewport overrides, the
+ * joint node and the unit tests:
+ *
+ *   - the freedom model (describe / summarize / currentAngles): what the
+ *     constraint permits, measured exactly as Bullet measures it;
+ *   - sizes (guideSizes / modelHubRadius): hub-relative guide sizes and one
+ *     hub radius per model;
+ *   - motion-range guides (motionGuides): a selected joint's ranges as plain
+ *     line segments in its attachment-A frame.
+ *
+ * Everything here is pure geometry and math, so it can be unit-tested
+ * without the Maya SDK; the overrides only map the segments to draw calls.
+ */
+
 #pragma once
 
+#include "common.hpp"
+#include "rigid_body_simulation.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <vector>
+
+namespace mmd::core::joint_display
+{
+// ===========================================================================
+// Freedom model
+// ===========================================================================
+// The single freedom model behind every joint display (state colour, motion
+// guides, tests).  It follows btGeneric6DofSpringConstraint exactly: there
+// are no display thresholds, so what is drawn is what the solver does.
+enum class RangeKind
+{
+    Fixed,
+    Limited,
+    Free
+};
+struct Range
+{
+    double lower = 0.0;
+    double upper = 0.0;
+    RangeKind kind() const
+    {
+        // Match Bullet: only equal endpoints are locked; even tiny ranges count.
+        return lower > upper    ? RangeKind::Free
+               : lower == upper ? RangeKind::Fixed
+                                : RangeKind::Limited;
+    }
+};
+struct Ranges
+{
+    std::array<Range, 3> linear{};
+    std::array<Range, 3> angular{};
+    // A spring only acts on an axis that can move: on a locked axis the
+    // limit wins and the stiffness has no effect, so it is not reported.
+    std::array<bool, 3> linearSpring{};
+    std::array<bool, 3> angularSpring{};
+};
+
+// The constraint measures rotation as XYZ Euler angles, so the middle (Y)
+// angle never leaves [-pi/2, pi/2]: wider Y limits, or a free Y axis, cannot
+// be reached past that.  Turning further reads as Y coming back while X and
+// Z jump by pi, which only free X and Z axes let through.
+constexpr double kMaxAngleY = 1.57079632679489661923;
+
+namespace range_detail
+{
+// Bullet stores limits as btScalar (float): compare at that precision, or two
+// values a float apart would read as a tiny range here and as locked there.
+inline double scalar(double v)
+{
+    return static_cast<double>(static_cast<float>(v));
+}
+// btNormalizeAngle, in float like Bullet (setAngularLower/UpperLimit).
+inline double normalizeAngle(double radians)
+{
+    constexpr float kPi = 3.1415926535897932384626433832795029f;
+    constexpr float kTwoPi = 2.0f * kPi;
+    const float a = std::fmod(static_cast<float>(radians), kTwoPi);
+    return static_cast<double>(a < -kPi ? a + kTwoPi : a > kPi ? a - kTwoPi : a);
+}
+} // namespace range_detail
+
+// Spring6Dof (the only PMX 2.0 joint type): XYZ intervals in the joint frame.
+inline Ranges describe(const RigidBodySimulation::JointDefinition& j)
+{
+    using range_detail::normalizeAngle;
+    using range_detail::scalar;
+    Ranges out;
+    for (int i = 0; i < 3; ++i)
+    {
+        out.linear[i] = {scalar(j.linearMin[i]), scalar(j.linearMax[i])};
+        out.angular[i] = {normalizeAngle(j.angularMin[i]), normalizeAngle(j.angularMax[i])};
+        // The solver enables a spring for any non-zero stiffness.
+        out.linearSpring[i] =
+            j.linearStiffness[i] != 0.0 && out.linear[i].kind() != RangeKind::Fixed;
+        out.angularSpring[i] =
+            j.angularStiffness[i] != 0.0 && out.angular[i].kind() != RangeKind::Fixed;
+    }
+    return out;
+}
+
+// The joint's current angle per axis, measured exactly as the constraint
+// measures it against its limits (btGeneric6DofConstraint::calculateAngleInfo:
+// matrixToEulerXYZ of A^-1 * B).  `a` / `b` are the attachment frames' world
+// rotations as unit quaternions {x, y, z, w}.
+//
+// Bullet's sign is the OPPOSITE of a right-handed rotation: its
+// matrixToEulerXYZ reads the matrix column-major (btGetMatrixElem), so it
+// decomposes the transpose.  B turned right-handed by +t about A's X reads
+// -t, and a limit [lo, hi] lets B turn through [-hi, -lo] (kPhysicalSign).
+inline Double3 currentAngles(const Double4& a, const Double4& b)
+{
+    // Row-major rotation matrix of a unit quaternion (btMatrix3x3::setRotation).
+    const auto matrix = [](const Double4& q, double m[3][3])
+    {
+        const double xx = q.x * q.x * 2, yy = q.y * q.y * 2, zz = q.z * q.z * 2;
+        const double xy = q.x * q.y * 2, xz = q.x * q.z * 2, yz = q.y * q.z * 2;
+        const double wx = q.w * q.x * 2, wy = q.w * q.y * 2, wz = q.w * q.z * 2;
+        const double rows[3][3] = {{1 - (yy + zz), xy - wz, xz + wy},
+                                   {xy + wz, 1 - (xx + zz), yz - wx},
+                                   {xz - wy, yz + wx, 1 - (xx + yy)}};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                m[i][j] = rows[i][j];
+    };
+    double ma[3][3], mb[3][3], r[3][3];
+    matrix(a, ma);
+    matrix(b, mb);
+    for (int i = 0; i < 3; ++i) // r = A^T * B
+        for (int j = 0; j < 3; ++j)
+            r[i][j] = ma[0][i] * mb[0][j] + ma[1][i] * mb[1][j] + ma[2][i] * mb[2][j];
+    // matrixToEulerXYZ with btGetMatrixElem(m, k) = m[k % 3][k / 3],
+    // including its gimbal-lock branches.
+    const auto elem = [&](int k) { return r[k % 3][k / 3]; };
+    const double sy = elem(2);
+    if (sy >= 1.0)
+        return {std::atan2(elem(3), elem(4)), kMaxAngleY, 0.0};
+    if (sy <= -1.0)
+        return {-std::atan2(elem(3), elem(4)), -kMaxAngleY, 0.0};
+    return {std::atan2(-elem(5), elem(8)), std::asin(sy), std::atan2(-elem(1), elem(0))};
+}
+
+// The right-handed rotation of B about each axis of A is kPhysicalSign times
+// the constraint's angle (see currentAngles): the guides draw every angle
+// times this, so arcs, stops and needles sit where the body really turns.
+constexpr double kPhysicalSign = -1.0;
+
+// Whole-joint summary for the unselected state display: which kinds of
+// motion the joint permits.
+struct Freedom
+{
+    bool translates = false; // some linear axis is limited or free
+    bool rotates = false;    // some angular axis is limited or free
+};
+inline Freedom summarize(const Ranges& ranges)
+{
+    Freedom out;
+    for (int i = 0; i < 3; ++i)
+    {
+        out.translates = out.translates || ranges.linear[i].kind() != RangeKind::Fixed;
+        out.rotates = out.rotates || ranges.angular[i].kind() != RangeKind::Fixed;
+    }
+    return out;
+}
+
+// ===========================================================================
+// Sizes
+// ===========================================================================
+struct GuideSizes
+{
+    double radius;           // X dial radius (Y and Z dials are wider)
+    double tick;             // end stops, zigzag depth, arrow heads
+    double rulerOffset;      // gap between a one-axis translation ruler and its axis
+    double attachmentMarker; // ring around the hub at attachment A
+    double bodyMarker;       // marker at each body's centre
+};
+
+// Symbolic guides (rotation dials, springs, free-axis arrows, markers) scale
+// with the hub so they keep its proportions at any zoom and in every
+// viewport; physical translation limits never use this scale.  hubRadius is
+// the rendered sphere radius, in the same units as the guides.
+inline GuideSizes guideSizes(double hubRadius)
+{
+    const double radius = hubRadius * 2.5;
+    return {radius, radius * .09, hubRadius * 1.6, hubRadius * 1.25, hubRadius * .6};
+}
+
+// Base hub radius as a fraction of a model's (clamped) median link; the one
+// constant to tune the default size of every model's hubs.
+constexpr double kHubSizeFactor = 0.6;
+// Hub radius used before a model's size is known (no solver world yet).
+constexpr double kFallbackHubRadius = 0.12 * kHubSizeFactor;
+
+// One hub radius for every joint of a model, from the median REST distance
+// between the bodies its joints link (about 0.5 units in real models), so
+// the hubs read at any model scale, all look alike, and never depend on the
+// simulation state.  The user's jointDisplayScale multiplies the result.
+inline double modelHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                             const std::vector<RigidBodySimulation::JointDefinition>& joints)
+{
+    std::vector<double> links;
+    links.reserve(joints.size());
+    const auto valid = [&](long index)
+    { return index >= 0 && index < static_cast<long>(bodies.size()); };
+    for (const auto& joint : joints)
+    {
+        if (!valid(joint.bodyA) || !valid(joint.bodyB))
+            continue;
+        const Double3& a = bodies[joint.bodyA].restPos;
+        const Double3& b = bodies[joint.bodyB].restPos;
+        const double link = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                                      (a.z - b.z) * (a.z - b.z));
+        if (link > 1e-4)
+            links.push_back(link);
+    }
+    if (links.empty())
+        return kFallbackHubRadius;
+    const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
+    std::nth_element(links.begin(), middle, links.end());
+    // Keep the hub compact in dense rigs: a fraction of the median link.
+    return std::clamp(*middle * 0.35, 0.05, 0.5) * kHubSizeFactor;
+}
+
+// ===========================================================================
+// Motion-range guides
+// ===========================================================================
 // Motion-range guides for a selected joint, as plain line segments in the
 // joint's attachment-A frame.  Maya-free so the geometry can be unit-tested;
 // RigidBodyJointGeometryOverride only maps the segments to the viewport.
@@ -26,16 +257,6 @@
 //
 // Dashed always means "not reachable": a reference, never an allowed range.
 
-#include "common.hpp"
-#include "joint_display_ranges.hpp"
-#include "joint_display_sizes.hpp"
-
-#include <algorithm>
-#include <cmath>
-#include <vector>
-
-namespace mmd::core::joint_display
-{
 enum class GuideColor
 {
     Neutral,
@@ -209,8 +430,7 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         // A face B presses on: its edges turn bold, in that axis's colour.
         const auto pressed = [&](int axis, int side)
         {
-            return lo[axis] != hi[axis] &&
-                   (side ? linearHits[axis].upper : linearHits[axis].lower);
+            return lo[axis] != hi[axis] && (side ? linearHits[axis].upper : linearHits[axis].lower);
         };
         bool edges = false;
         for (int a = 0; a < 3; ++a)

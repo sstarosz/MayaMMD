@@ -206,7 +206,7 @@ def _inactive_reason(joint):
 def describe_joint(joint):
     """Read current attributes; display effective modes without altering inputs.
 
-    Follows the viewport's freedom model (mmd/core/joint_display_ranges.hpp):
+    Follows the viewport's freedom model (mmd/core/joint_display.hpp):
     limits compared at Bullet's float precision, angles wrapped to +/-180
     degrees, the measured Y angle held within +/-90 degrees, and stiffness on
     a locked axis reported as having no effect.

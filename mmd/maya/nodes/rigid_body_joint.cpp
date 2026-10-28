@@ -39,8 +39,7 @@
 #include <maya/MVector.h>
 #include <maya/MViewport2Renderer.h>
 
-#include "joint_display_ranges.hpp"
-#include "joint_display_sizes.hpp"
+#include "joint_display.hpp"
 #include "maya_utils.hpp"
 #include "rigid_body_node.hpp"
 #include "rigid_body_shape.hpp"

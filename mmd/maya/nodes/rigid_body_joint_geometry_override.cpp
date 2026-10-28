@@ -9,9 +9,7 @@
 
 #include "rigid_body_joint_geometry_override.hpp"
 
-#include "joint_display_ranges.hpp"
-#include "joint_display_sizes.hpp"
-#include "joint_guides.hpp"
+#include "joint_display.hpp"
 #include "maya_utils.hpp"
 #include "rigid_body_display.hpp"
 #include "rigid_body_joint.hpp"
@@ -533,7 +531,7 @@ void RigidBodyJointGeometryOverride::updateDG()
     deriveSizes();
 }
 
-// Same freedom model as the selected motion guides (joint_display_ranges.hpp);
+// Same freedom model as the selected motion guides (joint_display.hpp);
 // a joint that constrains nothing has no freedom to show.
 void RigidBodyJointGeometryOverride::classifyState()
 {
@@ -867,7 +865,7 @@ void RigidBodyJointGeometryOverride::drawMotionRanges(MHWRender::MUIDrawManager&
                                                       float alpha) const
 {
     using namespace mmd::core::joint_display;
-    // The geometry lives in core (joint_guides.hpp); this maps it from the
+    // The geometry lives in core (joint_display.hpp); this maps it from the
     // attachment-A frame into the viewport.
     GuideInput input;
     input.ranges = describe(fState.definition);

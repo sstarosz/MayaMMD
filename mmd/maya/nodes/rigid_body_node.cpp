@@ -17,7 +17,7 @@
 
 #include "rigid_body_node.hpp"
 
-#include "joint_display_sizes.hpp"
+#include "joint_display.hpp"
 #include "maya_utils.hpp"
 #include "rigid_body_joint.hpp"
 #include "rigid_body_shape.hpp"
