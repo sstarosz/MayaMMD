@@ -113,6 +113,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `setDependentsDirty` (DG) and `postEvaluation` (Evaluation Manager), so
     hubs follow the simulation during Parallel / Serial playback too.  They
     do not redraw on camera moves.
+- **PMX physics validation** (`mmd/core/pmx_validate.py`, category *Physics*,
+  run by the MMD window before an import) — reports the physics-authoring
+  faults that otherwise show up only as strange viewport behaviour:
+  - a joint connected to a rigid body the model does not have (an error: the
+    constraint cannot be built);
+  - a joint **placed far away from the two bodies it connects** — a joint is
+    normally placed where its bodies meet, so one sitting far from both is
+    either a leftover (a joint at the world origin imports as a hub floating
+    far from the model) or a pivot that swings the bodies around the wrong
+    point;
+  - a joint that **cannot hold its bodies** within the model's own size (every
+    axis free or opened wider than the model, no stiffness set).
+
+  Each report names the joints and their PMX indices, so they can be fixed in
+  PMX Editor.
 
 ### Changed
 

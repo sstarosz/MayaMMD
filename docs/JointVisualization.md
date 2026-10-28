@@ -73,6 +73,19 @@ their bones, so the constraint has nothing to move. The rule is
 the simulation creates. The hub's form (hollow and dashed, in every display
 mode) tells it apart from a welded hub, not its colour.
 
+### A hub that floats away from the model
+
+The hub sits at the joint's position, carried along by body A. A joint is
+normally placed where its two bodies meet, so the hub stays on the model even
+while it moves. A hub floating far from **both** bodies means the joint itself
+is placed out there: the model was authored that way (a joint left at the world
+origin is a common physics-converter leftover) and the display is faithful. The
+importer's validator reports such joints (`mmd/core/pmx_validate.py`, category
+*Physics*) and names them, so they can be fixed in PMX Editor. When their
+limits are also free or wider than the model, with no stiffness set, they
+cannot affect the simulation at all. That is also why *moving* such a joint
+just moves its hub: with the limits never reached, the simulation is unchanged.
+
 Springs are not shown on the hub: a single marker could not say which axis is
 sprung. Select a joint to see its springs per axis (see below).
 
