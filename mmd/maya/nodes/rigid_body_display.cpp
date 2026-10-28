@@ -1,15 +1,34 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * joint_display_context.cpp — see joint_display_context.hpp.
+ * rigid_body_display.cpp — see rigid_body_display.hpp.
+ *
+ * Session-wide state shared by every joint and body viewport override, so
+ * that work which depends on the SELECTION (not on one node) happens once per
+ * event instead of once per node:
+ *
+ *   - the selected joints (lead first) and the A/B roles of their bodies,
+ *     resolved on SelectionChanged; only the joints and bodies whose display
+ *     actually changes are dirtied;
+ *   - model-editor changes (isolate select on or off, among others): every
+ *     rigid-body shape and joint is redrawn.  VP2 could leave plug-in shapes
+ *     that had been isolated out undrawn until something else refreshed them
+ *     (re-selecting them, or a parent); this also updates the selected
+ *     joints' fallback outlines;
+ *   - one shared stock shader per colour (lit surface and flat wire).
+ *
+ * Simulation steps need no callback: every joint's solverStep input is
+ * connected to its solver's outStep, and the joint node marks its drawing
+ * dirty after each step (RigidBodyJoint::postEvaluation).
+ *
+ * Everything here runs on the main thread (DG preparation and event
+ * callbacks).  install()/uninstall() are called from the plugin entry points.
  */
 
-#include "joint_display_context.hpp"
+#include "rigid_body_display.hpp"
 
 #include "rigid_body_joint.hpp"
 #include "rigid_body_shape.hpp"
-
-#include "surface_shader.hpp"
 
 #include <maya/MEventMessage.h>
 #include <maya/MFn.h>
@@ -28,7 +47,7 @@
 #include <functional>
 #include <utility>
 
-namespace mmd::maya::joint_display
+namespace mmd::maya::rigid_body_display
 {
 namespace
 {
@@ -105,7 +124,7 @@ void resolveSelection(State& s)
                                    [&](const BodyRole& r) { return r.shape.object() == shape; });
             if (it == s.roles.end())
                 it = s.roles.insert(s.roles.end(), BodyRole{MObjectHandle(shape), 0u});
-            it->roles |= 1u << end;
+            it->roles |= (end == 0 ? palette::kRoleA : palette::kRoleB);
         }
     };
 
@@ -302,4 +321,4 @@ MHWRender::MShaderInstance* dashedWireShader(const MColor& color)
 {
     return cachedShader(color, ShaderKind::DashedWire);
 }
-} // namespace mmd::maya::joint_display
+} // namespace mmd::maya::rigid_body_display

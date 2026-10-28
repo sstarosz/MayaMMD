@@ -14,7 +14,6 @@
 #include "joint_display_ranges.hpp"
 #include "joint_display_sizes.hpp"
 #include "joint_guides.hpp"
-#include "joint_highlight.hpp"
 #include "joint_parameters.hpp"
 #include "physics_math.hpp"
 #include "rigid_body_simulation.hpp"
@@ -30,21 +29,6 @@ using mmd::core::Double3;
 using mmd::core::Double4;
 using mmd::core::RigidBodySimulation;
 using namespace mmd::core::physics_math;
-
-TEST_CASE("Shared hidden body has one visible outline owner and merged roles", "[joint-display]")
-{
-    using namespace mmd::core::joint_display;
-    const auto first = highlightOwner({{1, true, true}, {2, true, false}});
-    REQUIRE(first.self);
-    REQUIRE(first.roles == 3);
-    REQUIRE_FALSE(highlightOwner({{1, true, false}, {2, true, true}}).self);
-    // If the first selected joint is hidden or isolated out, the next owns it.
-    REQUIRE(highlightOwner({{1, false, false}, {2, true, true}}).self);
-    REQUIRE_FALSE(highlightOwner({{1, false, true}, {2, false, false}}).self);
-    REQUIRE(highlightOwner({{2, true, true}, {2, true, false}}).roles == 2);
-    REQUIRE(highlightOwner({{1, true, true}}).roles == 1);
-    REQUIRE_FALSE(highlightOwner({}).self);
-}
 
 TEST_CASE("Joint guides scale with the hub and clear it", "[joint-display]")
 {

@@ -26,7 +26,7 @@
 #include "maya/cmds/rigid_body_cmd.hpp"
 #include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
-#include "maya/nodes/joint_display_context.hpp"
+#include "maya/nodes/rigid_body_display.hpp"
 #include "maya/nodes/rigid_body_joint.hpp"
 #include "maya/nodes/rigid_body_joint_geometry_override.hpp"
 #include "maya/nodes/rigid_body_node.hpp"
@@ -164,7 +164,7 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint geometry override registration failed");
     // Selection/solver/camera state shared by the joint and body overrides.
-    mmd::maya::joint_display::install();
+    mmd::maya::rigid_body_display::install();
 
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
@@ -218,7 +218,7 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     MHWRender::MDrawRegistry::deregisterGeometryOverrideCreator(RigidBodyShape::kNodeClassify,
                                                                 "MayaMMD");
     // After the overrides that use its shared shaders are gone.
-    mmd::maya::joint_display::uninstall();
+    mmd::maya::rigid_body_display::uninstall();
 
     // 3. Deregister C++ nodes and commands
     plugin.deregisterNode(RigidBodyNode::kTypeId);

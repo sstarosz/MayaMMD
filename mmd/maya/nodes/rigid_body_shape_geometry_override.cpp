@@ -7,7 +7,7 @@
  * pmxRigidBodyShape (see the header for the design summary).
  *
  * The collider's SOLID surface is drawn with the lit stock surface shader
- * (surface_shader.hpp) so it responds to the viewport lights; the WIRE
+ * (rigid_body_display.hpp) so it responds to the viewport lights; the WIRE
  * outline is drawn with MUIDrawManager.  Both
  * are in the guide's LOCAL space (the
  * guide transform is the body's current pose), so the render-item matrix is
@@ -19,11 +19,8 @@
  */
 
 #include "rigid_body_shape_geometry_override.hpp"
-#include "collider_wire.hpp"
-#include "joint_display_context.hpp"
-#include "joint_palette.hpp"
 #include "maya_utils.hpp"
-#include "surface_shader.hpp"
+#include "rigid_body_display.hpp"
 
 #include "rigid_body_shape.hpp"
 
@@ -257,7 +254,7 @@ RigidBodyShapeGeometryOverride::RigidBodyShapeGeometryOverride(const MObject& ob
     : MHWRender::MPxGeometryOverride(obj), fShape(obj)
 {
     // Selecting a joint does not dirty its connected bodies (selection is not
-    // a DG dependency): joint_display_context dirties exactly the bodies whose
+    // a DG dependency): rigid_body_display.cpp dirties exactly the bodies whose
     // A/B role changes.
 }
 
@@ -323,7 +320,7 @@ void RigidBodyShapeGeometryOverride::updateDG()
     fState.groupId = groupPlug.isNull() ? 0 : static_cast<short>(groupPlug.asShort());
     fState.physicsMode = pmPlug.isNull() ? 0 : static_cast<short>(pmPlug.asShort());
     fState.enabled = enabledPlug.isNull() ? true : enabledPlug.asBool();
-    fState.jointRoles = mmd::maya::joint_display::bodyRoles(fShape);
+    fState.jointRoles = mmd::maya::rigid_body_display::bodyRoles(fShape);
 }
 
 void RigidBodyShapeGeometryOverride::groupColor(float& cr, float& cg, float& cb) const
@@ -447,7 +444,7 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
     drawMgr.beginDrawable();
     if (related && !selected)
     {
-        // A / B role across the selected joints, striped for both (joint_palette.hpp).
+        // A / B role across the selected joints, striped for both.
         drawMgr.setLineWidth(4.0f);
         mmd::maya::drawRoleColliderWire(drawMgr, fState.size, fState.colliderType,
                                         fState.jointRoles);

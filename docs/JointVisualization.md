@@ -79,8 +79,8 @@ sprung. Select a joint to see its springs per axis (see below).
 The hub colours (cyan, rose) and the body colours (violet, gold, below) sit
 about 90° apart on the colour wheel, away from the axis colours and Maya's
 selection green, and stay distinct with the common colour-vision
-deficiencies. All joint colours are defined in
-`mmd/maya/nodes/joint_palette.hpp`.
+deficiencies. All joint colours are defined in the palette at the top of
+`mmd/maya/nodes/rigid_body_joint_geometry_override.cpp`.
 
 ## Selected joints
 
@@ -231,12 +231,8 @@ rotated frames, body modes). It never modifies existing scene content:
 | `mmd/core/rigid_body_simulation.hpp` | `jointStatus`: whether a joint constrains anything (inactive hubs) |
 | `mmd/core/joint_guides.hpp` | motion-range guide geometry as line segments, gimbal dials and limit hits (unit-tested) |
 | `mmd/core/joint_display_sizes.hpp` | hub-relative sizes for guides and markers |
-| `mmd/core/joint_highlight.hpp` | which selected joint outlines a shared hidden body |
-| `mmd/maya/nodes/joint_display_context.*` | selection and isolate-select events, and shared shaders, handled once per session |
-| `mmd/maya/nodes/joint_palette.hpp` | every colour, one channel per hue |
-| `mmd/maya/nodes/collider_wire.hpp` | collider outlines, including A/B role colours |
-| `mmd/maya/nodes/surface_shader.hpp` | the lit stock shader (OpenPBR on 2026+, Blinn before) |
-| `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override, including the hub mesh (triangles and wire) |
+| `mmd/maya/nodes/rigid_body_display.*` | everything both overrides share: the palette (every colour, one channel per hue), collider outlines and the A/B role wire, the lit stock shader (OpenPBR on 2026+, Blinn before), selection and isolate-select events handled once per session, shared shaders, and which selected joint outlines a shared hidden body |
+| `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override: the hub mesh (triangles and wire) and the joint-specific drawing on top of the shared display module |
 
 Headless tests cannot show viewport output. After changing the display, check
 it interactively: select and deselect joints, select several, play and rewind

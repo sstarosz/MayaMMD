@@ -9,14 +9,11 @@
 
 #include "rigid_body_joint_geometry_override.hpp"
 
-#include "collider_wire.hpp"
-#include "joint_display_context.hpp"
 #include "joint_display_ranges.hpp"
 #include "joint_display_sizes.hpp"
 #include "joint_guides.hpp"
-#include "joint_highlight.hpp"
-#include "joint_palette.hpp"
 #include "maya_utils.hpp"
+#include "rigid_body_display.hpp"
 #include "rigid_body_joint.hpp"
 #include "rigid_body_node.hpp"
 #include "rigid_body_shape.hpp"
@@ -51,6 +48,10 @@
 
 namespace
 {
+// Every colour lives in rigid_body_display.hpp (one hue per channel); the
+// alias keeps the drawing code below reading as palette::kXxx.
+namespace palette = mmd::maya::rigid_body_display::palette;
+
 // The hub is the only render item geometry; everything else is UI drawables.
 // The hub's wedges alternate between two items (like a beach ball), each with
 // a shaded and a wireframe variant, so a joint that rotates AND translates
@@ -335,7 +336,7 @@ RigidBodyJointGeometryOverride::~RigidBodyJointGeometryOverride()
     for (const auto& watch : fOutlineWatches)
         if (watch.callback)
             MMessage::removeCallback(watch.callback);
-    // The shaders are shared and owned by joint_display_context.
+    // The shaders are shared and owned by rigid_body_display.
 }
 
 MHWRender::DrawAPI RigidBodyJointGeometryOverride::supportedDrawAPIs() const
@@ -404,7 +405,7 @@ bool RigidBodyJointGeometryOverride::requiresGeometryUpdate() const
     // EVERY viewport refresh, camera tumbles included.  Everything the joint
     // draws from outside its node dirties it instead: solver steps and
     // edits through RigidBodyJoint (setDependentsDirty / postEvaluation),
-    // selection and isolate changes through joint_display_context, hidden
+    // selection and isolate changes through rigid_body_display, hidden
     // bodies through the outline watches.
     return false;
 }
@@ -455,7 +456,7 @@ void RigidBodyJointGeometryOverride::updateDG()
         // The command registers joint.solver -> solver.jointShapes[index].
         // The solver is a DESTINATION of this message, not its source.
         fPlugs.solver.connectedTo(solverDestinations, false, true);
-    const bool selected = mmd::maya::joint_display::isSelectedJoint(fJoint);
+    const bool selected = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
     fState.picked = selected;
     if (solverDestinations.length() > 0)
     {
@@ -510,7 +511,7 @@ void RigidBodyJointGeometryOverride::updateDG()
         }
         // Candidates arrive lead-first from the context, so a hidden body
         // shared by several selected joints is owned by the lead.
-        for (const auto& joint : mmd::maya::joint_display::selectedJoints())
+        for (const auto& joint : mmd::maya::rigid_body_display::selectedJoints())
         {
             if (joint.solver.object() != fSolver || !joint.path.isValid())
                 continue;
@@ -520,8 +521,8 @@ void RigidBodyJointGeometryOverride::updateDG()
                     continue;
                 const MObject shape = outline.path.node();
                 const unsigned int roles =
-                    (joint.bodyA.object() == shape ? mmd::maya::joint_palette::kRoleA : 0u) |
-                    (joint.bodyB.object() == shape ? mmd::maya::joint_palette::kRoleB : 0u);
+                    (joint.bodyA.object() == shape ? palette::kRoleA : 0u) |
+                    (joint.bodyB.object() == shape ? palette::kRoleB : 0u);
                 if (roles)
                     outline.candidates.push_back({joint.path, roles, joint.path.isVisible()});
             }
@@ -561,7 +562,6 @@ void RigidBodyJointGeometryOverride::deriveSizes()
 
 void RigidBodyJointGeometryOverride::stateColors(MColor& primary, MColor& secondary) const
 {
-    namespace palette = mmd::maya::joint_palette;
     switch (fState.state)
     {
     case kStateRotates:
@@ -593,7 +593,7 @@ MColor RigidBodyJointGeometryOverride::selectionColor(const MDagPath& path)
 {
     const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
     // Guard: a near-black selection colour would hide the wire.
-    return sel.r + sel.g + sel.b < 0.01f ? mmd::maya::joint_palette::kSelectionFallback : sel;
+    return sel.r + sel.g + sel.b < 0.01f ? palette::kSelectionFallback : sel;
 }
 
 void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
@@ -658,8 +658,8 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
         // is unreliable in the geometry-override draw path.
         item->setMatrix(nullptr);
         item->enable(visible && (spec.wire || !inactive));
-        // Shared shaders per colour (joint_display_context).
-        namespace display = mmd::maya::joint_display;
+        // Shared shaders per colour (rigid_body_display).
+        namespace display = mmd::maya::rigid_body_display;
         const MColor& color = spec.primary ? primary : secondary;
         MHWRender::MShaderInstance* shader = !spec.wire ? display::solidShader(color)
                                              : inactive ? display::dashedWireShader(color)
@@ -737,8 +737,8 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
             const BodyOutline& outline = fBodyOutlines[end];
             if (!outline.valid)
                 continue;
-            MColor color = end == 0 ? mmd::maya::joint_palette::kBodyA
-                                    : mmd::maya::joint_palette::kBodyB;
+            MColor color = end == 0 ? palette::kBodyA
+                                    : palette::kBodyB;
             color.a *= alpha;
             drawManager.setColor(color);
             drawManager.setLineWidth(2.5f);
@@ -761,7 +761,7 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
     {
         if (!frameApart)
             return;
-        MColor color = mmd::maya::joint_palette::kGuide;
+        MColor color = palette::kGuide;
         color.a *= alpha;
         drawManager.setColor(color);
         drawManager.setLineWidth(1.5f);
@@ -784,8 +784,8 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
             inactiveLinks(alpha);
             return;
         }
-        endpoint(fLocalA, fAttachmentA, mmd::maya::joint_palette::kBodyA, false, true, alpha);
-        endpoint(fLocalB, fAttachmentB, mmd::maya::joint_palette::kBodyB, true, separate, alpha);
+        endpoint(fLocalA, fAttachmentA, palette::kBodyA, false, true, alpha);
+        endpoint(fLocalB, fAttachmentB, palette::kBodyB, true, separate, alpha);
         // Coincident endpoints use one ring-and-center mark, avoiding overlapping outlines.
         if (!separate)
         {
@@ -826,13 +826,13 @@ void RigidBodyJointGeometryOverride::drawIsolatedBodyOutlines(
             continue;
         if (outline.visible && view.shows(outline.path))
             continue;
-        std::vector<mmd::core::joint_display::HighlightCandidate> candidates;
+        std::vector<mmd::maya::rigid_body_display::HighlightCandidate> candidates;
         for (const auto& candidate : outline.candidates)
             candidates.push_back({candidate.roles, candidate.visible && view.shows(candidate.path),
                                   candidate.path.node() == fJoint});
         // Candidates were offered lead-first by the context, so a body shared by
         // the lead and an earlier-selected joint is owned by the lead here.
-        const auto owner = mmd::core::joint_display::highlightOwner(candidates);
+        const auto owner = mmd::maya::rigid_body_display::highlightOwner(candidates);
         if (!owner.self)
             continue;
         drawManager.setLineWidth(4.0f);
@@ -886,10 +886,10 @@ void RigidBodyJointGeometryOverride::drawMotionRanges(MHWRender::MUIDrawManager&
 
     const auto colorOf = [&](GuideColor guide)
     {
-        MColor color = guide == GuideColor::AxisX   ? mmd::maya::joint_palette::kAxis[0]
-                       : guide == GuideColor::AxisY ? mmd::maya::joint_palette::kAxis[1]
-                       : guide == GuideColor::AxisZ ? mmd::maya::joint_palette::kAxis[2]
-                                                    : mmd::maya::joint_palette::kGuide;
+        MColor color = guide == GuideColor::AxisX   ? palette::kAxis[0]
+                       : guide == GuideColor::AxisY ? palette::kAxis[1]
+                       : guide == GuideColor::AxisZ ? palette::kAxis[2]
+                                                    : palette::kGuide;
         color.a *= alpha;
         return color;
     };

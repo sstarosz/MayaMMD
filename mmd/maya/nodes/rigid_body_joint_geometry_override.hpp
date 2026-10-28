@@ -9,8 +9,9 @@
  * Every joint draws a compact, pickable HUB at its live attachment A: lit in
  * shaded modes, a wire sphere in wireframe mode.  The hub's colour is the
  * joint's freedom state (welded / rotates / translates; a joint that does both
- * shows both colours in alternating wedges, visible from every direction —
- * joint_palette.hpp), from the shared freedom model (joint_display_ranges.hpp).
+ * shows both colours in alternating wedges, visible from every direction; the
+ * palette is at the top of the .cpp), from the shared freedom model
+ * (joint_display_ranges.hpp).
  *
  * A joint that constrains nothing (a missing, disabled or shared body, or
  * two bone-driven bodies) has a hollow dashed hub instead.
@@ -29,7 +30,7 @@
  * overlay, sized relative to the hub.
  *
  * Selection events and the shared surface shaders live in
- * joint_display_context.  Simulation steps reach the joint through its
+ * rigid_body_display.  Simulation steps reach the joint through its
  * solverStep input, and RigidBodyJoint marks the drawing dirty.  VP2 owns the
  * render items.
  *
@@ -123,8 +124,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
                                   const MMatrix& worldToLocal) const;
 
     // Constraint STATE — what kind of motion the joint permits.  This is the
-    // hub's COLOUR channel (joint_palette.hpp); an inactive joint's hub is
-    // hollow instead.
+    // hub's COLOUR channel (the palette in the .cpp); an inactive joint's
+    // hub is hollow instead.
     enum JointState : short
     {
         kStateWelded = 0,        // no freedom at all: a rigid link
@@ -148,7 +149,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     struct DrawState
     {
         short drawMode = 0;
-        // Picked directly (joint_display_context), not merely drawn as
+        // Picked directly (rigid_body_display), not merely drawn as
         // selected because a parent group is: only a direct pick draws the
         // overlay.
         bool picked = false;

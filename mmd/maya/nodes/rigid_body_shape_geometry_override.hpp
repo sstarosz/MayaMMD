@@ -6,7 +6,7 @@
  * RigidBodyShapeGeometryOverride — viewport renderer for one pmxRigidBodyShape.
  *
  * The collider's SOLID surface is lit by the viewport lights (the stock
- * surface shader of surface_shader.hpp, with a per-frame group colour).  The
+ * surface shader of rigid_body_display.hpp, with a per-frame group colour).  The
  * WIRE outline is drawn with MUIDrawManager (addUIDrawables), and the render
  * item is pickable so the guide keeps its native selection.
  *
@@ -17,7 +17,7 @@
  *                shader, sDormantWireDepthPriority so it renders lit AND on
  *                top of the character mesh), position+normal(+uv) streams.
  *   - wire    -> MUIDrawManager lines; a body connected to a selected joint
- *                is drawn in its A / B role colour (collider_wire.hpp).
+ *                is drawn in its A / B role colour (rigid_body_display.hpp).
  *
  * The draw mode (off / wire / solid / wire+solid) is the shape's `drawMode`
  * attribute; the colour comes from the PMX collision group (16-colour
