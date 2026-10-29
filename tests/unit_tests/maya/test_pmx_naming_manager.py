@@ -342,6 +342,12 @@ class TestPMXNamingStrategy(unittest.TestCase):
             naming_manager.get_rigid_body_solver_name(),
             "PhysModelLocal_RigidBodySolver",
         )
+        self.assertEqual(
+            naming_manager.get_bodies_group_name(), "PhysModelLocal_Bodies"
+        )
+        self.assertEqual(
+            naming_manager.get_joints_group_name(), "PhysModelLocal_Joints"
+        )
 
         # Universal name is the fallback when local is empty.
         pmx_model2 = MockPmxModel([])
@@ -357,12 +363,61 @@ class TestPMXNamingStrategy(unittest.TestCase):
             naming_manager2.get_rigid_body_solver_name(),
             "PhysModelUniversal_RigidBodySolver",
         )
+        self.assertEqual(
+            naming_manager2.get_bodies_group_name(), "PhysModelUniversal_Bodies"
+        )
+        self.assertEqual(
+            naming_manager2.get_joints_group_name(), "PhysModelUniversal_Joints"
+        )
 
         # No model names at all -> bare fallback names.
         naming_manager3 = PMXNamingManager(MockPmxModel([]))
         self.assertEqual(naming_manager3.get_rigid_bodies_group_name(), "RigidBodies")
         self.assertEqual(
             naming_manager3.get_rigid_body_solver_name(), "RigidBodySolver"
+        )
+        self.assertEqual(naming_manager3.get_bodies_group_name(), "Bodies")
+        self.assertEqual(naming_manager3.get_joints_group_name(), "Joints")
+
+    def test_rigid_body_and_joint_naming(self):
+        """Bodies and joints: ASCII local name, else universal, else an index.
+
+        Joints carry ``_Constraint``, so a joint named like its body (common
+        in PMX models) does not clash with it.
+        """
+
+        class MockNamed:
+            def __init__(self, name_local, name_universal):
+                self.name_local = name_local
+                self.name_universal = name_universal
+
+        entries = [
+            MockNamed("CapeL1", "Cape left 1"),  # ASCII local name wins
+            MockNamed("スカート前", "Skirt front"),  # non-ASCII -> universal
+            MockNamed("髪", ""),  # nothing usable -> index
+            MockNamed("CapeL1", ""),  # duplicate -> numbered
+        ]
+        pmx_model = MockPmxModel([])
+        pmx_model.header.model_name_local = "Phys"
+        pmx_model.rigid_bodies = entries
+        pmx_model.joints = entries
+        naming_manager = PMXNamingManager(pmx_model)
+        bodies = [
+            "Phys_CapeL1",
+            "Phys_Skirt_front",
+            "Phys_RigidBody_2",
+            "Phys_CapeL1_1",
+        ]
+        for idx, name in enumerate(bodies):
+            self.assertEqual(naming_manager.get_rigid_body_name(idx), name)
+            self.assertEqual(
+                naming_manager.get_rigid_body_joint_name(idx),
+                name.replace("RigidBody_", "Joint_") + "_Constraint",
+            )
+        # Out of range index
+        self.assertEqual(naming_manager.get_rigid_body_name(99), "Phys_RigidBody_99")
+        self.assertEqual(
+            naming_manager.get_rigid_body_joint_name(99), "Phys_Joint_99_Constraint"
         )
 
 

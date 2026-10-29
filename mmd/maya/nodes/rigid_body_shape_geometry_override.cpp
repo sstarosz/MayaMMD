@@ -6,19 +6,22 @@
  * RigidBodyShapeGeometryOverride — lit viewport renderer for one
  * pmxRigidBodyShape (see the header for the design summary).
  *
- * The collider's SOLID surface is drawn with the stock OpenPBR surface
- * shader (k3dIsotropicOpenPBRSurfaceShader) so it responds to the viewport
- * lights; the WIRE outline is drawn with MUIDrawManager (as before).  Both
+ * The collider's SOLID surface is drawn with the lit stock surface shader
+ * (rigid_body_display.hpp) so it responds to the viewport lights; the WIRE
+ * outline is drawn with MUIDrawManager.  Both
  * are in the guide's LOCAL space (the
  * guide transform is the body's current pose), so the render-item matrix is
  * the identity and the collider follows the animated guide automatically.
  *
  * Lifecycle follows the devkit footPrintNode_GeometryOverride sample: the
- * render item lives in VP2's persistent list (never Destroy'd), cleanUp() is
- * empty, and the lazily-created stock shader is released in the destructor.
+ * render item lives in VP2's persistent list (never Destroy'd), cleanUp() has
+ * an empty body (it is pure virtual in the base class), and the lazily-created
+ * stock shader is released in the destructor.
  */
 
 #include "rigid_body_shape_geometry_override.hpp"
+#include "maya_utils.hpp"
+#include "rigid_body_display.hpp"
 
 #include "rigid_body_shape.hpp"
 
@@ -26,7 +29,6 @@
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGeometry.h>
-#include <maya/MHWGeometryUtilities.h>
 #include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MShaderManager.h>
@@ -65,12 +67,6 @@ constexpr std::array<std::array<float, 3>, 16> kGroupColors = {{
     {0.40f, 0.60f, 0.80f}, // 14 steel
     {0.80f, 0.50f, 0.60f}, // 15 rose
 }};
-
-// Fallback selection colour (only used if Maya's selection colour queries as
-// near-black) — a bright orange-yellow that cannot collide with the palette.
-constexpr float kSelectionR = 1.00f;
-constexpr float kSelectionG = 0.60f;
-constexpr float kSelectionB = 0.00f;
 
 // Render-item name (matched in updateRenderItems / populateGeometry).
 constexpr const char* kSolidItemName = "mmd_rigid_body_solid";
@@ -122,35 +118,11 @@ void buildBox(float hx, float hy, float hz, ColliderMesh& mesh)
 }
 
 // Sphere: radius = size.x, smooth normals (position normalized).
+// Wound outward (CCW seen from outside), matching buildBox / buildCapsule.
 void buildSphere(float r, int stacks, int slices, ColliderMesh& mesh)
 {
-    const auto at = [&](int i, int j) { return i * (slices + 1) + j; };
-    for (int i = 0; i <= stacks; ++i)
-    {
-        const float phi = static_cast<float>(M_PI * i / stacks);
-        const float y = r * std::cos(phi);
-        const float ringR = r * std::sin(phi);
-        for (int j = 0; j <= slices; ++j)
-        {
-            const float theta = static_cast<float>(2.0 * M_PI * j / slices);
-            const float x = ringR * std::cos(theta);
-            const float z = ringR * std::sin(theta);
-            mesh.positions.insert(mesh.positions.end(), {x, y, z});
-            const float inv = 1.0f / r;
-            mesh.normals.insert(mesh.normals.end(), {x * inv, y * inv, z * inv});
-        }
-    }
-    for (int i = 0; i < stacks; ++i)
-    {
-        for (int j = 0; j < slices; ++j)
-        {
-            const unsigned int a = at(i, j);
-            const unsigned int b = at(i + 1, j);
-            const unsigned int c = at(i + 1, j + 1);
-            const unsigned int d = at(i, j + 1);
-            mesh.indices.insert(mesh.indices.end(), {a, b, d, b, c, d});
-        }
-    }
+    mmd::maya::rigid_body_display::appendSphereMesh(r, slices, stacks, mesh.positions, mesh.normals,
+                                                    mesh.indices);
 }
 
 // Capsule: radius = size.x, cylindrical length = size.y (matches the
@@ -234,30 +206,10 @@ void buildCollider(short colliderType, const MPoint& size, ColliderMesh& mesh)
 // Read a k3Double plug into an MPoint (x, y, z).
 [[nodiscard]] MPoint readPoint3(const MPlug& plug)
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = plug.asMDataHandle().asDouble3();
-    return MPoint(v[0], v[1], v[2]);
+    const mmd::core::Double3 v = mmd::maya::readPlugDouble3(plug);
+    return MPoint(v.x, v.y, v.z);
 }
 
-// Draw one collider's WIRE outline in the guide's local space (MUIDrawManager
-// primitives, same as the old draw override).
-void drawColliderWire(MHWRender::MUIDrawManager& drawMgr, const MPoint& size, short colliderType)
-{
-    switch (colliderType)
-    {
-    case RigidBodyShape::kColliderBox:
-        drawMgr.box(MPoint(0.0, 0.0, 0.0), MVector(0.0, 1.0, 0.0), MVector(1.0, 0.0, 0.0), size.x,
-                    size.y, size.z, /*solid=*/false);
-        break;
-    case RigidBodyShape::kColliderSphere:
-        drawMgr.sphere(MPoint(0.0, 0.0, 0.0), size.x, /*solid=*/false);
-        break;
-    default: // kColliderCapsule
-        drawMgr.capsule(MPoint(0.0, 0.0, 0.0), MVector(0.0, 1.0, 0.0), size.x, size.y, 12, 8,
-                        /*solid=*/false);
-        break;
-    }
-}
 } // namespace
 
 // ===========================================================================
@@ -271,6 +223,9 @@ MHWRender::MPxGeometryOverride* RigidBodyShapeGeometryOverride::creator(const MO
 RigidBodyShapeGeometryOverride::RigidBodyShapeGeometryOverride(const MObject& obj)
     : MHWRender::MPxGeometryOverride(obj), fShape(obj)
 {
+    // Selecting a joint does not dirty its connected bodies (selection is not
+    // a DG dependency): rigid_body_display.cpp dirties exactly the bodies whose
+    // A/B role changes.
 }
 
 RigidBodyShapeGeometryOverride::~RigidBodyShapeGeometryOverride()
@@ -335,6 +290,7 @@ void RigidBodyShapeGeometryOverride::updateDG()
     fState.groupId = groupPlug.isNull() ? 0 : static_cast<short>(groupPlug.asShort());
     fState.physicsMode = pmPlug.isNull() ? 0 : static_cast<short>(pmPlug.asShort());
     fState.enabled = enabledPlug.isNull() ? true : enabledPlug.asBool();
+    fState.jointRoles = mmd::maya::rigid_body_display::bodyRoles(fShape);
 }
 
 void RigidBodyShapeGeometryOverride::groupColor(float& cr, float& cg, float& cb) const
@@ -355,29 +311,6 @@ void RigidBodyShapeGeometryOverride::groupColor(float& cr, float& cg, float& cb)
         cr *= 0.6f;
         cg *= 0.6f;
         cb *= 0.6f;
-    }
-}
-
-bool RigidBodyShapeGeometryOverride::isSelected(const MDagPath& path)
-{
-    const MHWRender::DisplayStatus status = MHWRender::MGeometryUtilities::displayStatus(path);
-    return status == MHWRender::kLead || status == MHWRender::kActive;
-}
-
-void RigidBodyShapeGeometryOverride::selectionColor(const MDagPath& path, float& cr, float& cg,
-                                                    float& cb)
-{
-    const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
-    cr = sel.r;
-    cg = sel.g;
-    cb = sel.b;
-    // Guard: a near-black selection colour would hide the wire — fall back
-    // to a bright orange that cannot match the palette.
-    if (cr + cg + cb < 0.01f)
-    {
-        cr = kSelectionR;
-        cg = kSelectionG;
-        cb = kSelectionB;
     }
 }
 
@@ -425,22 +358,19 @@ void RigidBodyShapeGeometryOverride::updateRenderItems(const MDagPath& /*dagPath
         {
             const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
             if (shaderMgr != nullptr)
-                // OpenPBR — Maya 2026+'s default material (matches the imported
-                // meshes' openPBRSurface look); baseColor param is float3.
-                fSolidShader = shaderMgr->getStockShader(
-                    MHWRender::MShaderManager::k3dIsotropicOpenPBRSurfaceShader);
+                fSolidShader = mmd::maya::createSurfaceShader(*shaderMgr);
         }
-        if (fSolidShader != nullptr)
-            fSolidItem->setShader(fSolidShader);
     }
+    // VP2 may replace a render item while this override retains its shader.
+    // Bind to the current item even when no new shader had to be allocated.
+    if (fSolidShader != nullptr)
+        fSolidItem->setShader(fSolidShader);
 
     float cr = 1.0f, cg = 0.25f, cb = 0.25f;
     groupColor(cr, cg, cb); // solid keeps its group colour even when selected
     fSolidItem->enable(drawSolid);
     if (drawSolid && fSolidShader != nullptr)
-    {
-        fSolidShader->setParameter("baseColor", MFloatVector(cr, cg, cb));
-    }
+        mmd::maya::setSurfaceColor(*fSolidShader, MColor(cr, cg, cb));
 }
 
 void RigidBodyShapeGeometryOverride::addUIDrawables(
@@ -450,37 +380,39 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
     // Selected bodies ALWAYS show a native selection wireframe (on top, in
     // Maya's selection colour) regardless of drawMode — like any mesh.
     // Unselected bodies show their group-colour wire only in wire modes.
-    const bool selected = isSelected(objPath);
-    const bool drawWire = selected || (fState.drawMode == RigidBodyShape::kDrawWire ||
-                                       fState.drawMode == RigidBodyShape::kDrawWireSolid);
+    const bool selected = mmd::maya::rigid_body_display::isSelected(objPath);
+    const bool related = fState.jointRoles != 0;
+    const bool drawWire = selected || related ||
+                          (fState.drawMode == RigidBodyShape::kDrawWire ||
+                           fState.drawMode == RigidBodyShape::kDrawWireSolid);
     if (!drawWire)
         return;
 
-    float cr = 1.0f, cg = 0.25f, cb = 0.25f;
-    if (selected)
-        selectionColor(objPath, cr, cg, cb);
-    else
-        groupColor(cr, cg, cb);
     drawMgr.beginDrawable();
-    drawMgr.setColor(MColor(cr, cg, cb));
-    drawColliderWire(drawMgr, fState.size, fState.colliderType);
+    if (related && !selected)
+    {
+        // A / B role across the selected joints, striped for both.
+        drawMgr.setLineWidth(4.0f);
+        mmd::maya::drawRoleColliderWire(drawMgr, fState.size, fState.colliderType,
+                                        fState.jointRoles);
+    }
+    else
+    {
+        float cr = 1.0f, cg = 0.25f, cb = 0.25f;
+        if (selected)
+        {
+            const MColor sel = mmd::maya::rigid_body_display::selectionColor(objPath);
+            cr = sel.r;
+            cg = sel.g;
+            cb = sel.b;
+        }
+        else
+            groupColor(cr, cg, cb);
+        drawMgr.setLineWidth(selected ? 1.75f : 1.25f);
+        drawMgr.setColor(MColor(cr, cg, cb));
+        mmd::maya::drawColliderWire(drawMgr, fState.size, fState.colliderType);
+    }
     drawMgr.endDrawable();
-}
-
-// Fill one vertex buffer (`dimension` floats per vertex) with `numVerts`
-// elements.  NOTE: acquire()'s size is the ELEMENT count, not bytes.
-void fillVertexBuffer(MVertexBuffer* buffer, const std::vector<float>& data, unsigned int numVerts,
-                      int dimension, const MVertexBufferDescriptor& desc)
-{
-    if (buffer == nullptr || numVerts == 0 || data.size() < numVerts * dimension)
-        return;
-    if (desc.dataType() != MGeometry::kFloat || desc.dimension() != dimension)
-        return;
-    void* ptr = buffer->acquire(numVerts, /*writeOnly=*/true);
-    if (ptr == nullptr)
-        return;
-    std::memcpy(ptr, data.data(), numVerts * dimension * sizeof(float));
-    buffer->commit(ptr);
 }
 
 void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirements& requirements,
@@ -493,53 +425,8 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     if (mesh.positions.empty() || mesh.indices.empty())
         return;
 
-    const unsigned int numVerts = static_cast<unsigned int>(mesh.positions.size() / 3);
-
-    // Create vertex buffers from the shader's OWN requirements (position +
-    // normal [+ uv] for the stock OpenPBR surface) so the stream
-    // names/semantics always match what the item's shader expects.  Fall back
-    // to manual position + normal + uv descriptors if the requirements come
-    // back empty (can happen for custom render items).
-    const MVertexBufferDescriptorList& descList = requirements.vertexRequirements();
-    if (descList.length() > 0)
-    {
-        MVertexBufferDescriptor desc;
-        for (int i = 0; i < descList.length(); ++i)
-        {
-            if (!descList.getDescriptor(i, desc))
-                continue;
-            switch (desc.semantic())
-            {
-            case MGeometry::kPosition:
-                fillVertexBuffer(data.createVertexBuffer(desc), mesh.positions, numVerts, 3, desc);
-                break;
-            case MGeometry::kNormal:
-                fillVertexBuffer(data.createVertexBuffer(desc), mesh.normals, numVerts, 3, desc);
-                break;
-            case MGeometry::kTexture:
-            {
-                // Solid colour needs no real UVs — provide a zeroed float2
-                // stream so the OpenPBR shader has everything it declares.
-                const std::vector<float> dummyUvs(numVerts * 2, 0.0f);
-                fillVertexBuffer(data.createVertexBuffer(desc), dummyUvs, numVerts, 2, desc);
-                break;
-            }
-            default:
-                break;
-            }
-        }
-    }
-    else
-    {
-        const MVertexBufferDescriptor posDesc("position", MGeometry::kPosition, MGeometry::kFloat,
-                                              3);
-        const MVertexBufferDescriptor nrmDesc("normal", MGeometry::kNormal, MGeometry::kFloat, 3);
-        const MVertexBufferDescriptor uvDesc("uv", MGeometry::kTexture, MGeometry::kFloat, 2);
-        fillVertexBuffer(data.createVertexBuffer(posDesc), mesh.positions, numVerts, 3, posDesc);
-        fillVertexBuffer(data.createVertexBuffer(nrmDesc), mesh.normals, numVerts, 3, nrmDesc);
-        const std::vector<float> dummyUvs(numVerts * 2, 0.0f);
-        fillVertexBuffer(data.createVertexBuffer(uvDesc), dummyUvs, numVerts, 2, uvDesc);
-    }
+    mmd::maya::rigid_body_display::fillMeshBuffers(requirements, mesh.positions, mesh.normals,
+                                                   data);
 
     // One index buffer per matching render item.
     const unsigned int numIndices = static_cast<unsigned int>(mesh.indices.size());
@@ -561,11 +448,10 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     }
 }
 
-void RigidBodyShapeGeometryOverride::cleanUp()
-{
-    // Render items live in VP2's persistent list and are owned by VP2 —
-    // nothing to release per frame.
-}
+// MPxGeometryOverride::cleanUp() is pure virtual, so it must be overridden even
+// though it does nothing: render items live in VP2's persistent list and are
+// owned by VP2 — there is no per-frame cache to release.
+void RigidBodyShapeGeometryOverride::cleanUp() {}
 
 // ===========================================================================
 // Selection — object-level picking of the solid render item.

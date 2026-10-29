@@ -5,21 +5,19 @@
  *
  * RigidBodyShapeGeometryOverride — viewport renderer for one pmxRigidBodyShape.
  *
- * Replaces the old flat-solid MUIDrawManager draw override with a proper
- * MPxGeometryOverride so the collider's SOLID surface is lit by the
- * viewport lights (stock k3dIsotropicOpenPBRSurfaceShader — the same OpenPBR
- * material Maya 2026+ uses for its default shader — with a per-frame
- * `baseColor` group colour).  The WIRE outline is still drawn with
- * MUIDrawManager (addUIDrawables), and the render item is pickable so the
- * guide keeps its native selection.
+ * The collider's SOLID surface is lit by the viewport lights (the stock
+ * surface shader of rigid_body_display.hpp, with a per-frame group colour).  The
+ * WIRE outline is drawn with MUIDrawManager (addUIDrawables), and the render
+ * item is pickable so the guide keeps its native selection.
  *
  * Drawing (in the guide's LOCAL space — the guide transform is the body's
  * current pose, so the collider sits at the local origin):
  *
- *   - solid   -> one MRenderItem (NonMaterialSceneItem, OpenPBR surface
+ *   - solid   -> one MRenderItem (NonMaterialSceneItem, lit surface
  *                shader, sDormantWireDepthPriority so it renders lit AND on
  *                top of the character mesh), position+normal(+uv) streams.
- *   - wire    -> MUIDrawManager lines (same primitive wireframe as before).
+ *   - wire    -> MUIDrawManager lines; a body connected to a selected joint
+ *                is drawn in its A / B role colour (rigid_body_display.hpp).
  *
  * The draw mode (off / wire / solid / wire+solid) is the shape's `drawMode`
  * attribute; the colour comes from the PMX collision group (16-colour
@@ -30,9 +28,10 @@
  * LIFECYCLE (per the devkit footPrintNode_GeometryOverride sample): the
  * render item is created once and appended to the override's persistent
  * render-item list — VP2 owns it, so the plugin never calls
- * MRenderItem::Destroy.  `cleanUp()` is empty; the stock shader is created
- * lazily and released in the destructor (while Maya is still alive — a
- * release at DLL-exit time can crash Maya).
+ * MRenderItem::Destroy.  cleanUp() is pure virtual in MPxGeometryOverride and
+ * is overridden with an empty body; the stock shader is created lazily and
+ * released in the destructor (while Maya is still alive — a release at
+ * DLL-exit time can crash Maya).
  *
  * Registered by MayaMMD.mll under the pmxRigidBodyShape classification.
  */
@@ -82,6 +81,7 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
                         const MFrameContext& frameContext) override;
     void populateGeometry(const MGeometryRequirements& requirements,
                           const MRenderItemList& renderItems, MGeometry& data) override;
+    // Pure virtual in MPxGeometryOverride; nothing to release (see the .cpp).
     void cleanUp() override;
 
     // Selection — the solid render item is pickable; granularity is object-level.
@@ -95,9 +95,6 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
     // Group colour (palette + kinematic dim + disabled grey) — the SOLID
     // always keeps this; selection is shown as a wireframe overlay instead.
     void groupColor(float& r, float& g, float& b) const;
-    // Selection helpers (render thread — displayStatus/wireframeColor safe).
-    static bool isSelected(const MDagPath& path);
-    static void selectionColor(const MDagPath& path, float& r, float& g, float& b);
 
     // Per-frame data pulled from the shape node in updateDG().
     struct DrawState
@@ -108,6 +105,7 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
         short groupId = 0;
         short physicsMode = 0;
         bool enabled = true;
+        unsigned int jointRoles = 0; // selected joints: bit 0 = A, bit 1 = B
     };
 
     MObject fShape;

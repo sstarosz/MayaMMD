@@ -387,12 +387,7 @@ class MMMToolWidget(QtWidgets.QWidget):
                     # TODO: Implement a UI panel to show these issues in a user-friendly way, with options to apply fixes
                     if validation_result.issues:
                         for issue in validation_result.issues:
-                            log.warning(
-                                "Validation issue - Severity: %s, Category: %s, Message: %s",
-                                issue.severity.name,
-                                issue.category.name,
-                                issue.message,
-                            )
+                            log.warning("Validation issue - %s", issue)
 
                     maya_pmx_data = build_pmx_scene(pmx_data)
 

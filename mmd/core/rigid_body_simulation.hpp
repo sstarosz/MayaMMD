@@ -94,20 +94,20 @@ class RigidBodySimulation
     {
         long bodyA = -1;
         long bodyB = -1;
-        long type = 0; // PMX JointType value
         Double3 frameT;
         Double3 frameR; // degrees
         Double3 linearMin;
         Double3 linearMax;
         Double3 angularMin; // radians
         Double3 angularMax;
-        Double3 linearSpring;
-        Double3 angularSpring;
+        // Spring6DOF axis stiffness, 0 = no spring.
+        Double3 linearStiffness;
+        Double3 angularStiffness;
 
         /// Field-wise equality — the Maya node uses it to detect config edits.
         bool operator==(const JointDefinition& o) const
         {
-            return bodyA == o.bodyA && bodyB == o.bodyB && type == o.type &&
+            return bodyA == o.bodyA && bodyB == o.bodyB &&
                    frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
                    frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
                    linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
@@ -116,11 +116,30 @@ class RigidBodySimulation
                    angularMin.x == o.angularMin.x && angularMin.y == o.angularMin.y &&
                    angularMin.z == o.angularMin.z && angularMax.x == o.angularMax.x &&
                    angularMax.y == o.angularMax.y && angularMax.z == o.angularMax.z &&
-                   linearSpring.x == o.linearSpring.x && linearSpring.y == o.linearSpring.y &&
-                   linearSpring.z == o.linearSpring.z && angularSpring.x == o.angularSpring.x &&
-                   angularSpring.y == o.angularSpring.y && angularSpring.z == o.angularSpring.z;
+                   linearStiffness.x == o.linearStiffness.x &&
+                   linearStiffness.y == o.linearStiffness.y &&
+                   linearStiffness.z == o.linearStiffness.z &&
+                   angularStiffness.x == o.angularStiffness.x &&
+                   angularStiffness.y == o.angularStiffness.y &&
+                   angularStiffness.z == o.angularStiffness.z;
         }
     };
+
+    /// Whether a joint constrains anything.  Only eActive and eBothKinematic
+    /// joints are created; a joint between two bone-driven bodies exists in
+    /// the world but moves nothing.  The viewport draws every joint that is
+    /// not eActive as inactive.
+    enum class JointStatus : short
+    {
+        eActive,
+        eMissingBody,   // an end is unset or out of range
+        eSameBody,      // both ends are the same body
+        eDisabledBody,  // an end is disabled (not in the world)
+        eBothKinematic, // both ends follow their bones
+    };
+    /// The status of `joint` linking `bodies` (Definition::bodies order).
+    [[nodiscard]] static JointStatus jointStatus(const JointDefinition& joint,
+                                                 const std::vector<BodyDefinition>& bodies);
 
     /// Full simulation input: gravity + bodies + joints.
     struct Definition
@@ -212,8 +231,22 @@ class RigidBodySimulation
     /// is disabled/missing or the world is not initialized.
     [[nodiscard]] Pose bodyPose(size_t bodyIndex) const;
 
+    /// Current attachment frame, using the same rest-local offset as createJoint.
+    /// frameT/frameR are the configured world frame (rotation in degrees).
+    /// Returns false for disabled/missing bodies; never advances the simulation.
+    [[nodiscard]] bool attachmentPose(size_t bodyIndex, const Double3& frameT,
+                                      const Double3& frameR, Pose& out) const;
+
     /// MMD physics tick — the adapter steps with this fixed dt.
     static constexpr double kFixedDt = 1.0 / 60.0;
+
+    /// The longest time span one step() can simulate: step() clamps dt to
+    /// kMaxStepTime, and Bullet takes at most kMaxSubSteps sub-steps of
+    /// kFixedDt — the two are sized to agree, so up to this span is simulated
+    /// exactly and beyond it the span is truncated (bodies lag the skeleton by
+    /// the remainder).  A caller that jumps further in time than this should
+    /// rebuild instead of stepping.
+    [[nodiscard]] static double maxStepSpan();
 
   private:
     /// Runtime body state: the (copied) input definition plus the scrub-back

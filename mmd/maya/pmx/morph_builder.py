@@ -7,6 +7,7 @@ from maya import cmds
 
 from mmd.core.data_types import MorphBone, MorphType, PmxModel, PMXMorph
 from mmd.maya.pmx_naming_manager import PMXNamingManager
+from mmd.maya.scene_edit_utils import create_node
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def create_bone_morph_node(
     log.debug("Creating bone morph node for %d bone morphs", len(bone_morphs))
 
     # Create the custom node with a unique name
-    node_name = cmds.createNode(
+    node_name = create_node(
         "boneMorphNode", name=name_registry.get_bone_morph_node_name()
     )
     log.debug("Created bone morph node: %s", node_name)

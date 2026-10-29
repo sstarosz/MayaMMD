@@ -8,31 +8,46 @@ All naming constants are defined centrally in `pmx_naming_manager.py` (`mmd/maya
 
 All suffixes start with a capital letter for consistency.
 
-| Node                               | Type | Naming pattern                         | Example                                          |
-| ---------------------------------- | ---- | -------------------------------------- | ------------------------------------------------ |
-| Joint                              | DAG  | `{bone_name}_Jnt`                      | `upper_arm_R_Jnt` / `Bone_52_Jnt`                |
-| Tail joint                         | DAG  | `{bone_name}_TailJnt`                  | `upper_arm_R_TailJnt`                            |
-| inheritCtrl (transform)            | DAG  | `{bone_name}_InheritCtrl`              | `shoulderP_R_InheritCtrl`                        |
-| morphCtrl (transform)              | DAG  | `{bone_name}_MorphCtrl`                | `arm_twist_R_Bone_52_MorphCtrl`                  |
-| ikHandle                           | DAG  | `{bone_name}_IkHandle`                 | `Bone_126_IkHandle`                              |
-| Root transform                     | DAG  | `{model}_Root`                         | `GirlsFrontline_TololoDefault_Root`              |
-| Bones group                        | DAG  | `{model}_Bones`                        | `GirlsFrontline_TololoDefault_Bones`             |
-| Mesh transform                     | DAG  | `{model}_Mesh`                         | `GirlsFrontline_TololoDefault_Mesh`              |
-| Mesh shape                         | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
-| Geo group                          | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
-| RigidBodies group                  | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
-| RigidBodySolver (pmxRigidBodyNode) | DAG  | `{model}_RigidBodySolver`              | `GirlsFrontline_TololoDefault_RigidBodySolver`   |
-| RigidBody guide (transform)        | DAG  | `{model}_{rigidbody_name}`             | `GirlsFrontline_TololoDefault_leg_rb`            |
-| RigidBodyShape (pmxRigidBodyShape) | DAG  | `{model}_{rigidbody_name}Shape`        | `GirlsFrontline_TololoDefault_leg_rbShape`       |
-| rotScale (multiplyDivide)          | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
-| ccdSolver                          | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
-| BoneMorph node                     | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
-| BlendShape node                    | DG   | `{model}_BlendShape`                   | `GirlsFrontline_TololoDefault_BlendShape`        |
-| Material                           | DG   | `{model}_{material_name}_Mat`          | `GirlsFrontline_TololoDefault_Face_Mat`          |
-| Shading group                      | DG   | `{model}_{material_name}_SG`           | `GirlsFrontline_TololoDefault_Face_SG`           |
-| Texture                            | DG   | `{model}_{texture_name}_Tex`           | `GirlsFrontline_TololoDefault_body_Tex`          |
-| Place2dTexture                     | DG   | `{model}_{texture_name}_Place2D`       | `GirlsFrontline_TololoDefault_body_Place2D`      |
-| Blendshape target                  | attr | `{morph_name}` (attribute, not a node) | `eye_blink`                                      |
+| Node                                | Type | Naming pattern                         | Example                                          |
+| ----------------------------------- | ---- | -------------------------------------- | ------------------------------------------------ |
+| Joint                               | DAG  | `{bone_name}_Jnt`                      | `upper_arm_R_Jnt` / `Bone_52_Jnt`                |
+| Tail joint                          | DAG  | `{bone_name}_TailJnt`                  | `upper_arm_R_TailJnt`                            |
+| inheritCtrl (transform)             | DAG  | `{bone_name}_InheritCtrl`              | `shoulderP_R_InheritCtrl`                        |
+| morphCtrl (transform)               | DAG  | `{bone_name}_MorphCtrl`                | `arm_twist_R_Bone_52_MorphCtrl`                  |
+| ikHandle                            | DAG  | `{bone_name}_IkHandle`                 | `Bone_126_IkHandle`                              |
+| Root transform                      | DAG  | `{model}_Root`                         | `GirlsFrontline_TololoDefault_Root`              |
+| Bones group                         | DAG  | `{model}_Bones`                        | `GirlsFrontline_TololoDefault_Bones`             |
+| Mesh transform                      | DAG  | `{model}_Mesh`                         | `GirlsFrontline_TololoDefault_Mesh`              |
+| Mesh shape                          | DAG  | `{model}_Mesh_Shape`                   | `GirlsFrontline_TololoDefault_Mesh_Shape`        |
+| Geo group                           | DAG  | `{model}_Geo`                          | `GirlsFrontline_TololoDefault_Geo`               |
+| RigidBodies group                   | DAG  | `{model}_RigidBodies`                  | `GirlsFrontline_TololoDefault_RigidBodies`       |
+| Bodies group (in RigidBodies)       | DAG  | `{model}_Bodies`                       | `GirlsFrontline_TololoDefault_Bodies`            |
+| Joints group (in RigidBodies)       | DAG  | `{model}_Joints`                       | `GirlsFrontline_TololoDefault_Joints`            |
+| RigidBodySolver (pmxRigidBodyNode)  | DAG  | `{model}_RigidBodySolver`              | `GirlsFrontline_TololoDefault_RigidBodySolver`   |
+| RigidBody guide (transform)         | DAG  | `{model}_{rigidbody_name}`             | `GirlsFrontline_TololoDefault_leg_rb`            |
+| RigidBodyShape (pmxRigidBodyShape)  | DAG  | `{model}_{rigidbody_name}Shape`        | `GirlsFrontline_TololoDefault_leg_rbShape`       |
+| RigidBody joint (pmxRigidBodyJoint) | DAG  | `{model}_{joint_name}_Constraint`      | `GirlsFrontline_TololoDefault_CapeL1_Constraint` |
+| rotScale (multiplyDivide)           | DG   | `{model}_{bone_name}_RotScale`         | `GirlsFrontline_TololoDefault_Bone_11_RotScale`  |
+| ccdSolver                           | DG   | `{model}_{bone_name}_CcdSolver`        | `GirlsFrontline_TololoDefault_Bone_24_CcdSolver` |
+| BoneMorph node                      | DG   | `{model}_BoneMorph`                    | `GirlsFrontline_TololoDefault_BoneMorph`         |
+| BlendShape node                     | DG   | `{model}_BlendShape`                   | `GirlsFrontline_TololoDefault_BlendShape`        |
+| Material                            | DG   | `{model}_{material_name}_Mat`          | `GirlsFrontline_TololoDefault_Face_Mat`          |
+| Shading group                       | DG   | `{model}_{material_name}_SG`           | `GirlsFrontline_TololoDefault_Face_SG`           |
+| Texture                             | DG   | `{model}_{texture_name}_Tex`           | `GirlsFrontline_TololoDefault_body_Tex`          |
+| Place2dTexture                      | DG   | `{model}_{texture_name}_Place2D`       | `GirlsFrontline_TololoDefault_body_Place2D`      |
+| Blendshape target                   | attr | `{morph_name}` (attribute, not a node) | `eye_blink`                                      |
+
+**Rigid bodies and their joints** are named by `PMXNamingManager`
+(`get_rigid_body_name` / `get_rigid_body_joint_name`; the importer passes them
+to `pmxRigidBody` / `pmxRigidBodyConstraint -nodeName`, and both commands
+apply the same policy when called without it): the local name when it is
+ASCII-safe, else the universal name, else `RigidBody_{index}` /
+`Joint_{index}`. A PMX model often names a joint exactly like the rigid body
+it moves (e.g. `CapeL1`), so joints carry `RIGID_BODY_JOINT_SUFFIX`
+(`_Constraint`; `_Jnt` already means a bone). Resolve rigid-body nodes through
+the solver's `bodyShapes[]` / `jointShapes[]` connections, or by DAG path
+(`cmds.listRelatives(..., fullPath=True)`); the `pmxRigidBodyShape` /
+`pmxRigidBodyJoint` SHAPE names (auto-generated, unique) are also safe.
 
 ## Why DAG nodes omit the model prefix
 

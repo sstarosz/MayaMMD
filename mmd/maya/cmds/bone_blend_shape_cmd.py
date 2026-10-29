@@ -31,6 +31,7 @@ from maya import cmds
 from mmd.maya.pmx_naming_manager import (
     MORPH_CONTROLLER_SUFFIX,
 )
+from mmd.maya.scene_edit_utils import create_node, reparent_preserving_local
 
 log = logging.getLogger(__name__)
 
@@ -407,7 +408,7 @@ class BoneBlendShapeCmd(om.MPxCommand):
             )
 
             # Create controller at root
-            ctrl = cmds.createNode("transform", name=ctrl_name)
+            ctrl = create_node("transform", name=ctrl_name)
 
             # Controller stays at the ORIGIN of the parent's local space
             # (translate = 0, rotate = identity).  The joint keeps its own
@@ -419,12 +420,12 @@ class BoneBlendShapeCmd(om.MPxCommand):
                 joint_long_name, parent=True, fullPath=True
             )
             if joint_parent:
-                cmds.parent(ctrl, joint_parent[0], relative=True)
+                reparent_preserving_local(ctrl, joint_parent[0])
 
-            # Parent main joint under controller with relative=True so its
-            # local translate is preserved exactly — jointOrient is also
-            # preserved because neither the joint nor ctrl are rotated.
-            cmds.parent(joint_long_name, ctrl, relative=True)
+            # Parent main joint under controller so its local translate is
+            # preserved exactly — jointOrient is also preserved because
+            # neither the joint nor ctrl are rotated.
+            reparent_preserving_local(joint_long_name, ctrl)
 
             created_controllers[joint_name] = ctrl_name
             log.debug(

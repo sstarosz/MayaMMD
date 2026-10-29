@@ -2,12 +2,13 @@
 PMX validation functions.
 """
 
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
-from mmd.core.data_types import PmxModel, WeightType
+from mmd.core.data_types import PMXJoint, PmxModel, Vec3, WeightType
 
 
 class IssueSeverity(Enum):
@@ -168,6 +169,9 @@ def validate_pmx_model(pmx_model: PmxModel) -> ValidationResult:
 
     # Morph validation
     _validate_morphs(pmx_model, result)
+
+    # Rigid bodies + joints (physics authoring)
+    _validate_physics(pmx_model, result)
 
     # Performance checks
     _validate_performance(pmx_model, result)
@@ -461,6 +465,214 @@ def _validate_morphs(pmx_model: PmxModel, result: ValidationResult):
                     ],
                 )
             )
+
+
+# A PMX joint is normally placed where its two bodies meet, so a healthy joint
+# sits far below this fraction of the rigid-body bounding-box diagonal.  A joint
+# left at the world origin — a common physics-conversion leftover — is orders of
+# magnitude past it, which is what makes its visualization hub float away.
+_DETACHED_FRAME_FRACTION = 0.05
+# An angular range this wide cannot limit anything inside a model.
+_FULL_TURN = 2.0 * math.pi
+
+
+def _distance(a: Vec3, b: Vec3) -> float:
+    return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+
+
+def _rigid_body_extent(pmx_model: PmxModel) -> float:
+    """Diagonal of the rigid bodies' bounding box — the physics length scale."""
+    positions = [body.shape_position for body in pmx_model.rigid_bodies]
+    if not positions:
+        return 0.0
+    lo = Vec3(
+        min(p.x for p in positions),
+        min(p.y for p in positions),
+        min(p.z for p in positions),
+    )
+    hi = Vec3(
+        max(p.x for p in positions),
+        max(p.y for p in positions),
+        max(p.z for p in positions),
+    )
+    return _distance(lo, hi)
+
+
+def _axis_constrains(lower: float, upper: float, spring: float, limit: float) -> bool:
+    """Whether one 6DOF axis can constrain its bodies within ``limit``."""
+    if lower > upper:  # Bullet reads an inverted range as free
+        return spring != 0.0  # a spring still pulls on a free axis
+    if lower == upper:  # locked
+        return True
+    return upper - lower < limit or spring != 0.0
+
+
+def _constrains_nothing(joint: PMXJoint, extent: float) -> bool:
+    """True when no limit or spring of the joint can act inside the model."""
+    for axis in ("x", "y", "z"):
+        if _axis_constrains(
+            getattr(joint.position_min, axis),
+            getattr(joint.position_max, axis),
+            getattr(joint.position_spring_constant, axis),
+            extent,
+        ):
+            return False
+    for axis in ("x", "y", "z"):
+        if _axis_constrains(
+            getattr(joint.rotation_min, axis),
+            getattr(joint.rotation_max, axis),
+            getattr(joint.rotation_spring_constant, axis),
+            _FULL_TURN,
+        ):
+            return False
+    return True
+
+
+def _validate_physics(pmx_model: PmxModel, result: ValidationResult):
+    """Validate the rigid bodies and the joints that link them.
+
+    Reports the authoring faults that silently break a model's physics: a joint
+    wired to a body that does not exist, a joint placed far from both bodies it
+    connects (it imports as a hub floating away from the model), and a joint
+    whose limits are too wide to hold anything.
+    """
+    joints = pmx_model.joints
+    if not joints:
+        return
+    bodies = pmx_model.rigid_bodies
+
+    def label(idx: int, joint: PMXJoint) -> str:
+        name = joint.name_local or joint.name_universal or "?"
+        return f"Joint {idx} '{name}'"
+
+    def wired(idx: int) -> bool:
+        joint = joints[idx]
+        indices = (joint.rigid_body_index_a, joint.rigid_body_index_b)
+        return all(0 <= i < len(bodies) for i in indices)
+
+    broken = [label(idx, joint) for idx, joint in enumerate(joints) if not wired(idx)]
+    if broken:
+        result.add_issue(
+            ValidationIssue(
+                severity=IssueSeverity.ERROR,
+                category=IssueCategory.PHYSICS,
+                message=f"{len(broken)} joint(s) are connected to a rigid body that does not exist",
+                details=f"The model has {len(bodies)} rigid bodies. Such a joint cannot be built, so it is skipped",
+                proposed_fix="Fix the two bodies each joint connects in PMX Editor",
+                affected_items=broken,
+            )
+        )
+
+    extent = _rigid_body_extent(pmx_model)
+    if extent <= 0.0:  # no usable scale to judge the frames against
+        return
+    detached_limit = extent * _DETACHED_FRAME_FRACTION
+
+    detached_inert: list[str] = []
+    detached_effective: list[str] = []
+    inert: list[str] = []
+    detached_inert_at_origin = 0
+    worst_inert_gap = 0.0
+    worst_effective_gap = 0.0
+    origin = Vec3(0.0, 0.0, 0.0)
+    for idx, joint in enumerate(joints):
+        if not wired(idx):
+            continue
+        gap = min(
+            _distance(joint.position, bodies[joint.rigid_body_index_a].shape_position),
+            _distance(joint.position, bodies[joint.rigid_body_index_b].shape_position),
+        )
+        if _constrains_nothing(joint, extent):
+            if gap > detached_limit:
+                worst_inert_gap = max(worst_inert_gap, gap)
+                detached_inert.append(label(idx, joint))
+                if _distance(joint.position, origin) <= detached_limit:
+                    detached_inert_at_origin += 1
+            else:
+                inert.append(label(idx, joint))
+        elif gap > detached_limit:
+            worst_effective_gap = max(worst_effective_gap, gap)
+            detached_effective.append(label(idx, joint))
+
+    if detached_inert:
+        details = [
+            (
+                f"Each sits up to {worst_inert_gap:.1f} units from the nearest of the two "
+                f"rigid bodies it connects, on a model {extent:.1f} units across."
+            ),
+            "A joint is normally placed where its two bodies meet.",
+        ]
+        if detached_inert_at_origin:
+            who = (
+                "All of them"
+                if detached_inert_at_origin == len(detached_inert)
+                else f"{detached_inert_at_origin} of them"
+            )
+            details.append(
+                f"{who} sit at or near the world origin, a common leftover from "
+                "converting physics."
+            )
+        details += [
+            (
+                "Their limits are all free or wider than the model, with no stiffness set, "
+                "so they never pull their bodies back."
+            ),
+            (
+                "They do not change the simulation, but the viewport draws a hub at each "
+                "joint's position, so those hubs float far from the character."
+            ),
+        ]
+        result.add_issue(
+            ValidationIssue(
+                severity=IssueSeverity.WARNING,
+                category=IssueCategory.PHYSICS,
+                message=f"{len(detached_inert)} joint(s) are placed far away from the bodies they connect and do not restrict them",
+                details=" ".join(details),
+                proposed_fix=(
+                    "In PMX Editor, move each joint to where its two bodies meet: the "
+                    "simulation stays the same and the hubs stop floating. Deleting them is "
+                    "an option too, but unlinking the two bodies can change the motion slightly"
+                ),
+                affected_items=detached_inert,
+            )
+        )
+
+    if detached_effective:
+        result.add_issue(
+            ValidationIssue(
+                severity=IssueSeverity.WARNING,
+                category=IssueCategory.PHYSICS,
+                message=f"{len(detached_effective)} joint(s) are placed far away from the bodies they connect",
+                details=(
+                    f"Each sits up to {worst_effective_gap:.1f} units from the nearest of the "
+                    f"two rigid bodies it connects, on a model {extent:.1f} units across, but "
+                    "its limits do act: whatever rotation it allows happens around that "
+                    "far-away point, so the bodies swing a long way around it instead of "
+                    "turning in place"
+                ),
+                proposed_fix="In PMX Editor, move each joint to where its two bodies meet",
+                affected_items=detached_effective,
+            )
+        )
+
+    if inert:
+        result.add_issue(
+            ValidationIssue(
+                severity=IssueSeverity.WARNING,
+                category=IssueCategory.PHYSICS,
+                message=f"{len(inert)} joint(s) do not restrict their bodies at all",
+                details=(
+                    "On every axis the translation and rotation limits are either free or "
+                    "wider than the model, and no stiffness is set, so the joint never pulls "
+                    "its bodies back: it has no effect on the simulation"
+                ),
+                proposed_fix=(
+                    "In PMX Editor, remove each of these joints, or set limits/stiffness "
+                    "if it was meant to do something"
+                ),
+                affected_items=inert,
+            )
+        )
 
 
 def _validate_performance(pmx_model: PmxModel, result: ValidationResult):

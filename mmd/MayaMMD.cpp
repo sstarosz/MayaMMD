@@ -19,12 +19,16 @@
 #include <maya/MFnPlugin.h>
 #include <maya/MGlobal.h>
 #include <maya/MObject.h>
+#include <maya/MSelectionMask.h>
 #include <maya/MStatus.h>
 #include <maya/MString.h>
 
 #include "maya/cmds/rigid_body_cmd.hpp"
 #include "maya/cmds/rigid_body_constraint_cmd.hpp"
 #include "maya/nodes/ccd_ik_solver_node.h"
+#include "maya/nodes/rigid_body_display.hpp"
+#include "maya/nodes/rigid_body_joint.hpp"
+#include "maya/nodes/rigid_body_joint_geometry_override.hpp"
 #include "maya/nodes/rigid_body_node.hpp"
 #include "maya/nodes/rigid_body_shape.hpp"
 #include "maya/nodes/rigid_body_shape_geometry_override.hpp"
@@ -122,7 +126,29 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyShape registration failed");
 
-    // 1b3. Register the viewport geometry override for the per-body guides —
+    // 1b3. Register the per-joint node (pmxRigidBodyJoint).  One selectable,
+    //     movable locator per PMX rigid-body JOINT (constraint): the node's
+    //     DAG transform IS the joint frame (joints are static config — moving
+    //     the node repositions the constraint), the joint data lives in the
+    //     attributes, and the joint is drawn by the geometry override under
+    //     its classification.
+    {
+        MString classification(RigidBodyJoint::kNodeClassify);
+        stat = plugin.registerNode(RigidBodyJoint::kNodeName, RigidBodyJoint::kTypeId,
+                                   RigidBodyJoint::creator, RigidBodyJoint::initialize,
+                                   MPxNode::kLocatorNode, &classification);
+    }
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint registration failed");
+    // Outrank Maya joints so a hub drawn on a bone is still pickable.
+    if (MSelectionMask::registerSelectionType(RigidBodyJoint::kSelectionType,
+                                              RigidBodyJoint::kSelectionPriority))
+        MGlobal::executeCommand(MString("selectType -byName ") + RigidBodyJoint::kSelectionType +
+                                " true");
+    else
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint selection type registration failed");
+
+    // 1b4. Register the viewport geometry override for the per-body guides —
     //     renders the collider's SOLID surface lit (stock OpenPBR) with the
     //     group colour, plus the wire outline.  (MDrawRegistry, not MFnPlugin
     //     — deregistered separately below.)
@@ -130,6 +156,15 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
         RigidBodyShape::kNodeClassify, "MayaMMD", RigidBodyShapeGeometryOverride::creator);
     if (!stat)
         MGlobal::displayWarning("  ⚠ pmxRigidBodyShape geometry override registration failed");
+
+    // 1b5. Register the viewport geometry override for the per-joint nodes
+    //     (MDrawRegistry, not MFnPlugin — deregistered separately below).
+    stat = MHWRender::MDrawRegistry::registerGeometryOverrideCreator(
+        RigidBodyJoint::kNodeClassify, "MayaMMD", RigidBodyJointGeometryOverride::creator);
+    if (!stat)
+        MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint geometry override registration failed");
+    // Selection/solver/camera state shared by the joint and body overrides.
+    mmd::maya::rigid_body_display::install();
 
     // 1c. Register the native rigid-body command (pmxRigidBody).  It lives in
     //     C++ (not Python) because the Python command layer crashed inside
@@ -175,15 +210,21 @@ PLUGIN_EXPORT MStatus uninitializePlugin(MObject mobject)
     // 1. Deregister Python components first
     run_python_uninitialization();
 
-    // 2. Deregister the viewport geometry override (registered via MDrawRegistry)
-    //    FIRST — it was registered AFTER the shape node, so LIFO order demands
-    //    it comes down before the node type it draws.
+    // 2. Deregister the viewport geometry overrides (registered via
+    //    MDrawRegistry) FIRST — they were registered AFTER the node types, so
+    //    LIFO order demands they come down before the nodes they draw.
+    MHWRender::MDrawRegistry::deregisterGeometryOverrideCreator(RigidBodyJoint::kNodeClassify,
+                                                                "MayaMMD");
     MHWRender::MDrawRegistry::deregisterGeometryOverrideCreator(RigidBodyShape::kNodeClassify,
                                                                 "MayaMMD");
+    // After the overrides that use its shared shaders are gone.
+    mmd::maya::rigid_body_display::uninstall();
 
     // 3. Deregister C++ nodes and commands
     plugin.deregisterNode(RigidBodyNode::kTypeId);
     plugin.deregisterNode(RigidBodyShape::kTypeId);
+    plugin.deregisterNode(RigidBodyJoint::kTypeId);
+    MSelectionMask::deregisterSelectionType(RigidBodyJoint::kSelectionType);
     plugin.deregisterNode(CCDIKSolverNode::kTypeId);
     plugin.deregisterCommand(RigidBodyCmd::kName);
     plugin.deregisterCommand(RigidBodyConstraintCmd::kName);

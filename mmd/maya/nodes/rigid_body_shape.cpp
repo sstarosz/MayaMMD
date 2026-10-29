@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 using mmd::core::applyShapeSize;
 using mmd::core::Double3;
@@ -66,15 +67,10 @@ namespace
     }
 }
 
-// Read a k3Double child plug into a core Double3.  asDouble3() decays inside
-// the Maya SDK header — hence the NOLINT on that single line.
+// Read a k3Double child plug into a core Double3.
 void readDouble3(const MPlug& plug, Double3& out)
 {
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-    const double* v = plug.asMDataHandle().asDouble3();
-    out.x = v[0];
-    out.y = v[1];
-    out.z = v[2];
+    out = mmd::maya::readPlugDouble3(plug);
 }
 
 // Create a numeric attribute with the standard storable + non-keyable flags,
@@ -296,6 +292,24 @@ MStatus RigidBodyShape::initialize()
     stat = addAttribute(aDrawMode);
     MMD_CHECK_MSTATUS(stat);
 
+    // A bone drag or a body edit at a paused frame must re-run the solver.
+    // The solver pulls the body through the message array (not a data
+    // connection), so the dirt needs an explicit path: input -> solver
+    // (message) -> pmxRigidBodyNode.bodyShapes[i] -> its outputs.  Without
+    // it the bodies (and the joint hubs on them) only update when time
+    // changes.  The guide transform is NOT an input: the solver drives it.
+    std::vector<MObject> inputs = {aBodyAnchorWorld,    aBodyEnabled,     aBodyGroupId,
+                                   aBodyColliderType,   aBodyShapeSize,   aBodyRestTranslate,
+                                   aBodyRestRotate,     aBodyMass,        aBodyLinearDamping,
+                                   aBodyAngularDamping, aBodyRestitution, aBodyFriction,
+                                   aBodyPhysicsMode};
+    inputs.insert(inputs.end(), aBodyMaskGroup.begin(), aBodyMaskGroup.end());
+    for (const MObject& input : inputs)
+    {
+        stat = attributeAffects(input, aSolver);
+        MMD_CHECK_MSTATUS(stat);
+    }
+
     return MS::kSuccess;
 }
 
@@ -367,11 +381,10 @@ MBoundingBox RigidBodyShape::boundingBox() const
     double half[3] = {0.5, 0.5, 0.5};
     if (!sizePlug.isNull())
     {
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-        const double* s = sizePlug.asMDataHandle().asDouble3();
-        half[0] = s[0];
-        half[1] = s[1];
-        half[2] = s[2];
+        const Double3 s = mmd::maya::readPlugDouble3(sizePlug);
+        half[0] = s.x;
+        half[1] = s.y;
+        half[2] = s.z;
     }
     // For sphere/capsule the size is a radius-ish extent; for the bounding
     // box a cube is a safe superset for framing.

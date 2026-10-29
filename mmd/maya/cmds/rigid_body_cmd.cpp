@@ -65,6 +65,7 @@ namespace
 constexpr const char* kIndexFlag = "i";
 constexpr const char* kNameFlag = "n";
 constexpr const char* kNameUniversalFlag = "nu";
+constexpr const char* kNodeNameFlag = "nn";
 constexpr const char* kBoneFlag = "b";
 constexpr const char* kShapeFlag = "sh";
 constexpr const char* kSizeFlag = "sz";
@@ -95,44 +96,6 @@ bool flagArgumentDouble3(const MArgParser& parser, const char* flag, Double3& ou
     return true;
 }
 
-// ASCII-safe node-name segment for the per-body guide DAG node: keeps only
-// [A-Za-z0-9_].  Maya cannot store Japanese (or other non-ASCII) object
-// names, and the PMX body names arrive through mayapy -> MArgParser possibly
-// mangled — so the guide's Maya name is built from this segment, falling back
-// to "RB_<n>" when nothing survives.
-[[nodiscard]] std::string sanitizeNodeNameSegment(const MString& name)
-{
-    std::string out;
-    const char* bytes = name.asUTF8();
-    const size_t len = bytes ? std::strlen(bytes) : 0;
-    for (size_t i = 0; i < len; ++i)
-    {
-        const unsigned char c = static_cast<unsigned char>(bytes[i]);
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')
-        {
-            out.push_back(static_cast<char>(c));
-        }
-    }
-    return out;
-}
-
-// The per-body guide DAG node name: `{model}_{sanitizedBodyName}` (the PMX
-// rigid-body naming convention), with the model prefix taken from the solver's
-// name ("{model}_RigidBodySolver") and the body segment from the ASCII-safe
-// PMX name_local (or "RB_<n>").  Maya auto-uniquifies the final name.
-[[nodiscard]] MString makeShapeNodeName(const MObject& solverNode, int n, const MString& nameLocal)
-{
-    MFnDependencyNode fn(solverNode);
-    MString prefix = fn.name();
-    const int suffix = prefix.rindexW("_RigidBodySolver");
-    if (suffix >= 0)
-        prefix = prefix.substringW(0, suffix - 1);
-
-    std::string segment = sanitizeNodeNameSegment(nameLocal);
-    if (segment.empty())
-        segment = "RB_" + std::to_string(n);
-    return prefix + "_" + segment.c_str();
-}
 
 // Resolve the -bone argument to a joint dag path (or leave it empty).
 MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
@@ -200,6 +163,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         nameLocal = parser.flagArgumentString(kNameFlag, 0);
     if (parser.isFlagSet(kNameUniversalFlag))
         nameUniversal = parser.flagArgumentString(kNameUniversalFlag, 0);
+    MString nodeName;
+    if (parser.isFlagSet(kNodeNameFlag))
+        nodeName = parser.flagArgumentString(kNodeNameFlag, 0);
     if (parser.isFlagSet(kBoneFlag))
         bone = parser.flagArgumentString(kBoneFlag, 0);
     if (parser.isFlagSet(kShapeFlag))
@@ -369,7 +335,13 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // the animation.  All PMX-verbatim data — including the rest pose
     // (bodyRestTranslate/bodyRestRotate) — lives on the shape node; the
     // solver discovers it via solver.bodyShapes[n].
-    const MString shapeName = makeShapeNodeName(solverNode, n, nameLocal);
+    // Named `{model}_{body}` (PMXNamingManager.get_rigid_body_name, passed
+    // through -nodeName by the importer; the same policy otherwise).
+    const MString shapeName =
+        nodeName.length() > 0
+            ? nodeName
+            : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
+                                     "RigidBody_" + std::to_string(n));
     MObject guideParent = groupPath.node(); // non-const ref param on MFnTransform::create
     MFnTransform guideTf;
     MObject guideObj = guideTf.create(guideParent, &plugStat);
@@ -565,6 +537,7 @@ MSyntax RigidBodyCmd::syntaxCreator()
     syntax.addFlag(kIndexFlag, "index", MSyntax::kLong);
     syntax.addFlag(kNameFlag, "name", MSyntax::kString);
     syntax.addFlag(kNameUniversalFlag, "nameUniversal", MSyntax::kString);
+    syntax.addFlag(kNodeNameFlag, "nodeName", MSyntax::kString);
     syntax.addFlag(kBoneFlag, "bone", MSyntax::kString);
     syntax.addFlag(kShapeFlag, "shape", MSyntax::kString);
     syntax.addFlag(kSizeFlag, "size", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);

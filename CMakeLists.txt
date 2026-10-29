@@ -178,6 +178,9 @@ if(BUILD_NATIVE_MODULE AND Maya_FOUND)
         mmd/maya/cmds/rigid_body_cmd.cpp
         mmd/maya/cmds/rigid_body_constraint_cmd.cpp
         mmd/maya/nodes/ccd_ik_solver_node.cpp
+        mmd/maya/nodes/rigid_body_display.cpp
+        mmd/maya/nodes/rigid_body_joint.cpp
+        mmd/maya/nodes/rigid_body_joint_geometry_override.cpp
         mmd/maya/nodes/rigid_body_node.cpp
         mmd/maya/nodes/rigid_body_shape.cpp
         mmd/maya/nodes/rigid_body_shape_geometry_override.cpp

@@ -13,6 +13,9 @@
  *                                  index; omit to auto-append)
  *         -n, -name <string>       PMX body name (local) → bodies[i].bodyNameLocal
  *         -nu, -nameUniversal <string>  PMX body name (universal)
+ *         -nn, -nodeName <string>  the guide transform's name (the importer
+ *                                  passes PMXNamingManager's); default
+ *                                  `{model}_{body}` by the same policy
  *         -b, -bone <joint | pmxBoneIdx>  related joint — drives the bone binding
  *         -sh, -shape <sphere|box|capsule>  PMX collider
  *         -sz, -size <x y z>       PMX shape_size VERBATIM (box shape_size

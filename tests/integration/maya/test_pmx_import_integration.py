@@ -18,6 +18,7 @@ from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
     assert_true,
+    get_angle3_radians,
     step_physics,
 )
 
@@ -28,6 +29,21 @@ _NODE_TYPE = "pmxRigidBodyNode"
 # General PMX import tests (root, geometry, mesh, hierarchy, materials, skin,
 # physics)
 # ---------------------------------------------------------------------------
+
+
+def test_pmx_import_leaves_no_selection(pmx_data: PmxModel, maya_pmx_data):
+    """The import must not leave anything selected.
+
+    ``createNode``, ``shadingNode``, ``parent``, ``ikHandle`` and
+    ``skinCluster`` select what they touch; the builders neutralise that
+    (``skipSelect`` / ``MDagModifier`` / local restore), so an import must not
+    end with e.g. every rigid-body joint selected.  The runner builds the
+    scene right before this test, so the build is the last scene operation.
+    """
+    selected = cmds.ls(selection=True, long=True) or []
+    assert_eq(selected, [], "import left a selection")
+    print("PASS: import leaves the selection empty")
+    return True
 
 
 def test_pmx_root_creation(pmx_data: PmxModel, maya_pmx_data):
@@ -214,7 +230,9 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
     one ``pmxRigidBodyNode`` solver (gravity -9.8), POPULATES its ``bodies``
     array through the native ``pmxRigidBody`` command (one body per PMX rigid
     body, in PMX order), and stamps the solver name on the root's
-    ``pmxRigidBodyNode`` string attribute for discovery.
+    ``pmxRigidBodyNode`` string attribute for discovery.  The per-body guides
+    and the per-joint nodes live in the group's identity ``{model}_Bodies`` /
+    ``{model}_Joints`` sub-groups (bodies and joints separate in the Outliner).
     """
     root_obj = maya_pmx_data.root_obj
     root_fn = om.MFnTransform(root_obj)
@@ -234,6 +252,29 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         root_name,
         "Rigid bodies group parent is not root",
     )
+
+    # The bodies and joints hang in their own IDENTITY sub-groups under the
+    # rigid bodies group, so the Outliner separates them.  Identity matters:
+    # the solver drives the guides in the rigid bodies group's space.
+    sub_groups = cmds.listRelatives(physics_group.name(), children=True) or []
+    bodies_group = next((g for g in sub_groups if g.endswith("_Bodies")), None)
+    joints_group = next((g for g in sub_groups if g.endswith("_Joints")), None)
+    assert_true(bodies_group is not None, f"Bodies sub-group not found ({sub_groups})")
+    assert_true(joints_group is not None, f"Joints sub-group not found ({sub_groups})")
+    for sub in (bodies_group, joints_group):
+        assert_true(
+            approx_equal_tuple(cmds.getAttr(f"{sub}.translate")[0], (0.0, 0.0, 0.0)),
+            f"sub-group {sub} must stay at identity",
+        )
+    # The group and its sub-groups only follow the model root: their
+    # transform channels are locked.
+    for group in (physics_group.name(), bodies_group, joints_group):
+        for channel in ("translate", "rotate", "scale"):
+            for plug in (channel, *(channel + axis for axis in "XYZ")):
+                assert_true(
+                    cmds.getAttr(f"{group}.{plug}", lock=True),
+                    f"{group}.{plug} should be locked",
+                )
 
     # Exactly one pmxRigidBodyNode solver shape under the group.
     solvers = cmds.listRelatives(physics_group.name(), children=True, type=_NODE_TYPE)
@@ -274,9 +315,16 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
         )
         # First body's data mirrors the first PMX rigid body.
         first = pmx_data.rigid_bodies[0]
-        srcs = cmds.listConnections(f"{solver}.bodyShapes[0]", source=True) or []
-        assert_true(bool(srcs), "bodyShapes[0] has no source shape node")
-        base = srcs[0]
+        # Resolve the SHAPE via the plug: listConnections(source=True) resolves
+        # to the top DAG transform, whose SHORT NAME may repeat across the
+        # {model}_Bodies / {model}_Joints sub-groups (a rigid body and a joint
+        # can carry the same PMX name), while the shape name is unique.
+        shape_plugs = (
+            cmds.listConnections(f"{solver}.bodyShapes[0]", source=True, plugs=True)
+            or []
+        )
+        assert_true(bool(shape_plugs), "bodyShapes[0] has no source shape node")
+        base = str(shape_plugs[0]).split(".")[0]
         assert_eq(
             cmds.getAttr(f"{base}.bodyNameLocal"),
             first.name_local,
@@ -287,6 +335,17 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             int(first.physics_mode.value),
             "first body physics mode",
         )
+        # The guide transform holding the shape lives in the bodies sub-group
+        # (resolved by DAG path — short names can repeat across sub-groups).
+        body_guide = cmds.listRelatives(base, parent=True, fullPath=True) or []
+        assert_true(bool(body_guide), "body shape should have a guide parent")
+        assert_eq(
+            (cmds.listRelatives(body_guide[0], parent=True, fullPath=True) or [""])[
+                0
+            ].split("|")[-1],
+            bodies_group,
+            "body guide should live in the bodies sub-group",
+        )
     else:
         # Models with no rigid bodies still get the node (empty bodyShapes = no-op).
         assert_eq(
@@ -295,57 +354,77 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             "no-body model should have an empty bodyShapes array",
         )
 
-    # The joints array mirrors the PMX rigid-body constraints (one joint per
-    # PMX joint, in PMX order — appended by the native pmxRigidBodyConstraint
-    # command after every body exists).
-    expected_joints = len(pmx_data.joints)
+    # The jointShapes message array mirrors the PMX rigid-body constraints
+    # (one pmxRigidBodyJoint node per PMX joint, in PMX order — created by the
+    # native pmxRigidBodyConstraint command after every body exists; each
+    # joint node's transform IS the joint frame).  PMX 2.1 joint types are
+    # not supported yet and are skipped on import.
+    supported_joints = [j for j in pmx_data.joints if int(j.type.value) == 0]
+    expected_joints = len(supported_joints)
     assert_true(
-        cmds.attributeQuery("joints", node=solver, exists=True),
-        "solver has no joints attribute",
+        cmds.attributeQuery("jointShapes", node=solver, exists=True),
+        "solver has no jointShapes attribute",
     )
     if expected_joints > 0:
         assert_eq(
-            int(cmds.getAttr(f"{solver}.joints", size=True)),
+            int(cmds.getAttr(f"{solver}.jointShapes", size=True)),
             expected_joints,
-            "joints count != PMX joint count",
+            "jointShapes count != PMX joint count",
         )
         # First joint's data mirrors the first PMX joint: body refs, type,
         # name, and the frame/limit conversion (Z-flip on position; angular
         # limits reflected through F = diag(1,1,-1): X/Y negated + swapped,
         # Z unchanged).
-        first = pmx_data.joints[0]
-        jbase = f"{solver}.joints[0]"
-        assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointBodyA")),
-            int(first.rigid_body_index_a),
-            "first joint bodyA",
+        first = supported_joints[0]
+        joint_plugs = (
+            cmds.listConnections(f"{solver}.jointShapes[0]", source=True, plugs=True)
+            or []
         )
+        assert_true(bool(joint_plugs), "jointShapes[0] has no source joint node")
+        jbase = str(joint_plugs[0]).split(".")[0]
+        guide = cmds.listRelatives(jbase, parent=True, fullPath=True) or []
+        assert_true(bool(guide), "joint shape should have a guide parent")
+        # The joint guide lives in the joints sub-group (resolved by DAG path —
+        # short names can repeat across sub-groups).
         assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointBodyB")),
-            int(first.rigid_body_index_b),
-            "first joint bodyB",
+            (cmds.listRelatives(guide[0], parent=True, fullPath=True) or [""])[0].split(
+                "|"
+            )[-1],
+            joints_group,
+            "joint guide should live in the joints sub-group",
         )
-        assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointType")),
-            int(first.type.value),
-            "first joint type",
-        )
+        # The bodies are linked by connection: jointBodyA / B come from the
+        # shapes in the solver's bodyShapes[] slots for the PMX indices.
+        for end, pmx_index in (
+            ("A", first.rigid_body_index_a),
+            ("B", first.rigid_body_index_b),
+        ):
+            linked = cmds.listConnections(f"{jbase}.jointBody{end}", source=True) or []
+            expected = (
+                cmds.listConnections(
+                    f"{solver}.bodyShapes[{int(pmx_index)}]", source=True
+                )
+                or []
+            )
+            assert_true(bool(linked), f"first joint body {end} should be connected")
+            assert_eq(linked, expected, f"first joint body {end}")
         assert_eq(
             cmds.getAttr(f"{jbase}.jointNameLocal"),
             first.name_local,
             "first joint name_local",
         )
+        # The frame is the joint guide's transform (Z-flip on position).
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointFrameTranslate")[0],
+                cmds.getAttr(f"{guide[0]}.translate")[0],
                 (first.position.x, first.position.y, -first.position.z),
             ),
             f"first joint frame translate Z-flip wrong "
-            f"{cmds.getAttr(f'{jbase}.jointFrameTranslate')}",
+            f"{cmds.getAttr(f'{guide[0]}.translate')}",
         )
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointAngularMin")[0],
+                get_angle3_radians(f"{jbase}.jointAngularMin"),
                 (
                     -first.rotation_max.x,
                     -first.rotation_max.y,
@@ -353,11 +432,11 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
                 ),
             ),
             f"first joint angularMin reflection wrong "
-            f"{cmds.getAttr(f'{jbase}.jointAngularMin')}",
+            f"{get_angle3_radians(f'{jbase}.jointAngularMin')}",
         )
         assert_true(
             approx_equal_tuple(
-                cmds.getAttr(f"{jbase}.jointAngularMax")[0],
+                get_angle3_radians(f"{jbase}.jointAngularMax"),
                 (
                     -first.rotation_min.x,
                     -first.rotation_min.y,
@@ -365,14 +444,14 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
                 ),
             ),
             f"first joint angularMax reflection wrong "
-            f"{cmds.getAttr(f'{jbase}.jointAngularMax')}",
+            f"{get_angle3_radians(f'{jbase}.jointAngularMax')}",
         )
     else:
-        # Models with no joints get an empty joints array.
+        # Models with no joints get an empty jointShapes array.
         assert_eq(
-            int(cmds.getAttr(f"{solver}.joints", size=True) or 0),
+            int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
             0,
-            "no-joint model should have an empty joints array",
+            "no-joint model should have an empty jointShapes array",
         )
     print(
         f"PASS: rigid bodies group + {_NODE_TYPE} with {expected_bodies} bodies, "
@@ -644,6 +723,7 @@ def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
 # ---------------------------------------------------------------------------
 
 _TESTS = [
+    ("Import Leaves No Selection", test_pmx_import_leaves_no_selection),
     ("Root Creation", test_pmx_root_creation),
     ("Geometry Group Creation", test_pmx_geometry_group_creation),
     ("Mesh Creation", test_pmx_mesh_creation),
