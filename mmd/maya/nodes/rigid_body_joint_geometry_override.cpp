@@ -226,6 +226,10 @@ RigidBodyJointGeometryOverride::RigidBodyJointGeometryOverride(const MObject& ob
     fPlugs.angularStiffness = MPlug(obj, RigidBodyJoint::aJointAngularStiffness);
     fPlugs.solver = MPlug(obj, RigidBodyJoint::aSolver);
     fPlugs.solverStep = MPlug(obj, RigidBodyJoint::aSolverStep);
+    // Sensible before the first updateRenderItems() caches the real ones.
+    fWorldAxisLocal[0] = MVector::xAxis;
+    fWorldAxisLocal[1] = MVector::yAxis;
+    fWorldAxisLocal[2] = MVector::zAxis;
 }
 
 RigidBodyJointGeometryOverride::~RigidBodyJointGeometryOverride()
@@ -458,6 +462,14 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
         fLocalB = fState.bodyBWorld * worldToLocal;
     }
 
+    // World X/Y/Z as unit directions in the joint's local space: the markers
+    // (drawRings) are axis-aligned rings built in local space.  Computing them
+    // here keeps the inverse out of the draw phase, where drawRings runs
+    // several times per frame.
+    const MVector worldAxes[3] = {MVector::xAxis, MVector::yAxis, MVector::zAxis};
+    for (int a = 0; a < 3; ++a)
+        fWorldAxisLocal[a] = (worldAxes[a] * worldToLocal).normal();
+
     // The SOLID keeps its STATE colour even when selected. The selection
     // highlight is a native-coloured wire drawn in addUIDrawables(), not a
     // tint of the whole hub — so the lead hub is outlined green and the rest
@@ -668,19 +680,19 @@ void RigidBodyJointGeometryOverride::drawRings(MHWRender::MUIDrawManager& drawMa
                                                const MPoint& local, double radius,
                                                int segments) const
 {
-    const MMatrix worldToLocal = fLocalToWorld.inverse();
-    const MPoint world = local * fLocalToWorld;
-    const MVector axes[3] = {MVector::xAxis, MVector::yAxis, MVector::zAxis};
+    // Built in the joint's local space like every other guide, so the markers
+    // keep the hub's proportions whatever scale the model root carries.  The
+    // planes stay the WORLD axis planes (fWorldAxisLocal), so the marks read
+    // the same from every joint orientation.
     for (int a = 0; a < 3; ++a)
     {
-        const MVector& u = axes[(a + 1) % 3];
-        const MVector& v = axes[(a + 2) % 3];
+        const MVector& u = fWorldAxisLocal[(a + 1) % 3];
+        const MVector& v = fWorldAxisLocal[(a + 2) % 3];
         MPointArray strip;
         for (int i = 0; i <= segments; ++i)
         {
             const double angle = 2.0 * M_PI * i / segments;
-            strip.append((world + (u * std::cos(angle) + v * std::sin(angle)) * radius) *
-                         worldToLocal);
+            strip.append(local + (u * std::cos(angle) + v * std::sin(angle)) * radius);
         }
         drawManager.mesh(MHWRender::MUIDrawManager::kLineStrip, strip);
     }

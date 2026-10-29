@@ -16,6 +16,7 @@ no non-selecting form are wrapped in :func:`keep_selection`.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
@@ -26,6 +27,8 @@ except ImportError:  # Imported outside Maya by the pure-logic tests.
     om = None  # type: ignore[assignment]
     cmds = None  # type: ignore[assignment]
 
+log = logging.getLogger(__name__)
+
 
 @contextmanager
 def keep_selection() -> Iterator[None]:
@@ -33,15 +36,21 @@ def keep_selection() -> Iterator[None]:
 
     For commands that always select their result and offer no flag to avoid
     it: ``parent`` with world-preservation, ``ikHandle`` and ``skinCluster``.
+    Names the block deleted or renamed are dropped, and a restore that fails
+    never masks the block's own exception.
     """
     selection = cmds.ls(selection=True, long=True) or []
     try:
         yield
     finally:
-        if selection:
-            cmds.select(selection, replace=True)
-        else:
-            cmds.select(clear=True)
+        try:
+            existing = cmds.ls(selection, long=True) if selection else []
+            if existing:
+                cmds.select(existing, replace=True)
+            else:
+                cmds.select(clear=True)
+        except Exception:
+            log.debug("Could not restore the selection", exc_info=True)
 
 
 def create_node(node_type: str, **kwargs) -> str:

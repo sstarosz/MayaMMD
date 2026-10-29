@@ -302,6 +302,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         jointDagFn.create(RigidBodyJoint::kNodeName, MString(), shapeParent, &plugStat);
     if (jointObj.isNull())
     {
+        // Do not leave the half-built guide behind: the transform is already in
+        // the scene and would show up as an empty `_Constraint` node.
+        MDGModifier modifier;
+        modifier.deleteNode(jointTransform);
+        modifier.doIt();
         MGlobal::displayError(
             "pmxRigidBodyConstraint: could not create the pmxRigidBodyJoint node");
         return MS::kFailure;

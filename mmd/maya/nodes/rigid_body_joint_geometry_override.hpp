@@ -49,6 +49,7 @@
 #include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MPxGeometryOverride.h>
+#include <maya/MVector.h>
 
 #include <vector>
 
@@ -172,8 +173,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // that rotates AND translates.
     void stateColors(MColor& primary, MColor& secondary) const;
     void drawMotionRanges(MHWRender::MUIDrawManager& drawManager, float alpha) const;
-    // Three rings of `radius` (world units) around `local`, in the world's
-    // axis planes, each one line strip so a dash pattern runs round it.
+    // Three rings of `radius` (joint-LOCAL units) around `local`, in the
+    // world's axis planes, each one line strip so a dash pattern runs round it.
     void drawRings(MHWRender::MUIDrawManager& drawManager, const MPoint& local, double radius,
                    int segments) const;
 
@@ -190,4 +191,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     MPoint fAttachmentB;
     MMatrix fHubToLocal;
     MMatrix fLocalToWorld; // the joint's DAG matrix, cached in updateRenderItems()
+    // World X/Y/Z as unit directions in the joint's LOCAL space, cached with
+    // fLocalToWorld: the markers are axis-aligned rings, built in local space so
+    // they keep the hub's proportions even when the model root is scaled.
+    MVector fWorldAxisLocal[3];
 };

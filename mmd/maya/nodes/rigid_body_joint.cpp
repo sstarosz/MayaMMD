@@ -56,6 +56,11 @@ namespace
 {
 void readDouble3(const MPlug& plug, Double3& out)
 {
+    // A missing attribute (never for a pmxRigidBodyJoint, whose type is checked
+    // first) keeps the JointDefinition default: readPlugDouble3 would call
+    // asMDataHandle() on a null plug.
+    if (plug.isNull())
+        return;
     out = mmd::maya::readPlugDouble3(plug);
 }
 
@@ -303,8 +308,9 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
     if (view.solver == nullptr)
         return view;
 
-    readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
-                        view.definition);
+    if (!readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
+                             view.definition))
+        return view; // no readable frame: keep the display's "inactive" defaults
     view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
     view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
     view.active = view.solver->jointStatus(view.definition) ==
@@ -396,8 +402,9 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
     readDouble3(plug(aJointLinearStiffness), out.linearStiffness);
     readDouble3(plug(aJointAngularStiffness), out.angularStiffness);
 
-    readJointFrame(node, groupWorldInverse, out.frameT, out.frameR);
-    return true;
+    // A joint whose frame cannot be read has no usable constraint placement;
+    // fail instead of handing the solver an origin-centred joint.
+    return readJointFrame(node, groupWorldInverse, out.frameT, out.frameR);
 }
 
 MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
