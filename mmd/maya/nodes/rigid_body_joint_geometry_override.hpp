@@ -122,8 +122,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     };
     BodyOutline fBodyOutlines[2];
     void drawIsolatedBodyOutlines(MHWRender::MUIDrawManager& drawManager,
-                                  const MHWRender::MFrameContext& frameContext,
-                                  const MMatrix& worldToLocal) const;
+                                  const MHWRender::MFrameContext& frameContext) const;
 
     // The joint's plugs, resolved once (the attributes never change).  The
     // bodies are connections, read with RigidBodyJoint::bodyShape.
@@ -159,6 +158,11 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         MPoint bodyAWorld;
         MPoint bodyBWorld;
 
+        // What the joint permits and the guide sizes, resolved once here: the
+        // hub colour, the markers and the motion guides all read them, so they
+        // cannot disagree and are not recomputed per overlay pass.
+        mmd::core::joint_display::Ranges ranges;
+        mmd::core::joint_display::GuideSizes sizes{};
         // What the joint permits — the core freedom model (joint_display.hpp),
         // which the hub's colour encodes.  An inactive joint draws a hollow
         // hub instead of a colour.
@@ -167,12 +171,37 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
     };
 
-    // What the joint permits, from the limits/springs the solver reads.
+    // updateDG() steps: read the node's own inputs, resolve the owning solver's
+    // live view of this joint, then cache the connected colliders (selected
+    // joints only).
+    void readJointInputs();
+    void resolveSolver();
+    void cacheBodyOutlines(const MObject (&bodyShapes)[2]);
+
+    // What the joint permits, from the limits/springs the solver reads
+    // (fills DrawState::ranges / sizes / freedom).
     void classifyState();
     // Hub colour of the even and odd wedges; they differ only for a joint
     // that rotates AND translates.
     void stateColors(MColor& primary, MColor& secondary) const;
-    void drawMotionRanges(MHWRender::MUIDrawManager& drawManager, float alpha) const;
+
+    // The joint's own drawing, in the attachment-A frame, shared by the X-ray
+    // and depth-tested passes: the guide segments (built once, so both passes
+    // draw the same geometry) and whether the two attachments read as separate.
+    struct OverlayGeom
+    {
+        std::vector<mmd::core::joint_display::GuideSegment> guides; // empty = none
+        bool separate = false;
+    };
+    [[nodiscard]] OverlayGeom buildOverlayGeom() const;
+    // The core guide builder's input, in the attachment-A frame (ranges and
+    // sizes come from classifyState()).
+    [[nodiscard]] mmd::core::joint_display::GuideInput motionGuideInput() const;
+    void drawOverlay(MHWRender::MUIDrawManager& drawManager, float alpha,
+                     const OverlayGeom& geom) const;
+    void drawGuideSegments(MHWRender::MUIDrawManager& drawManager,
+                           const std::vector<mmd::core::joint_display::GuideSegment>& segments,
+                           float alpha) const;
     // Three rings of `radius` (joint-LOCAL units) around `local`, in the
     // world's axis planes, each one line strip so a dash pattern runs round it.
     void drawRings(MHWRender::MUIDrawManager& drawManager, const MPoint& local, double radius,
@@ -190,7 +219,10 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     MPoint fAttachmentA;
     MPoint fAttachmentB;
     MMatrix fHubToLocal;
-    MMatrix fLocalToWorld; // the joint's DAG matrix, cached in updateRenderItems()
+    // The joint's DAG matrix and its inverse, both cached in
+    // updateRenderItems(): the draw phase reads no DAG state.
+    MMatrix fLocalToWorld;
+    MMatrix fWorldToLocal;
     // World X/Y/Z as unit directions in the joint's LOCAL space, cached with
     // fLocalToWorld: the markers are axis-aligned rings, built in local space so
     // they keep the hub's proportions even when the model root is scaled.

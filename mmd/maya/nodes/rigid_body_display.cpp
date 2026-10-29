@@ -31,6 +31,7 @@
 #include "rigid_body_shape.hpp"
 
 #include <maya/MEventMessage.h>
+#include <maya/M3dView.h>
 #include <maya/MFn.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
@@ -44,6 +45,7 @@
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
 #include <maya/MSelectionList.h>
+#include <maya/MStringArray.h>
 #include <maya/MViewport2Renderer.h>
 
 #include <algorithm>
@@ -51,6 +53,9 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
+#include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace mmd::maya::rigid_body_display
@@ -69,6 +74,10 @@ struct State
     std::vector<SelectedJoint> selected;
     std::vector<BodyRole> roles;
     std::vector<std::pair<std::uint32_t, MHWRender::MShaderInstance*>> shaders;
+    // Isolate-select state per viewport (keyed by the render destination), valid
+    // until the next selection or model-editor change.  Held by pointer so the
+    // references handed out survive rehashing.
+    std::unordered_map<std::string, std::unique_ptr<ViewFilter>> viewFilters;
 };
 
 // Heap-allocated and destroyed only in uninstall(): Maya objects must never be
@@ -171,6 +180,8 @@ void selectionChanged(void*)
     if (!gState)
         return;
     State& s = *gState;
+    // Isolate-select membership follows the selection.
+    s.viewFilters.clear();
     const auto oldSelected = s.selected;
     const auto oldRoles = s.roles;
     resolveSelection(s);
@@ -205,6 +216,8 @@ void editorChanged(void*)
 {
     if (!gState)
         return;
+    // Isolate select on/off and "show children" belong to the editor state.
+    gState->viewFilters.clear();
     for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next())
     {
         const MObject node = it.thisNode();
@@ -213,8 +226,75 @@ void editorChanged(void*)
             dirty(node);
     }
 }
-
 } // namespace
+
+// ===========================================================================
+// Isolate-select state of one viewport
+// ===========================================================================
+ViewFilter::ViewFilter(const MHWRender::MFrameContext& frameContext)
+{
+#if MAYA_API_VERSION >= 20260000
+    MString destination;
+    if (frameContext.renderingDestination(destination) != MFrameContext::k3dViewport)
+        return;
+    M3dView view;
+    if (!M3dView::getM3dViewFromModelPanel(destination, view) &&
+        !M3dView::getM3dViewFromModelEditor(destination, view))
+        return;
+    fIsolated = view.viewSelected();
+    fChildren = view.showViewSelectedChildren(nullptr);
+    for (unsigned int i = 0; fIsolated && i < view.numViewSelectedObjects(); ++i)
+    {
+        MStringArray names;
+        if (view.viewSelectedObject(i, names))
+            for (unsigned int j = 0; j < names.length(); ++j)
+                fIncluded.add(names[j]);
+    }
+#else
+    (void) frameContext;
+#endif
+}
+
+bool ViewFilter::shows(const MDagPath& path) const
+{
+    if (!fIsolated)
+        return true;
+    for (unsigned int i = 0; i < fIncluded.length(); ++i)
+    {
+        MDagPath member;
+        if (!fIncluded.getDagPath(i, member))
+            continue;
+        MDagPath ancestor = path;
+        while (ancestor.length() > 0)
+        {
+            // With "show children" off only the selected node itself is drawn,
+            // so an ancestor selection must not count as shown.
+            if (!fChildren && ancestor.length() < path.length())
+                break;
+            if (ancestor == member)
+                return true;
+            ancestor.pop();
+        }
+    }
+    return false;
+}
+
+const ViewFilter& viewFilter(const MHWRender::MFrameContext& frameContext)
+{
+    // Nothing installed yet: every view counts as showing everything.
+    static const ViewFilter kEverythingShown;
+    if (!gState)
+        return kEverythingShown;
+
+    MString destination;
+    if (frameContext.renderingDestination(destination) != MFrameContext::k3dViewport)
+        return kEverythingShown;
+
+    auto& slot = gState->viewFilters[destination.asChar()];
+    if (!slot)
+        slot = std::make_unique<ViewFilter>(frameContext);
+    return *slot;
+}
 
 void install()
 {

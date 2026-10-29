@@ -14,6 +14,8 @@
  *     bodies, isolate-select changes — resolved once per event instead of once
  *     per node, and one shared stock shader per colour (implemented in
  *     rigid_body_display.cpp);
+ *   - the per-viewport isolate-select state (ViewFilter / viewFilter), resolved
+ *     once per viewport and shared by every joint drawn in it;
  *   - which selected joint owns the fallback outline of a shared hidden body
  *     (highlightOwner).
  *
@@ -26,6 +28,7 @@
 #include <maya/MColor.h>
 #include <maya/MDagPath.h>
 #include <maya/MFloatVector.h>
+#include <maya/MFrameContext.h>
 #include <maya/MGeometry.h>
 #include <maya/MGeometryRequirements.h>
 #include <maya/MHWGeometry.h>
@@ -33,6 +36,7 @@
 #include <maya/MObject.h>
 #include <maya/MObjectHandle.h>
 #include <maya/MPoint.h>
+#include <maya/MSelectionList.h>
 #include <maya/MShaderManager.h>
 #include <maya/MTypes.h>
 #include <maya/MUIDrawManager.h>
@@ -147,6 +151,35 @@ MColor selectionColor(const MDagPath& path);
 // Roles of a body shape across the selected joints: bit 0 = body A, bit 1 =
 // body B (drawRoleColliderWire draws them).
 unsigned int bodyRoles(const MObject& bodyShape);
+
+// ===========================================================================
+// Isolate-select state of one viewport
+// ===========================================================================
+// Resolved once per viewport and shared by every joint drawn in it — the query
+// builds an MSelectionList of the isolate-selected objects, which a scene full
+// of joints would otherwise repeat per node.  Maya < 2026 cannot query it
+// through M3dView, so there every view counts as showing everything and only
+// hidden bodies get a fallback outline.
+class ViewFilter
+{
+  public:
+    ViewFilter() = default;
+    explicit ViewFilter(const MHWRender::MFrameContext& frameContext);
+    // False only when the view isolates something and `path` is neither
+    // isolated nor one of its ancestors (respecting "show children").
+    [[nodiscard]] bool shows(const MDagPath& path) const;
+
+  private:
+    bool fIsolated = false;
+    bool fChildren = true;
+    MSelectionList fIncluded;
+};
+
+// The ViewFilter of `frameContext`'s viewport, resolved on first use after the
+// last selection or model-editor change (the callback that keeps it current is
+// installed by install()).  The reference stays valid until the next such
+// change.
+const ViewFilter& viewFilter(const MHWRender::MFrameContext& frameContext);
 
 // Shared stock shaders with this colour (owned here): lit surface for shaded
 // hubs, flat colour for wireframe hubs, dashed flat colour for inactive hubs.
