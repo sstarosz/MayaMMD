@@ -31,6 +31,21 @@ _NODE_TYPE = "pmxRigidBodyNode"
 # ---------------------------------------------------------------------------
 
 
+def test_pmx_import_leaves_no_selection(pmx_data: PmxModel, maya_pmx_data):
+    """The import must not leave anything selected.
+
+    ``createNode``, ``shadingNode``, ``parent``, ``ikHandle`` and
+    ``skinCluster`` select what they touch; the builders neutralise that
+    (``skipSelect`` / ``MDagModifier`` / local restore), so an import must not
+    end with e.g. every rigid-body joint selected.  The runner builds the
+    scene right before this test, so the build is the last scene operation.
+    """
+    selected = cmds.ls(selection=True, long=True) or []
+    assert_eq(selected, [], "import left a selection")
+    print("PASS: import leaves the selection empty")
+    return True
+
+
 def test_pmx_root_creation(pmx_data: PmxModel, maya_pmx_data):
     """Test that PMX root node is created.
 
@@ -708,6 +723,7 @@ def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
 # ---------------------------------------------------------------------------
 
 _TESTS = [
+    ("Import Leaves No Selection", test_pmx_import_leaves_no_selection),
     ("Root Creation", test_pmx_root_creation),
     ("Geometry Group Creation", test_pmx_geometry_group_creation),
     ("Mesh Creation", test_pmx_mesh_creation),

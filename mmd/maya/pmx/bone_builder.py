@@ -36,6 +36,12 @@ except ImportError:
     cmds = None  # type: ignore
 
 from mmd.maya.pmx_naming_manager import PMXNamingManager
+from mmd.maya.scene_edit_utils import (
+    create_node,
+    keep_selection,
+    reparent_preserving_local,
+    reparent_preserving_world,
+)
 
 log = logging.getLogger(__name__)
 
@@ -604,7 +610,7 @@ def _pass2_build_hierarchy(
             parent_name = parent_joint_fn.fullPathName()
 
             try:
-                cmds.parent(joint_name, parent_name, absolute=True)
+                reparent_preserving_world(joint_name, parent_name)
             except Exception as e:
                 log.warning(
                     "Failed to parent joint %d to parent %d: %s",
@@ -672,7 +678,7 @@ def _pass3_create_ik_handles(
 
             solver_name = name_registry.get_ik_solver_name(bone_idx)
             log.debug("Creating CCD IK solver node: %s", solver_name)
-            cmds.createNode("ccdIKSolverNode", name=solver_name)
+            create_node("ccdIKSolverNode", name=solver_name)
 
             # Set solver params before ikHandle() — it triggers the first solve
             ik_data = bone.ik
@@ -681,12 +687,13 @@ def _pass3_create_ik_handles(
                 cmds.setAttr(f"{solver_name}.limitRadian", ik_data.limitRadian)
 
             ik_handle_name = name_registry.get_ik_handle_name(bone_idx)
-            ik_result = cmds.ikHandle(
-                startJoint=start_joint_name,
-                endEffector=target_joint_name,
-                solver=solver_name,
-                name=ik_handle_name,
-            )
+            with keep_selection():
+                ik_result = cmds.ikHandle(
+                    startJoint=start_joint_name,
+                    endEffector=target_joint_name,
+                    solver=solver_name,
+                    name=ik_handle_name,
+                )
 
             if ik_result:
                 ik_handle = ik_result[0]
@@ -726,7 +733,7 @@ def _pass3_create_ik_handles(
                 # This keeps the handle organized with its IK bone and avoids
                 # nesting inside the skeleton hierarchy of other joints.
                 try:
-                    cmds.parent(ik_handle, ik_joint_long_name, absolute=True)
+                    reparent_preserving_world(ik_handle, ik_joint_long_name)
                 except Exception as e:
                     log.warning(
                         "Failed to parent IK handle %s to %s: %s",
@@ -816,7 +823,7 @@ def _pass4_create_inheritance_constraints(
                 md_name = name_registry.get_inherit_rotation_multiplydivide_name(
                     bone_idx
                 )
-                md_node = cmds.createNode("multiplyDivide", name=md_name)
+                md_node = create_node("multiplyDivide", name=md_name)
                 cmds.setAttr(f"{md_node}.operation", 1)  # 1 = multiply
                 cmds.setAttr(f"{md_node}.input2X", influence)
                 cmds.setAttr(f"{md_node}.input2Y", influence)
@@ -827,7 +834,7 @@ def _pass4_create_inheritance_constraints(
 
                 # Create hidden controller in the DAG hierarchy using naming manager
                 ctrl_name = name_registry.get_inherit_rotation_controller_name(bone_idx)
-                ctrl = cmds.createNode("transform", name=ctrl_name)
+                ctrl = create_node("transform", name=ctrl_name)
 
                 # Copy the child joint's local translate so the controller sits
                 # at the same position relative to the shared parent.
@@ -869,7 +876,7 @@ def _pass4_create_inheritance_constraints(
                     child_joint_path, parent=True, fullPath=True
                 )
                 if child_parent:
-                    cmds.parent(ctrl, child_parent[0], relative=True)
+                    reparent_preserving_local(ctrl, child_parent[0])
 
                 # Connect multiplyDivide → controller.rotate (controller is driven, child is not)
                 cmds.connectAttr(f"{md_node}.outputX", f"{ctrl}.rotateX")
@@ -879,7 +886,7 @@ def _pass4_create_inheritance_constraints(
                 # Parent child under controller — child inherits rotation through hierarchy.
                 # jointOrient is preserved:
                 #   new_jointOrient = P^-1 × (P × JO) = JO
-                cmds.parent(child_joint_path, ctrl, absolute=True)
+                reparent_preserving_world(child_joint_path, ctrl)
             elif constraint_type == ConstraintType.POINT:
                 cmds.pointConstraint(
                     parent_joint_path,

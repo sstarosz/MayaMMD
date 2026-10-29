@@ -250,6 +250,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Import no longer leaves a selection behind** — `createNode`,
+  `shadingNode`, `parent`, `ikHandle` and `skinCluster` all select what they
+  touch, so an import ended with the last-built batch (with the new per-joint
+  nodes: every rigid-body joint) selected, replacing whatever the user had
+  selected.  The builders now create nodes with `skipSelect`, move the
+  bodies/joints into their sub-groups through `MDagModifier`, and restore the
+  selection only around the commands that have no non-selecting form (see
+  `mmd/maya/scene_edit_utils.py`).
 - **Rigid bodies could stay undrawn after isolate select** (e.g. select a
   joint, Ctrl+1, deselect, Ctrl+1) until something refreshed them, such as
   selecting the model root.  Every model-editor change (isolate on or off,

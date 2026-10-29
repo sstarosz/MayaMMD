@@ -13,6 +13,7 @@ from mmd.maya.pmx.bone_builder import create_bones_from_pmx_bones
 from mmd.maya.pmx.morph_builder import create_blendshapes_from_pmx_data
 from mmd.maya.pmx.rigid_body_builder import create_rigid_bodies_from_pmx_data
 from mmd.maya.pmx_naming_manager import PMXNamingManager
+from mmd.maya.scene_edit_utils import create_shading_node, keep_selection
 
 log = logging.getLogger(__name__)
 
@@ -207,11 +208,11 @@ def create_materials_from_pmx_materials(
         full_tex_path = os.path.join(pmx_data.absolute_path, tex_path)
         if os.path.isfile(full_tex_path):
             texture_name = name_registry.get_texture_name(tex_idx)
-            file_node = cmds.shadingNode(
+            file_node = create_shading_node(
                 "file", asTexture=True, isColorManaged=True, name=texture_name
             )
             place2d_node_name = name_registry.get_place2d_name(tex_idx)
-            place2d_node = cmds.shadingNode(
+            place2d_node = create_shading_node(
                 "place2dTexture", asUtility=True, name=place2d_node_name
             )
             cmds.setAttr(f"{file_node}.fileTextureName", full_tex_path, type="string")
@@ -286,7 +287,7 @@ def create_materials_from_pmx_materials(
     for idx, pmx_mat in enumerate(pmx_data.materials):
         mat_name = name_registry.get_material_name(idx)
         log.debug("Creating material: %s", mat_name)
-        shading_node = cmds.shadingNode(
+        shading_node = create_shading_node(
             "openPBRSurface", asShader=True, name=f"{mat_name}"
         )
         shading_node = cmds.ls(shading_node)[0]
@@ -488,12 +489,13 @@ def create_skin_cluster_for_mesh(
         "Creating skin cluster for mesh %s with joints: %s", mesh_name, joint_names
     )
     try:
-        result = cmds.skinCluster(
-            joint_names,
-            mesh_name,
-            maximumInfluences=4,
-            toSelectedBones=True,
-        )
+        with keep_selection():
+            result = cmds.skinCluster(
+                joint_names,
+                mesh_name,
+                maximumInfluences=4,
+                toSelectedBones=True,
+            )
 
         if not result:
             log.error("Failed to create skin cluster")
@@ -674,27 +676,11 @@ def build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
     """
     Builds the PMX scene in Maya from the given PMX data.
 
-    The user's selection is left as it was: Maya commands used while building
-    (``parent``, ``createNode``) select what they touch, which would otherwise
-    leave e.g. every rigid-body joint selected after the import.
-
     Args:
         pmx_data (PmxModel): The PMX model data.
     Returns:
         MayaPmxData: The Maya PMX data containing created objects.
     """
-    selection = cmds.ls(selection=True, long=True) or []
-    try:
-        return _build_pmx_scene(pmx_data)
-    finally:
-        if selection:
-            cmds.select(selection, replace=True)
-        else:
-            cmds.select(clear=True)
-
-
-def _build_pmx_scene(pmx_data: PmxModel) -> MayaPmxData:
-    """The body of :func:`build_pmx_scene`."""
     # TODO: Pre-process PMX data to detect naming issues or any other problems which can
     # cause issues during scene building in Maya.
     # TODO: pre-process should also detect duplicated names and rename them accordingly

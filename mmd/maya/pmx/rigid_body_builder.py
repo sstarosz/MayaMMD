@@ -26,6 +26,7 @@ from maya import cmds
 
 from mmd.core.data_types import PhysicsMode, PmxModel, ShapeType
 from mmd.maya.pmx_naming_manager import PMXNamingManager
+from mmd.maya.scene_edit_utils import create_node, reparent_preserving_local
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ def _create_rigid_bodies_group(
     """
     parent = om.MFnDependencyNode(root_transform_obj).name()
     return _lock_transform(
-        cmds.createNode(
+        create_node(
             "transform", name=name_registry.get_rigid_bodies_group_name(), parent=parent
         )
     )
@@ -88,7 +89,7 @@ def _create_subgroup(parent_group: str, name: str) -> str:
     offset between that group and the guides would displace every collider
     in the viewport.
     """
-    return _lock_transform(cmds.createNode("transform", name=name, parent=parent_group))
+    return _lock_transform(create_node("transform", name=name, parent=parent_group))
 
 
 def _children(group: str) -> set[str]:
@@ -102,17 +103,19 @@ def _move_new_children(parent_group: str, previous: set[str], destination: str) 
     The native commands create every per-body guide / per-joint transform
     directly under their parent group (``{model}_RigidBodies``); the Outliner
     organisation (``{model}_Bodies`` / ``{model}_Joints``) is applied here, in
-    one batched ``parent`` call per batch.  ``destination`` is an IDENTITY
-    child of ``parent_group``, so the move is done with ``relative=True`` —
-    every LOCAL value (the guides' driven translate/rotate, the joints'
-    world-frame-compensated transform) stays untouched, and connections (guide
-    driving, bodyShapes/jointShapes wiring) survive reparenting.
+    one batched reparent per group.  ``destination`` is an IDENTITY child of
+    ``parent_group``, so the move preserves LOCAL values — the guides' driven
+    translate/rotate and the joints' world-frame-compensated transform stay
+    untouched, and connections (guide driving, bodyShapes/jointShapes wiring)
+    survive reparenting.  The reparent goes through ``MDagModifier`` because
+    ``cmds.parent`` would select the whole batch, leaving every joint selected
+    after the import.
     """
     created = sorted(_children(parent_group) - previous)
     if not created:
         return
     try:
-        cmds.parent(created, destination, relative=True)
+        reparent_preserving_local(created, destination)
     except Exception as exc:  # pragma: no cover - Maya-side failure path
         log.warning(
             "Could not move %d nodes into %s: %s", len(created), destination, exc
@@ -135,7 +138,7 @@ def _create_rigid_body_solver(
     connecting time before the arrays are populated is safe.
     """
     solver_name = name_registry.get_rigid_body_solver_name()
-    node = cmds.createNode("pmxRigidBodyNode", name=solver_name, parent=parent_group)
+    node = create_node("pmxRigidBodyNode", name=solver_name, parent=parent_group)
     try:
         cmds.connectAttr("time1.outTime", f"{node}.time")
     except Exception as e:
