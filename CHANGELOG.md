@@ -73,7 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     sphere, so it stays visible and pickable.  A joint is bounded around its
     live hub, so Frame Selected (F) works on it;
   - a joint **picked directly** (its hub or transform) shows its body links
-    (A violet rings, B gold diamonds), its connected colliders' outlines
+    (A violet, B gold; body centres are small diamonds, attachments larger
+    rings), its connected colliders' outlines
     (striped violet/gold for a
     body that is A for one selected joint and B for another), and in the
     Ranges draw mode its **motion ranges**: real-size translation regions and
@@ -131,6 +132,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A large forward jump in time now rebuilds instead of stepping** — one
+  `step()` can carry the simulation at most `kMaxStepTime` = 0.5 s (exposed as
+  `RigidBodySimulation::maxStepSpan()`; the sub-step budget is sized so the
+  whole span is simulated exactly). Scrubbing forward further used to step
+  anyway, truncating the span and leaving every cloth/hair chain lagging behind
+  the skeleton: on `Endmin_Female.pmx`, jumping from frame 1 to 2620 showed real
+  joint separations up to 32 units (150 joints over 1), which read as broken
+  constraints. The world is now rebuilt for such a jump — bodies are re-pinned
+  to the current skeleton pose, so the landed frame is self-consistent (max 1.4
+  units, 6 joints over 1) and identical on re-evaluation. Frames at 24/30/60 fps
+  and multi-frame preview skips stay inside the span, so they are still
+  simulated rather than re-pinned.
+- **Selected-joint markers are no longer ambiguous** — the body centres were
+  drawn as the same shape as the attachments (for body B: two identical gold
+  diamonds, so a body's centre could be mistaken for a separated attachment).
+  Now every **body centre** is a small diamond and every **attachment** a
+  larger ring, for both bodies.
 - **Joint display refactor (no behavior change)** — the two geometry overrides
   now share their plumbing instead of duplicating it:
   - `rigid_body_display::fillMeshBuffers` fills a render item's vertex buffers

@@ -240,6 +240,14 @@ class RigidBodySimulation
     /// MMD physics tick — the adapter steps with this fixed dt.
     static constexpr double kFixedDt = 1.0 / 60.0;
 
+    /// The longest time span one step() can simulate: step() clamps dt to
+    /// kMaxStepTime, and Bullet takes at most kMaxSubSteps sub-steps of
+    /// kFixedDt — the two are sized to agree, so up to this span is simulated
+    /// exactly and beyond it the span is truncated (bodies lag the skeleton by
+    /// the remainder).  A caller that jumps further in time than this should
+    /// rebuild instead of stepping.
+    [[nodiscard]] static double maxStepSpan();
+
   private:
     /// Runtime body state: the (copied) input definition plus the scrub-back
     /// reset flag captured at initialize().  BodyDefinition already carries

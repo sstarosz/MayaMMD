@@ -32,7 +32,11 @@ namespace
 {
 // RigidBodySimulation stepping constants (see initialize()/step()).
 constexpr int kSolverIterations = 10;         // Bullet's default, as MMD uses
-constexpr int kMaxSubSteps = 8;               // max internal steps per step()
+// Sub-steps one step() may take.  Sized so a whole kMaxStepTime span is
+// simulated exactly (0.5 s / (1/60 s) = 30), which is what makes the adapter's
+// rebuild threshold (maxStepSpan) mean "the step would truncate here": a
+// jump-scan of a few frames still simulates, and only a real scrub rebuilds.
+constexpr int kMaxSubSteps = 32;
 constexpr double kMaxStepTime = 0.5;          // clamp for huge time jumps (scrub/tab)
 constexpr double kMinShapeSize = 1e-4;        // floor for shape sizes — 0 would make Bullet assert
 constexpr double kAnchorMoveDistEpsSq = 1e-6; // squared-distance threshold for anchor movement
@@ -431,6 +435,11 @@ void RigidBodySimulation::RigidBodySimulationImpl::step(double dt)
     }
     dt = std::clamp(dt, 0.0, kMaxStepTime); // guard against huge jumps / negative dt
     mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
+}
+
+double RigidBodySimulation::maxStepSpan()
+{
+    return std::min(kMaxStepTime, kMaxSubSteps * kFixedDt);
 }
 
 void RigidBodySimulation::RigidBodySimulationImpl::resetDynamicBodies()

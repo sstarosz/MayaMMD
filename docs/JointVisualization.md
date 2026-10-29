@@ -66,12 +66,15 @@ The two-colour hub alternates its wedges all the way round, like a beach
 ball, so both colours show from every direction: no part of the display
 changes meaning with the viewing angle.
 
-A joint is **inactive** when a body is missing (unconnected or deleted),
-both ends are the same body, a body is disabled, or both bodies follow
-their bones, so the constraint has nothing to move. The rule is
-`RigidBodySimulation::jointStatus`, the same check that decides which joints
-the simulation creates. The hub's form (hollow and dashed, in every display
-mode) tells it apart from a welded hub, not its colour.
+A joint is drawn **inactive** when a body is missing (unconnected or deleted),
+both ends are the same body, a body is disabled, or both bodies follow their
+bones. That is every answer of `RigidBodySimulation::jointStatus` except
+`eActive`, so the display and the solver agree on *why* a joint does nothing —
+but they do not draw the same line: the solver still **creates** the constraint
+for two bone-driven bodies (it exists in the world and moves nothing, so it can
+never be satisfied), while the display shows it hollow. The hub's form (hollow
+and dashed, in every display mode) tells it apart from a welded hub, not its
+colour.
 
 ### A hub that floats away from the model
 
@@ -104,12 +107,14 @@ Selecting a joint (its hub, or its transform) adds overlays:
   overlay a joint draws when it is selected through a parent group: selecting
   `{model}_Joints` would otherwise draw hundreds of overlays at once.
 - **Bodies**: lines from each body's centre to its own live attachment point.
-  Body A uses **violet** rings and body B uses **gold** diamonds. When the two
-  attachments coincide, which is normal for a satisfied joint, they share one
-  ring with a gold centre. The connected colliders are outlined in the same
-  colours, and a body that is A for one selected joint and B for another is
-  **striped violet and gold**. An inactive joint draws only **dashed** links
-  from its hub to the bodies it names, and no motion ranges.
+  Body A is drawn in **violet** and body B in **gold**, and the FORM tells the
+  two kinds of marker apart: every **body centre is a small diamond** (an
+  octahedron from any view) and every **attachment is a larger round ring**.
+  When the two attachments coincide, which is normal for a satisfied joint,
+  they share one ring with a gold centre. The connected colliders are outlined
+  in the same colours, and a body that is A for one selected joint and B for
+  another is **striped violet and gold**. An inactive joint draws only
+  **dashed** links from its hub to the bodies it names, and no motion ranges.
 - **Motion ranges** (Ranges draw mode), drawn at attachment A: translation in
   its frame, rotation on nested dials (below). Red, green and blue mean local
   **X, Y, Z**:
@@ -183,6 +188,28 @@ a joint or body attribute, or move a joint's transform: each body and joint
 input feeds its node's `solver` message plug. A joint's transform reaches it
 through the hidden `frameMatrix` input, which `pmxRigidBodyConstraint`
 connects to the transform's `worldMatrix`.
+
+## Jumping in time
+
+One solver step can carry the simulation at most
+`RigidBodySimulation::maxStepSpan()` = 0.5 s (the `kMaxStepTime` clamp; the
+sub-step budget is sized so the whole span is simulated exactly).
+Playback frames (24, 30 or 60 fps) and a multi-frame preview skip are well
+inside that, so they are genuinely simulated. A **larger jump forward** —
+scrubbing the timeline, loading a motion, jumping to a frame — cannot be
+simulated in one step, and stepping anyway would leave every chain lagging
+behind the skeleton by the remainder: cloth and hair trail visibly, and the
+joints show large attachment separations that look like broken constraints.
+Instead the solver **rebuilds** for such a jump: every dynamic body is
+re-pinned to the current skeleton pose, exactly as at the rest pose, so the
+frame you land on is self-consistent and identical to evaluating it twice.
+Rewinding always rebuilt for the same reason.
+
+A consequence worth knowing: because the rebuild is triggered by the
+*evaluation* time step, moving a joint's transform in a **script** and
+evaluating the solver with `cmds.dgeval` does not reposition the constraint in
+that same evaluation (the `worldMatrix` → `frameMatrix` dirty cycle only runs
+during DAG evaluation). Do the move, let the viewport update, then evaluate.
 
 ## Draw modes
 
@@ -271,8 +298,8 @@ without reframing. Values outside ±180° are reported as wrapped; the script
 never clamps or rewrites parameters.
 
 Two cases are worth knowing about: one uses a white cube for the required
-position of attachment B (the gold diamond is its actual position, and the
-dashed line measures the error), and the last is intentionally unsatisfiable
+position of attachment B (the gold ring is its actual position, and the dashed
+line measures the error), and the last is intentionally unsatisfiable
 because both bodies are animation-driven, so its joint is inactive (hollow,
 dashed hub).
 

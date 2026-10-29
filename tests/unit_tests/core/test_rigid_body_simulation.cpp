@@ -57,6 +57,27 @@ TEST_CASE("Hub radius follows the model's median link, clamped and scaled", "[jo
     REQUIRE(hubRadiusForLinks({0.5}) < hubRadiusForLinks({0.8}));
 }
 
+TEST_CASE("A step covers at most maxStepSpan of time", "[sim]")
+{
+    // The adapter chooses between stepping and rebuilding with this value: a
+    // longer span is truncated by step()'s clamp, leaving every chain lagging
+    // behind the skeleton.
+    const double span = RigidBodySimulation::maxStepSpan();
+    REQUIRE(span > RigidBodySimulation::kFixedDt);
+    // The sub-step budget is sized to simulate a whole span exactly, so the
+    // limit is the clamp and nothing inside it is truncated.
+    REQUIRE(span == Catch::Approx(0.5));
+    REQUIRE(span * 60.0 <= 32.0 + 1e-9);
+
+    // Normal playback (24, 30, 60 fps) and a multi-frame preview skip stay
+    // inside one step, so they are simulated rather than re-pinned.
+    REQUIRE(1.0 / 24.0 < span);
+    REQUIRE(1.0 / 60.0 < span);
+    REQUIRE(5.0 / 24.0 < span);
+    // A real scrub does not fit.
+    REQUIRE(2.0 > span);
+}
+
 namespace
 {
 

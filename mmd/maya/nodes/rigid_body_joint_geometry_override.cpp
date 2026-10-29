@@ -22,7 +22,6 @@
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGeometry.h>
 #include <maya/MHWGeometry.h>
-#include <maya/MHWGeometryUtilities.h>
 #include <maya/MMatrix.h>
 #include <maya/MNodeMessage.h>
 #include <maya/MPlug.h>
@@ -571,12 +570,16 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
     const MMatrix worldToLocal = localToWorld.inverse();
     const auto sizes = mmd::core::joint_display::guideSizes(fState.hubRadius);
 
-    // View-independent markers, sized from the hub: A is a ring in each axis
-    // plane (round from any view), B a wire octahedron (a diamond from any view).
-    const auto marker = [&](const MPoint& local, bool diamond, double radius)
-    { drawRings(drawManager, local, radius, diamond ? 4 : 24); };
+    // View-independent markers, sized from the hub: every BODY CENTRE is a
+    // small wire diamond (an octahedron from any view) and every ATTACHMENT a
+    // round ring, so a body's centre can never be mistaken for a separated
+    // attachment (they used to be identical diamonds for body B).
+    const auto bodyMark = [&](const MPoint& local)
+    { drawRings(drawManager, local, sizes.bodyMarker, 4); };
+    const auto attachmentMark = [&](const MPoint& local)
+    { drawRings(drawManager, local, sizes.attachmentMarker, 24); };
     const auto endpoint = [&](const MPoint& body, const MPoint& attachment, MColor color,
-                              bool diamond, bool showAttachment, float alpha)
+                              bool showAttachment, float alpha)
     {
         MPointArray line;
         line.append(body);
@@ -588,9 +591,9 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
         drawManager.setLineWidth(3.0f);
         drawManager.mesh(MHWRender::MUIDrawManager::kLines, line);
         drawManager.setLineWidth(2.5f);
-        marker(body, diamond, sizes.bodyMarker);
+        bodyMark(body);
         if (showAttachment)
-            marker(attachment, diamond, diamond ? sizes.bodyMarker : sizes.attachmentMarker);
+            attachmentMark(attachment);
     };
     // An inactive joint holds neither body: dashed links from its hub to the
     // bodies it names (whatever is connected), and no motion ranges.
@@ -613,7 +616,7 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
             drawManager.setLineStyle(MHWRender::MUIDrawManager::kDashed);
             drawManager.mesh(MHWRender::MUIDrawManager::kLines, line);
             drawManager.setLineStyle(MHWRender::MUIDrawManager::kSolid);
-            marker(body, end == 1, sizes.bodyMarker);
+            bodyMark(body);
         }
     };
     const double separation = ((fAttachmentA - fAttachmentB) * localToWorld).length();
@@ -626,8 +629,8 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
             inactiveLinks(alpha);
             return;
         }
-        endpoint(fLocalA, fAttachmentA, palette::kBodyA, false, true, alpha);
-        endpoint(fLocalB, fAttachmentB, palette::kBodyB, true, separate, alpha);
+        endpoint(fLocalA, fAttachmentA, palette::kBodyA, true, alpha);
+        endpoint(fLocalB, fAttachmentB, palette::kBodyB, separate, alpha);
         // Coincident endpoints use one ring-and-center mark, avoiding overlapping outlines.
         if (!separate)
         {

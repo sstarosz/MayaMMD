@@ -772,12 +772,19 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
 }
 
 // The world must be (re)built when its config differs from the current inputs,
-// or when time was scrubbed backwards (rebuild rather than re-simulate).
+// or when the time moved somewhere a step cannot carry it: backwards (rebuild
+// rather than re-simulate) or forwards past what one step() can simulate.
+// A forward jump beyond maxStepSpan() is under-simulated — every chain is left
+// lagging behind the skeleton by the remainder, which is the transient seen
+// after scrubbing the timeline (or loading a motion on the current frame).
+// Rebuilding re-pins the chains to the CURRENT skeleton pose instead, so a
+// jumped frame is self-consistent.
 [[nodiscard]] bool needsRebuild(const World& world, const Inputs& in, const MTime& now)
 {
     if (configChanged(world, in))
         return true;
-    return (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds) < 0.0;
+    const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
+    return dt < 0.0 || dt > RigidBodySimulation::maxStepSpan();
 }
 
 // Advance the simulation by the frame span when time moved, or by one fixed

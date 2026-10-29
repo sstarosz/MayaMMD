@@ -29,7 +29,6 @@
 #include <maya/MFn.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MGeometry.h>
-#include <maya/MHWGeometryUtilities.h>
 #include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MShaderManager.h>
