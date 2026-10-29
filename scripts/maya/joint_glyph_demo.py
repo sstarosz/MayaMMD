@@ -193,7 +193,16 @@ def _scalar(value):
 
 
 def _inactive_reason(joint):
-    """Why the joint constrains nothing (RigidBodySimulation::jointStatus), or None."""
+    """Why the joint constrains nothing (RigidBodySimulation::jointStatus), or None.
+
+    This mirrors the core rules (missing body, same body, disabled body, both
+    bodies bone-driven, in that order).  It is a deliberate second copy: the
+    explanation text must be produced inside Maya without calling the C++
+    core, so it is PINNED by the integration test
+    ``test_joint_gallery_effective_modes`` (tests/integration/maya/cmds/),
+    which asserts these explanations against real solver state.  Change both
+    together.
+    """
     bodies = [(cmds.listConnections(f"{joint}.jointBody{end}", s=True, d=False, plugs=True) or [""])[0]
               .rsplit(".", 1)[0] for end in "AB"]
     if not all(bodies):
@@ -213,7 +222,10 @@ def describe_joint(joint):
     Follows the viewport's freedom model (mmd/core/joint_display.hpp):
     limits compared at Bullet's float precision, angles wrapped to +/-180
     degrees, the measured Y angle held within +/-90 degrees, and stiffness on
-    a locked axis reported as having no effect.
+    a locked axis reported as having no effect.  Deliberate second copy — the
+    text must be produced inside Maya without the C++ core — pinned by the
+    integration test ``test_joint_gallery_effective_modes``; change both
+    together.
     """
     values = {key: cmds.getAttr(joint + ".joint" + key[0].upper() + key[1:])[0]
               for key in _LIMITS}

@@ -26,6 +26,9 @@
 #include <maya/MColor.h>
 #include <maya/MDagPath.h>
 #include <maya/MFloatVector.h>
+#include <maya/MGeometry.h>
+#include <maya/MGeometryRequirements.h>
+#include <maya/MHWGeometry.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MObjectHandle.h>
@@ -134,6 +137,13 @@ void uninstall();
 const std::vector<SelectedJoint>& selectedJoints();
 bool isSelectedJoint(const MObject& joint);
 
+// Maya's selection state of a DAG path: the lead object or an active one.
+bool isSelected(const MDagPath& path);
+
+// Maya's wireframe colour for the path, with palette::kSelectionFallback when
+// the colour would be too dark to see.
+MColor selectionColor(const MDagPath& path);
+
 // Roles of a body shape across the selected joints: bit 0 = body A, bit 1 =
 // body B (drawRoleColliderWire draws them).
 unsigned int bodyRoles(const MObject& bodyShape);
@@ -143,6 +153,26 @@ unsigned int bodyRoles(const MObject& bodyShape);
 MHWRender::MShaderInstance* solidShader(const MColor& color);
 MHWRender::MShaderInstance* wireShader(const MColor& color);
 MHWRender::MShaderInstance* dashedWireShader(const MColor& color);
+
+// ===========================================================================
+// Render-item plumbing (both geometry overrides)
+// ===========================================================================
+// Fills a render item's vertex buffers from xyz-interleaved positions and
+// normals, using whatever the item's shader declares and falling back to
+// position + normal + uv when the requirements come back empty.  A
+// solid-colour item needs no real UVs, so any texture semantic gets a zeroed
+// float2 stream.
+void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
+                     const std::vector<float>& positions, const std::vector<float>& normals,
+                     MHWRender::MGeometry& data);
+
+// A UV sphere at the origin with smooth normals and OUTWARD winding, appended
+// to the given streams.  The poles are single vertices, so no degenerate
+// triangles are produced.  Returns the index of its first vertex; when `lines`
+// is given it also receives the latitude/longitude wire over the same vertices.
+unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector<float>& positions,
+                              std::vector<float>& normals, std::vector<unsigned int>& indices,
+                              std::vector<unsigned int>* lines = nullptr);
 } // namespace mmd::maya::rigid_body_display
 
 namespace mmd::maya

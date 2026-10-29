@@ -37,7 +37,10 @@
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
 
+#include "joint_display.hpp"         // kFallbackHubRadius, guideSizes
 #include "rigid_body_simulation.hpp" // core JointDefinition
+
+class RigidBodyNode; // owning solver (SolverView::solver)
 
 // ===========================================================================
 // RigidBodyJoint
@@ -111,6 +114,35 @@ class RigidBodyJoint : public MPxLocatorNode
     // space) of a joint node; false when it has no parent transform.
     static bool readJointFrame(const MObject& node, const MMatrix& groupWorld,
                                mmd::core::Double3& translate, mmd::core::Double3& rotate);
+
+    // Everything the joint DISPLAY needs from the owning solver, resolved once
+    // (the node's bounding box and the viewport override both need it):
+    // the joint definition with its live body indices, whether the constraint
+    // is active, the live attachment / body frames, and the hub radius.
+    struct SolverView
+    {
+        // The owning solver node (null when the joint is not wired to one).
+        MObject solverObject;
+        RigidBodyNode* solver = nullptr;
+        // Limits + stiffness as the solver reads them; frameT/frameR are the
+        // joint's frame in the bodies' rest space.
+        mmd::core::RigidBodySimulation::JointDefinition definition;
+        // The solver would create this constraint (JointStatus::eActive).
+        bool active = false;
+        // The frames came from a live world (false before the first solve).
+        bool live = false;
+        MMatrix attachmentA; // world: the frame carried by body A
+        MMatrix attachmentB; // world: the frame carried by body B
+        MMatrix bodyAWorld;  // world: body A's centre/orientation
+        MMatrix bodyBWorld;
+        // The rendered hub radius: the model's hub size (or the fallback) x
+        // the user's jointDisplayScale.
+        double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
+    };
+    // Resolves `view` for `node`.  Reads the solverStep input first, so the
+    // world it queries is the current one (that connection is what evaluates
+    // the solver).
+    [[nodiscard]] static SolverView resolveSolverView(const MObject& node);
 
     // ------------------------------------------------------------------
     // Attributes — the PMX joint data.  The joint FRAME (position +

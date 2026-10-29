@@ -196,9 +196,13 @@ connects to the transform's `worldMatrix`.
 
 ## Size
 
-All hubs of a model share one size, derived from the median rest-pose
-distance between the bodies its joints link. It reads well at any model scale,
-and it never changes during the simulation. The guides are sized from the hub. `jointDisplayScale` on the model's
+All hubs of a model share one size, derived by
+`mmd::core::joint_display::hubRadiusForLinks` from the median rest-pose
+distance between the bodies its joints link: the median link ×
+`kHubLinkFraction`, clamped to `kHubMinRadius`…`kHubMaxRadius`, then scaled by
+`kHubSizeFactor` (the one taste constant). Being a median, a few unusually long
+or short joints cannot resize every hub. It reads well at any model scale, and
+it never changes during the simulation. The guides are sized from the hub. `jointDisplayScale` on the model's
 `pmxRigidBodyNode` ("Joint Hub Size" in the Attribute Editor) multiplies every
 hub in that model.
 
@@ -231,17 +235,70 @@ hub in that model.
 
 `scripts/maya/joint_glyph_demo.py` builds a gallery of 18 joints, each showing
 one case (line, plane, box, fixed offsets, free axes, angular limits, springs,
-rotated frames, body modes). It never modifies existing scene content:
+rotated frames, body modes). It never clears, replaces, or saves your scene:
 
-    exec(open(r"<repo>/scripts/maya/joint_glyph_demo.py").read())
+```python
+path = r"<repo>/scripts/maya/joint_glyph_demo.py"
+exec(compile(open(path, encoding="utf-8").read(), path, "exec"))
+```
+
+This adds a `MMD_ConstraintGallery#` group and opens a dedicated isolated
+viewport. Choose a case in the list to select its joint and frame its two
+bodies; Alt-drag to orbit, and **Show entire gallery** frames the whole layout
+and clears selection. Repeated runs create independent galleries — close the
+browser and delete the group when finished. Building a gallery is one undo
+chunk; selection changes and later stepping are separate actions.
+
+**Step simulation 30 frames** and **Reset simulation** change only the
+gallery's solver time, not your scene timeline. Gravity and collisions are
+disabled so the examples stay readable. Fixed-offset targets start
+unsatisfied and move toward their target when stepped.
+
+The 18 cases are all PMX 2.0 Spring6Dof joints (zero stiffness behaves as a
+plain 6DOF joint): line/plane/box translation regions, fixed offsets, free and
+mixed axes, angular limits and offsets, linear/angular springs, a rotated
+frame, and dynamic/dynamic and hybrid body pairs. Box, sphere and capsule
+colliders cycle through the examples — a representative set, not every numeric
+configuration.
+
+The explanation panel reads the selected case's current attributes and reports
+LOCKED / LIMITED / FREE with angles in degrees, by the same rules as the
+viewport: limits compared at Bullet's float precision, a Y range past ±90°
+marked as reaching only ±90°, stiffness on a locked axis marked as having no
+effect, and a joint that constrains nothing reported as INACTIVE with the
+reason. Use **Refresh parameter explanation after editing** to update it
+without reframing. Values outside ±180° are reported as wrapped; the script
+never clamps or rewrites parameters.
+
+Two cases are worth knowing about: one uses a white cube for the required
+position of attachment B (the gold diamond is its actual position, and the
+dashed line measures the error), and the last is intentionally unsatisfiable
+because both bodies are animation-driven, so its joint is inactive (hollow,
+dashed hub).
+
+For scripting without the browser:
+
+```python
+import runpy
+api = runpy.run_path(path, run_name="gallery_library")
+gallery = api["build"](show_ui=False)
+api["inspect"](gallery, 8)  # zero-based: angular limits
+api["step"](gallery, 30)
+api["reset"](gallery)
+```
+
+`tests/integration/maya/cmds/test_pmx_rigid_body_constraint_cmd_integration.py`
+builds and steps the gallery in Maya standalone. The browser's rendered
+appearance still needs interactive verification.
 
 ## Implementation map
 
 | File | Role |
 | ---- | ---- |
-| `mmd/core/joint_display.hpp` | the Maya-free display model: the freedom model (per-axis kinds, effective springs, constraint angles), hub-relative sizes, and the motion-range guide geometry as line segments (unit-tested) |
+| `mmd/core/joint_display.hpp` | the Maya-free display model: the freedom model (per-axis kinds, effective springs, constraint angles, the `Freedom` summary the hub colour encodes), the hub-size policy (`hubRadiusForLinks`, unit-tested), hub-relative sizes, and the motion-range guide geometry as line segments (unit-tested) |
 | `mmd/core/rigid_body_simulation.hpp` | `jointStatus`: whether a joint constrains anything (inactive hubs); `applyShapeSize`: PMX shape_size mapped onto a BodyDefinition |
-| `mmd/maya/nodes/rigid_body_display.*` | everything both overrides share: the palette (every colour, one channel per hue), collider outlines and the A/B role wire, the lit stock shader (OpenPBR on 2026+, Blinn before), selection and isolate-select events handled once per session, shared shaders, and which selected joint outlines a shared hidden body |
+| `mmd/maya/nodes/rigid_body_display.*` | everything both overrides share: the palette (every colour, one channel per hue), collider outlines and the A/B role wire, the lit stock shader (OpenPBR on 2026+, Blinn before), selection and isolate-select events handled once per session, shared shaders, which selected joint outlines a shared hidden body, the render-item vertex-buffer filling (`fillMeshBuffers`) and the UV-sphere builder (`appendSphereMesh`) |
+| `mmd/maya/nodes/rigid_body_joint.hpp` | the joint node; `resolveSolverView` resolves the owning solver, body indices, live attachment frames and hub radius ONCE for both the bounding box and the override |
 | `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override: the hub mesh (triangles and wire) and the joint-specific drawing on top of the shared display module |
 
 Headless tests cannot show viewport output. After changing the display, check

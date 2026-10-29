@@ -81,93 +81,7 @@ struct Mesh
     std::vector<float> normals;   // xyz interleaved
     std::vector<unsigned int> indices;
     std::vector<unsigned int> lines;
-
-    // Append one vertex, returning its index.
-    unsigned int vertex(const MPoint& p, const MVector& n)
-    {
-        const unsigned int i = static_cast<unsigned int>(positions.size() / 3);
-        positions.insert(positions.end(), {static_cast<float>(p.x), static_cast<float>(p.y),
-                                           static_cast<float>(p.z)});
-        normals.insert(normals.end(), {static_cast<float>(n.x), static_cast<float>(n.y),
-                                       static_cast<float>(n.z)});
-        return i;
-    }
-    void tri(unsigned int a, unsigned int b, unsigned int c)
-    {
-        indices.insert(indices.end(), {a, b, c});
-    }
-    void line(unsigned int a, unsigned int b) { lines.insert(lines.end(), {a, b}); }
-
-    // A UV sphere with smooth normals; its wire is the latitude and longitude
-    // lines.  Winding: outward, so back-face culling shows its outside.
-    void appendSphere(const MPoint& center, double radius, int slices, int stacks)
-    {
-        if (radius <= 0.0 || slices < 3 || stacks < 2)
-            return;
-
-        // Interior rings; the poles are single vertices, so the caps have no
-        // degenerate (zero-area) triangles.
-        const auto ringVertex = [&](int i, int j)
-        {
-            const double phi = M_PI * i / stacks;
-            const double y = std::cos(phi);
-            const double ringR = std::sin(phi);
-            const double theta = 2.0 * M_PI * j / slices;
-            const MVector dir(ringR * std::cos(theta), y, ringR * std::sin(theta));
-            return vertex(center + dir * radius, dir);
-        };
-
-        const unsigned int top = ringVertex(0, 0);         // +Y pole
-        const unsigned int bottom = ringVertex(stacks, 0); // -Y pole
-        std::vector<std::vector<unsigned int>> rows(static_cast<std::size_t>(stacks) - 1);
-        for (int i = 1; i < stacks; ++i)
-        {
-            std::vector<unsigned int>& row = rows[static_cast<std::size_t>(i) - 1];
-            row.reserve(static_cast<std::size_t>(slices) + 1);
-            for (int j = 0; j <= slices; ++j)
-                row.push_back(ringVertex(i, j));
-        }
-
-        for (int j = 0; j < slices; ++j)
-        {
-            const auto col = static_cast<std::size_t>(j);
-            tri(top, rows[0][col + 1], rows[0][col]);
-            const std::vector<unsigned int>& last = rows.back();
-            tri(bottom, last[col], last[col + 1]);
-        }
-        // Stitch the rows (each `slices + 1` vertices, the last repeating the
-        // first position) into quads.  Rows advance the way a UV sphere's rows
-        // do (+Y pole downwards on the outer side), so these face outward.
-        for (std::size_t i = 0; i + 1 < rows.size(); ++i)
-        {
-            for (int j = 0; j < slices; ++j)
-            {
-                const auto col = static_cast<std::size_t>(j);
-                const unsigned int a = rows[i][col];
-                const unsigned int d = rows[i][col + 1];
-                const unsigned int b = rows[i + 1][col];
-                const unsigned int c = rows[i + 1][col + 1];
-                tri(a, d, b);
-                tri(b, d, c);
-            }
-        }
-
-        // Wire: every latitude ring, and every meridian from pole to pole.
-        for (int j = 0; j < slices; ++j)
-        {
-            const auto col = static_cast<std::size_t>(j);
-            line(top, rows[0][col]);
-            for (std::size_t i = 0; i < rows.size(); ++i)
-            {
-                line(rows[i][col], rows[i][col + 1]);
-                if (i + 1 < rows.size())
-                    line(rows[i][col], rows[i + 1][col]);
-            }
-            line(rows.back()[col], bottom);
-        }
-    }
 };
-
 // The hub at UNIT radius in its attachment-A frame, split into the
 // alternating wedges of kHubItems (one index list per item).  It is the same
 // for every joint, so it is built once; populateGeometry scales it by the
@@ -185,7 +99,9 @@ const Hub& unitHub()
         // A compact pickable hub at attachment A.  Springs and limits are
         // drawn per axis only for selected joints (drawMotionRanges): a single
         // marker here could not say WHICH axis is sprung.
-        out.mesh.appendSphere(MPoint::origin, 1.0, kHubWedges, 6);
+        mmd::maya::rigid_body_display::appendSphereMesh(1.0, kHubWedges, 6, out.mesh.positions,
+                                                        out.mesh.normals, out.mesh.indices,
+                                                        &out.mesh.lines);
 
         // A primitive belongs to an even wedge when its centroid's azimuth
         // about the sphere's axis falls in one: wedges alternate all around
@@ -228,22 +144,6 @@ const Hub& unitHub()
 [[nodiscard]] MPoint toPoint(const mmd::core::Double3& d)
 {
     return MPoint(d.x, d.y, d.z);
-}
-
-// Fill one vertex buffer (`dimension` floats per vertex) with `numVerts`
-// elements.  NOTE: acquire()'s size is the ELEMENT count, not bytes.
-void fillVertexBuffer(MVertexBuffer* buffer, const std::vector<float>& data, unsigned int numVerts,
-                      int dimension, const MVertexBufferDescriptor& desc)
-{
-    if (buffer == nullptr || numVerts == 0 || data.size() < numVerts * dimension)
-        return;
-    if (desc.dataType() != MGeometry::kFloat || desc.dimension() != dimension)
-        return;
-    void* ptr = buffer->acquire(numVerts, /*writeOnly=*/true);
-    if (ptr == nullptr)
-        return;
-    std::memcpy(ptr, data.data(), numVerts * dimension * sizeof(float));
-    buffer->commit(ptr);
 }
 
 // Whole-joint summary for the unselected state display: which kinds of
@@ -459,7 +359,8 @@ void RigidBodyJointGeometryOverride::updateDG()
 
     // The bodies' CURRENT poses and attachment frames come from the owning
     // solver (world space; mapped to the node's LOCAL space in
-    // updateRenderItems()).
+    // updateRenderItems()).  resolveSolverView also evaluates the solver, so
+    // the world it reports is the current one.
     fState.hasAttachments = false;
     fState.active = false;
     for (auto& outline : fBodyOutlines)
@@ -468,46 +369,24 @@ void RigidBodyJointGeometryOverride::updateDG()
         outline.candidates.clear();
     }
     fSolver = MObject::kNullObj;
-    fState.modelHubRadius = 0.0;
-    fState.hubScale = 1.0;
-    MPlugArray solverDestinations;
-    if (!fPlugs.solver.isNull())
-        // The command registers joint.solver -> solver.jointShapes[index].
-        // The solver is a DESTINATION of this message, not its source.
-        fPlugs.solver.connectedTo(solverDestinations, false, true);
     // "picked" = the joint itself is selected (not just one of its ancestors),
     // which is what the overlay ownership rules key off.
     fState.picked = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
-    if (solverDestinations.length() > 0)
+    const RigidBodyJoint::SolverView view = RigidBodyJoint::resolveSolverView(fJoint);
+    if (view.solver != nullptr)
     {
-        fSolver = solverDestinations[0].node();
-        // solver.outStep -> solverStep: reading it evaluates the solver for
-        // the current time before its world is queried below.
-        if (!fPlugs.solverStep.isNull())
-            fPlugs.solverStep.asDouble();
-
-        MFnDependencyNode solverFn(fSolver);
-        if (auto* node = dynamic_cast<RigidBodyNode*>(solverFn.userNode()))
-        {
-            def.bodyA = node->bodyIndex(bodyShapes[0]);
-            def.bodyB = node->bodyIndex(bodyShapes[1]);
-            fState.active =
-                node->jointStatus(def) == mmd::core::RigidBodySimulation::JointStatus::eActive;
-            MMatrix bodyMatrixA, bodyMatrixB;
-            fState.hasAttachments =
-                RigidBodyJoint::readJointFrame(fJoint, RigidBodyNode::groupWorldMatrix(fSolver),
-                                               def.frameT, def.frameR) &&
-                node->jointViewportFrames(def, bodyMatrixA, bodyMatrixB, fState.attachmentAWorld,
-                                          fState.attachmentBWorld);
-            fState.bodyAWorld = MPoint::origin * bodyMatrixA;
-            fState.bodyBWorld = MPoint::origin * bodyMatrixB;
-            fState.modelHubRadius = node->jointHubRadius();
-        }
-
-        // The hub size multiplier lives on the solver (one knob per model).
-        const MPlug scalePlug(fSolver, RigidBodyNode::aJointDisplayScale);
-        if (!scalePlug.isNull())
-            fState.hubScale = std::max(0.05, scalePlug.asDouble());
+        fSolver = view.solverObject;
+        def.bodyA = view.definition.bodyA;
+        def.bodyB = view.definition.bodyB;
+        def.frameT = view.definition.frameT;
+        def.frameR = view.definition.frameR;
+        fState.active = view.active;
+        fState.hasAttachments = view.live;
+        fState.attachmentAWorld = view.attachmentA;
+        fState.attachmentBWorld = view.attachmentB;
+        fState.bodyAWorld = MPoint::origin * view.bodyAWorld;
+        fState.bodyBWorld = MPoint::origin * view.bodyBWorld;
+        fState.hubRadius = view.hubRadius;
     }
 
     // Selected joints only: cache the connected colliders (settings, DAG pose
@@ -550,69 +429,34 @@ void RigidBodyJointGeometryOverride::updateDG()
     }
     updateOutlineWatches();
     classifyState();
-    deriveSizes();
 }
 
-// Same freedom model as the selected motion guides (joint_display.hpp);
-// a joint that constrains nothing has no freedom to show.
+// The hub's colour channel is the core freedom model (joint_display.hpp), so
+// the summary and the selected motion guides can never disagree.
 void RigidBodyJointGeometryOverride::classifyState()
 {
     if (!fState.active)
     {
-        fState.state = kStateInactive;
+        fState.freedom = {};
         return;
     }
-    const Freedom freedom = summarize(mmd::core::joint_display::describe(fState.definition));
-    fState.state = freedom.translates
-                       ? (freedom.rotates ? kStateRotatesTranslates : kStateTranslates)
-                       : (freedom.rotates ? kStateRotates : kStateWelded);
-}
-
-// Every joint of a model shares one hub size, derived by the solver from the
-// model's rest poses (RigidBodyNode's modelHubRadius), so the hubs look alike
-// and never change with the simulation.  The solver's jointDisplayScale
-// stays live.
-void RigidBodyJointGeometryOverride::deriveSizes()
-{
-    const double base = fState.modelHubRadius > 0.0 ? fState.modelHubRadius
-                                                    : mmd::core::joint_display::kFallbackHubRadius;
-    fState.hubRadius = base * fState.hubScale;
+    fState.freedom =
+        mmd::core::joint_display::summarize(mmd::core::joint_display::describe(fState.definition));
 }
 
 void RigidBodyJointGeometryOverride::stateColors(MColor& primary, MColor& secondary) const
 {
-    switch (fState.state)
+    if (!fState.active)
     {
-    case kStateRotates:
-        primary = secondary = palette::kRotates;
-        break;
-    case kStateTranslates:
-        primary = secondary = palette::kTranslates;
-        break;
-    case kStateRotatesTranslates:
-        primary = palette::kRotates;
-        secondary = palette::kTranslates;
-        break;
-    case kStateInactive:
         primary = secondary = palette::kInactive;
-        break;
-    default:
-        primary = secondary = palette::kWelded;
-        break;
+        return;
     }
-}
-
-bool RigidBodyJointGeometryOverride::isSelected(const MDagPath& path)
-{
-    const MHWRender::DisplayStatus status = MHWRender::MGeometryUtilities::displayStatus(path);
-    return status == MHWRender::kLead || status == MHWRender::kActive;
-}
-
-MColor RigidBodyJointGeometryOverride::selectionColor(const MDagPath& path)
-{
-    const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
-    // Guard: a near-black selection colour would hide the wire.
-    return sel.r + sel.g + sel.b < 0.01f ? palette::kSelectionFallback : sel;
+    primary = fState.freedom.rotates      ? palette::kRotates
+              : fState.freedom.translates ? palette::kTranslates
+                                          : palette::kWelded;
+    // Both hues only for a joint that does both; the wedges alternate them.
+    secondary =
+        fState.freedom.rotates && fState.freedom.translates ? palette::kTranslates : primary;
 }
 
 void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
@@ -645,7 +489,7 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
     stateColors(primary, secondary);
     // An inactive hub is hollow: no solid, only its dashed wire, in every
     // display mode (so it stays visible and pickable while shaded).
-    const bool inactive = fState.state == kStateInactive;
+    const bool inactive = !fState.active;
     const auto shadedModes =
         static_cast<MGeometry::DrawMode>(MGeometry::kShaded | MGeometry::kTextured);
     for (const HubItem& spec : kHubItems)
@@ -697,7 +541,8 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
                                                     MHWRender::MUIDrawManager& drawManager,
                                                     const MHWRender::MFrameContext& frameContext)
 {
-    if (fState.drawMode == RigidBodyJoint::kDrawOff || !isSelected(dagPath))
+    if (fState.drawMode == RigidBodyJoint::kDrawOff ||
+        !mmd::maya::rigid_body_display::isSelected(dagPath))
         return;
 
     // Native selection outline: the solid keeps its state colour and the pick
@@ -710,7 +555,7 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
         drawManager.beginDrawable(MHWRender::MUIDrawManager::kNonSelectable);
         drawManager.setLineStyle(MHWRender::MUIDrawManager::kSolid);
         drawManager.setLineWidth(1.75f);
-        drawManager.setColor(selectionColor(dagPath));
+        drawManager.setColor(mmd::maya::rigid_body_display::selectionColor(dagPath));
         mmd::maya::drawColliderWire(drawManager, MPoint(fState.hubRadius, 0.0, 0.0),
                                     RigidBodyShape::kColliderSphere, fHubToLocal);
         drawManager.endDrawable();
@@ -958,49 +803,8 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
         mesh.normals[i + 2] = static_cast<float>(n.z);
     }
 
-    const unsigned int numVerts = static_cast<unsigned int>(mesh.positions.size() / 3);
-
-    // Create vertex buffers from the shaders' OWN requirements (position +
-    // normal [+ uv] for the stock surface shader).  Fall back to manual
-    // descriptors if the requirements come back empty.
-    const MVertexBufferDescriptorList& descList = requirements.vertexRequirements();
-    if (descList.length() > 0)
-    {
-        MVertexBufferDescriptor desc;
-        for (int i = 0; i < descList.length(); ++i)
-        {
-            if (!descList.getDescriptor(i, desc))
-                continue;
-            switch (desc.semantic())
-            {
-            case MGeometry::kPosition:
-                fillVertexBuffer(data.createVertexBuffer(desc), mesh.positions, numVerts, 3, desc);
-                break;
-            case MGeometry::kNormal:
-                fillVertexBuffer(data.createVertexBuffer(desc), mesh.normals, numVerts, 3, desc);
-                break;
-            case MGeometry::kTexture:
-            {
-                const std::vector<float> dummyUvs(numVerts * 2, 0.0f);
-                fillVertexBuffer(data.createVertexBuffer(desc), dummyUvs, numVerts, 2, desc);
-                break;
-            }
-            default:
-                break;
-            }
-        }
-    }
-    else
-    {
-        const MVertexBufferDescriptor posDesc("position", MGeometry::kPosition, MGeometry::kFloat,
-                                              3);
-        const MVertexBufferDescriptor nrmDesc("normal", MGeometry::kNormal, MGeometry::kFloat, 3);
-        const MVertexBufferDescriptor uvDesc("uv", MGeometry::kTexture, MGeometry::kFloat, 2);
-        fillVertexBuffer(data.createVertexBuffer(posDesc), mesh.positions, numVerts, 3, posDesc);
-        fillVertexBuffer(data.createVertexBuffer(nrmDesc), mesh.normals, numVerts, 3, nrmDesc);
-        const std::vector<float> dummyUvs(numVerts * 2, 0.0f);
-        fillVertexBuffer(data.createVertexBuffer(uvDesc), dummyUvs, numVerts, 2, uvDesc);
-    }
+    mmd::maya::rigid_body_display::fillMeshBuffers(requirements, mesh.positions, mesh.normals,
+                                                   data);
 
     // Each hub item indexes its own half of the shared vertices.
     for (int i = 0; i < renderItems.length(); ++i)

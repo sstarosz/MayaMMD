@@ -34,7 +34,11 @@
 #include <maya/MFn.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MGeometry.h>
+#include <maya/MGeometryRequirements.h>
 #include <maya/MGlobal.h>
+#include <maya/MHWGeometry.h>
+#include <maya/MHWGeometryUtilities.h>
 #include <maya/MItDependencyNodes.h>
 #include <maya/MMessage.h>
 #include <maya/MPlug.h>
@@ -43,7 +47,9 @@
 #include <maya/MViewport2Renderer.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <utility>
 
@@ -262,6 +268,19 @@ unsigned int bodyRoles(const MObject& bodyShape)
     return 0;
 }
 
+bool isSelected(const MDagPath& path)
+{
+    const MHWRender::DisplayStatus status = MHWRender::MGeometryUtilities::displayStatus(path);
+    return status == MHWRender::kLead || status == MHWRender::kActive;
+}
+
+MColor selectionColor(const MDagPath& path)
+{
+    const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
+    // Guard: a near-black selection colour would hide the wire.
+    return sel.r + sel.g + sel.b < 0.01f ? palette::kSelectionFallback : sel;
+}
+
 namespace
 {
 enum class ShaderKind : std::uint32_t
@@ -320,5 +339,164 @@ MHWRender::MShaderInstance* wireShader(const MColor& color)
 MHWRender::MShaderInstance* dashedWireShader(const MColor& color)
 {
     return cachedShader(color, ShaderKind::DashedWire);
+}
+
+// ===========================================================================
+// Render-item plumbing
+// ===========================================================================
+namespace
+{
+// Fill one vertex buffer (`dimension` floats per vertex) with `numVerts`
+// elements.  NOTE: acquire()'s size is the ELEMENT count, not bytes.
+void fillVertexBuffer(MHWRender::MVertexBuffer* buffer, const std::vector<float>& data,
+                      unsigned int numVerts, int dimension,
+                      const MHWRender::MVertexBufferDescriptor& desc)
+{
+    if (buffer == nullptr || numVerts == 0 || data.size() < numVerts * dimension)
+        return;
+    if (desc.dataType() != MHWRender::MGeometry::kFloat || desc.dimension() != dimension)
+        return;
+    void* ptr = buffer->acquire(numVerts, /*writeOnly=*/true);
+    if (ptr == nullptr)
+        return;
+    std::memcpy(ptr, data.data(), numVerts * dimension * sizeof(float));
+    buffer->commit(ptr);
+}
+} // namespace
+
+void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
+                     const std::vector<float>& positions, const std::vector<float>& normals,
+                     MHWRender::MGeometry& data)
+{
+    const unsigned int numVerts = static_cast<unsigned int>(positions.size() / 3);
+    if (numVerts == 0)
+        return;
+    // A solid-colour item needs no real UVs — a zeroed float2 stream satisfies
+    // any texture semantic the shader declares.
+    const std::vector<float> dummyUvs(static_cast<std::size_t>(numVerts) * 2, 0.0f);
+    const auto fill = [&](const MHWRender::MVertexBufferDescriptor& desc)
+    {
+        switch (desc.semantic())
+        {
+        case MHWRender::MGeometry::kPosition:
+            fillVertexBuffer(data.createVertexBuffer(desc), positions, numVerts, 3, desc);
+            break;
+        case MHWRender::MGeometry::kNormal:
+            fillVertexBuffer(data.createVertexBuffer(desc), normals, numVerts, 3, desc);
+            break;
+        case MHWRender::MGeometry::kTexture:
+            fillVertexBuffer(data.createVertexBuffer(desc), dummyUvs, numVerts, 2, desc);
+            break;
+        default:
+            break;
+        }
+    };
+
+    // Use the shader's OWN requirements so the stream names and semantics
+    // always match what the item expects; fall back to manual descriptors when
+    // they come back empty (possible for custom render items).
+    const MHWRender::MVertexBufferDescriptorList& descList = requirements.vertexRequirements();
+    if (descList.length() > 0)
+    {
+        MHWRender::MVertexBufferDescriptor desc;
+        for (int i = 0; i < descList.length(); ++i)
+            if (descList.getDescriptor(i, desc))
+                fill(desc);
+        return;
+    }
+    fill(MHWRender::MVertexBufferDescriptor("position", MHWRender::MGeometry::kPosition,
+                                            MHWRender::MGeometry::kFloat, 3));
+    fill(MHWRender::MVertexBufferDescriptor("normal", MHWRender::MGeometry::kNormal,
+                                            MHWRender::MGeometry::kFloat, 3));
+    fill(MHWRender::MVertexBufferDescriptor("uv", MHWRender::MGeometry::kTexture,
+                                            MHWRender::MGeometry::kFloat, 2));
+}
+
+unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector<float>& positions,
+                              std::vector<float>& normals, std::vector<unsigned int>& indices,
+                              std::vector<unsigned int>* lines)
+{
+    if (radius <= 0.0 || slices < 3 || stacks < 2)
+        return static_cast<unsigned int>(positions.size() / 3);
+
+    const unsigned int base = static_cast<unsigned int>(positions.size() / 3);
+    // Append one vertex, returning its index.
+    const auto vertex = [&](const MVector& dir)
+    {
+        positions.insert(positions.end(),
+                         {static_cast<float>(dir.x * radius), static_cast<float>(dir.y * radius),
+                          static_cast<float>(dir.z * radius)});
+        normals.insert(normals.end(), {static_cast<float>(dir.x), static_cast<float>(dir.y),
+                                       static_cast<float>(dir.z)});
+        return static_cast<unsigned int>(positions.size() / 3) - 1;
+    };
+    const auto tri = [&](unsigned int a, unsigned int b, unsigned int c)
+    { indices.insert(indices.end(), {a, b, c}); };
+    const auto line = [&](unsigned int a, unsigned int b)
+    {
+        if (lines != nullptr)
+            lines->insert(lines->end(), {a, b});
+    };
+
+    // Interior rings; the poles are single vertices, so the caps have no
+    // degenerate (zero-area) triangles.
+    const auto ringVertex = [&](int i, int j)
+    {
+        const double phi = M_PI * i / stacks;
+        const double y = std::cos(phi);
+        const double ringR = std::sin(phi);
+        const double theta = 2.0 * M_PI * j / slices;
+        return vertex(MVector(ringR * std::cos(theta), y, ringR * std::sin(theta)));
+    };
+
+    const unsigned int top = ringVertex(0, 0);         // +Y pole
+    const unsigned int bottom = ringVertex(stacks, 0); // -Y pole
+    std::vector<std::vector<unsigned int>> rows(static_cast<std::size_t>(stacks) - 1);
+    for (int i = 1; i < stacks; ++i)
+    {
+        std::vector<unsigned int>& row = rows[static_cast<std::size_t>(i) - 1];
+        row.reserve(static_cast<std::size_t>(slices) + 1);
+        for (int j = 0; j <= slices; ++j)
+            row.push_back(ringVertex(i, j));
+    }
+
+    for (int j = 0; j < slices; ++j)
+    {
+        const auto col = static_cast<std::size_t>(j);
+        tri(top, rows[0][col + 1], rows[0][col]);
+        const std::vector<unsigned int>& last = rows.back();
+        tri(bottom, last[col], last[col + 1]);
+    }
+    // Stitch the rows (each `slices + 1` vertices, the last repeating the
+    // first position) into quads.  Rows advance the way a UV sphere's rows
+    // do (+Y pole downwards on the outer side), so these face outward.
+    for (std::size_t i = 0; i + 1 < rows.size(); ++i)
+    {
+        for (int j = 0; j < slices; ++j)
+        {
+            const auto col = static_cast<std::size_t>(j);
+            const unsigned int a = rows[i][col];
+            const unsigned int d = rows[i][col + 1];
+            const unsigned int b = rows[i + 1][col];
+            const unsigned int c = rows[i + 1][col + 1];
+            tri(a, d, b);
+            tri(b, d, c);
+        }
+    }
+
+    // Wire: every latitude ring, and every meridian from pole to pole.
+    for (int j = 0; j < slices; ++j)
+    {
+        const auto col = static_cast<std::size_t>(j);
+        line(top, rows[0][col]);
+        for (std::size_t i = 0; i < rows.size(); ++i)
+        {
+            line(rows[i][col], rows[i][col + 1]);
+            if (i + 1 < rows.size())
+                line(rows[i][col], rows[i + 1][col]);
+        }
+        line(rows.back()[col], bottom);
+    }
+    return base;
 }
 } // namespace mmd::maya::rigid_body_display

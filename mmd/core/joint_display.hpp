@@ -105,6 +105,25 @@ inline Ranges describe(const RigidBodySimulation::JointDefinition& j)
     return out;
 }
 
+// Which kinds of motion a joint permits, for the summary display: a joint that
+// constrains nothing has no freedom to show.  Same model as the motion guides
+// below, so the hub colour and the guides can never disagree.
+struct Freedom
+{
+    bool translates = false; // some linear axis can move
+    bool rotates = false;    // some angular axis can turn
+};
+inline Freedom summarize(const Ranges& ranges)
+{
+    Freedom out;
+    for (int i = 0; i < 3; ++i)
+    {
+        out.translates = out.translates || ranges.linear[i].kind() != RangeKind::Fixed;
+        out.rotates = out.rotates || ranges.angular[i].kind() != RangeKind::Fixed;
+    }
+    return out;
+}
+
 // The joint's current angle per axis, measured exactly as the constraint
 // measures it against its limits (btGeneric6DofConstraint::calculateAngleInfo:
 // matrixToEulerXYZ of A^-1 * B).  `a` / `b` are the attachment frames' world
@@ -173,11 +192,31 @@ inline GuideSizes guideSizes(double hubRadius)
     return {radius, radius * .09, hubRadius * 1.6, hubRadius * 1.25, hubRadius * .6};
 }
 
-// Base hub radius as a fraction of a model's (clamped) median link; the one
+// Base hub radius as a fraction of a model's median link; the one
 // constant to tune the default size of every model's hubs.
 constexpr double kHubSizeFactor = 0.6;
 // Hub radius used before a model's size is known (no solver world yet).
 constexpr double kFallbackHubRadius = 0.12 * kHubSizeFactor;
+// Hub size relative to the link a joint spans, clamped to keep the hub compact
+// in dense rigs and readable in coarse ones.  kHubSizeFactor scales the whole
+// policy (the one taste knob).
+constexpr double kHubLinkFraction = 0.35;
+constexpr double kHubMinRadius = 0.05;
+constexpr double kHubMaxRadius = 0.5;
+
+// The hub radius every joint of a model shares, from the REST distances
+// between the bodies its joints link (about 0.5 units in real models): the
+// median link times kHubLinkFraction, clamped, times kHubSizeFactor.  Derived
+// from rest poses only, so all hubs look alike and never change with the
+// simulation.  `links` is taken by value (it is reordered).
+inline double hubRadiusForLinks(std::vector<double> links)
+{
+    if (links.empty())
+        return kFallbackHubRadius;
+    const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
+    std::nth_element(links.begin(), middle, links.end());
+    return std::clamp(*middle * kHubLinkFraction, kHubMinRadius, kHubMaxRadius) * kHubSizeFactor;
+}
 // Line width of a limit B presses on.  Every other guide is at most 3.5 wide,
 // so this (and anything bolder) reads as "bold" in the viewport and in tests.
 constexpr float kPressedWidth = 4.5f;

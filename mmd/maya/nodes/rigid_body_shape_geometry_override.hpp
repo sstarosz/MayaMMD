@@ -95,9 +95,6 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
     // Group colour (palette + kinematic dim + disabled grey) — the SOLID
     // always keeps this; selection is shown as a wireframe overlay instead.
     void groupColor(float& r, float& g, float& b) const;
-    // Selection helpers (render thread — displayStatus/wireframeColor safe).
-    static bool isSelected(const MDagPath& path);
-    static void selectionColor(const MDagPath& path, float& r, float& g, float& b);
 
     // Per-frame data pulled from the shape node in updateDG().
     struct DrawState

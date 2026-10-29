@@ -40,6 +40,23 @@ TEST_CASE("Joint guides scale with the hub and clear it", "[joint-display]")
     REQUIRE(guideSizes(.26).radius == Catch::Approx(2 * guideSizes(.13).radius));
 }
 
+TEST_CASE("Hub radius follows the model's median link, clamped and scaled", "[joint-display]")
+{
+    using namespace mmd::core::joint_display;
+    // No joints at all: the fallback keeps the hub visible before a solve.
+    REQUIRE(hubRadiusForLinks({}) == kFallbackHubRadius);
+    // The MEDIAN link drives the size, so one huge joint cannot inflate every
+    // hub of the model.
+    REQUIRE(hubRadiusForLinks({0.5, 0.5, 500.0}) == Catch::Approx(hubRadiusForLinks({0.5, 0.5})));
+    // Clamped at both ends, then scaled by the one taste knob.
+    REQUIRE(hubRadiusForLinks({5.0, 5.0}) ==
+            Catch::Approx(kHubMaxRadius * kHubSizeFactor));
+    REQUIRE(hubRadiusForLinks({0.001, 0.001}) == Catch::Approx(kHubMinRadius * kHubSizeFactor));
+    REQUIRE(hubRadiusForLinks({1.0}) == Catch::Approx(kHubLinkFraction * kHubSizeFactor));
+    // Monotonic in the median while inside the clamp.
+    REQUIRE(hubRadiusForLinks({0.5}) < hubRadiusForLinks({0.8}));
+}
+
 namespace
 {
 

@@ -603,6 +603,31 @@ def test_joint_gallery_effective_modes():
         "INACTIVE" not in api["describe_joint"](gallery["cases"][1]["joint"]),
         "an ordinary case is active",
     )
+    # _inactive_reason is a second copy of RigidBodySimulation::jointStatus, so
+    # pin its remaining reasons too.
+    two_bodies = [gallery["cases"][i]["joint"] for i in (0, 1)]
+    solver_of_case0 = gallery["cases"][0]["solver"]
+    body_a = _body_shape_at(solver_of_case0, 0)
+    body_b = _body_shape_at(solver_of_case0, 1)
+    # Point B at body A's shape, so both ends are the same body.
+    cmds.connectAttr(f"{body_a}.message", two_bodies[0] + ".jointBodyB", force=True)
+    assert_true(
+        "INACTIVE: both ends are the same body" in api["describe_joint"](two_bodies[0]),
+        "same body is inactive",
+    )
+    cmds.connectAttr(f"{body_b}.message", two_bodies[0] + ".jointBodyB", force=True)
+    cmds.setAttr(body_b + ".bodyEnabled", False)
+    assert_true(
+        "INACTIVE: a body is disabled" in api["describe_joint"](two_bodies[0]),
+        "disabled body is inactive",
+    )
+    cmds.setAttr(body_b + ".bodyEnabled", True)
+    cmds.disconnectAttr(f"{body_b}.message", two_bodies[0] + ".jointBodyB")
+    assert_true(
+        "INACTIVE: a body is missing" in api["describe_joint"](two_bodies[0]),
+        "missing body is inactive",
+    )
+    cmds.connectAttr(f"{body_b}.message", two_bodies[0] + ".jointBodyB", force=True)
     api["step"](gallery, 30)
     for entry in gallery["cases"]:
         for body in (0, 1):

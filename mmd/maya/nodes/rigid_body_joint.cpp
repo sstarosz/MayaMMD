@@ -277,6 +277,43 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
 // ===========================================================================
 // Bounds
 // ===========================================================================
+// Everything the joint display needs from the owning solver, in one place:
+// both RigidBodyJoint::boundingBox() and the viewport override resolve their
+// solver, frames and hub radius through this.
+RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node)
+{
+    SolverView view;
+    // Reading the solverStep input evaluates the owning solver (outStep ->
+    // solverStep), so the world queried below is the current one.
+    const MPlug solverStep(node, aSolverStep);
+    if (!solverStep.isNull())
+        solverStep.asDouble();
+
+    MPlugArray destinations;
+    MPlug(node, aSolver).connectedTo(destinations, false, true);
+    if (destinations.length() == 0)
+        return view;
+    view.solverObject = destinations[0].node();
+    view.solver = dynamic_cast<RigidBodyNode*>(MFnDependencyNode(view.solverObject).userNode());
+    if (view.solver == nullptr)
+        return view;
+
+    readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject), view.definition);
+    view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
+    view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
+    view.active = view.solver->jointStatus(view.definition) ==
+                  mmd::core::RigidBodySimulation::JointStatus::eActive;
+    view.live = view.solver->jointViewportFrames(view.definition, view.bodyAWorld, view.bodyBWorld,
+                                                 view.attachmentA, view.attachmentB);
+
+    const MPlug scale(view.solverObject, RigidBodyNode::aJointDisplayScale);
+    const double displayScale = scale.isNull() ? 1.0 : std::max(0.05, scale.asDouble());
+    const double model = view.solver->hubRadius();
+    view.hubRadius =
+        (model > 0.0 ? model : mmd::core::joint_display::kFallbackHubRadius) * displayScale;
+    return view;
+}
+
 // Everything the joint can draw, in the shape's object space: the hub and its
 // guides around the LIVE attachment on body A, plus attachment B and the body
 // centres a selected joint links.  Without a solver world the hub sits at the
@@ -285,45 +322,21 @@ MBoundingBox RigidBodyJoint::boundingBox() const
 {
     using namespace mmd::core::joint_display;
     const MObject node = thisMObject();
-    // Reading the solverStep input evaluates the owning solver (outStep ->
-    // solverStep), so the world queried below is the current one.
-    const MPlug solverStep(node, aSolverStep);
-    if (!solverStep.isNull())
-        solverStep.asDouble();
     MDagPath path;
     if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
         return {};
     const MMatrix worldToLocal = path.inclusiveMatrixInverse();
 
-    MPlugArray destinations;
-    MPlug(node, aSolver).connectedTo(destinations, false, true);
-    const MObject solver = destinations.length() > 0 ? destinations[0].node() : MObject::kNullObj;
-    const auto* solverNode =
-        solver.isNull() ? nullptr
-                        : dynamic_cast<RigidBodyNode*>(MFnDependencyNode(solver).userNode());
-
-    RigidBodySimulation::JointDefinition def;
-    readJointDefinition(
-        node, solver.isNull() ? MMatrix::identity : RigidBodyNode::groupWorldMatrix(solver), def);
-    double hub = kFallbackHubRadius;
-    MMatrix attachmentA = path.inclusiveMatrix();
-    MMatrix attachmentB, bodyA, bodyB;
-    bool live = false;
-    if (solverNode != nullptr)
-    {
-        def.bodyA = solverNode->bodyIndex(bodyShape(node, aJointBodyA));
-        def.bodyB = solverNode->bodyIndex(bodyShape(node, aJointBodyB));
-        live = solverNode->jointViewportFrames(def, bodyA, bodyB, attachmentA, attachmentB);
-        if (solverNode->jointHubRadius() > 0.0)
-            hub = solverNode->jointHubRadius();
-        hub *= std::max(0.05, MPlug(solver, RigidBodyNode::aJointDisplayScale).asDouble());
-    }
+    const SolverView view = resolveSolverView(node);
+    const double hub = view.hubRadius;
+    // Without a live world the hub sits at the joint's own transform.
+    const MMatrix& attachmentA = view.live ? view.attachmentA : path.inclusiveMatrix();
 
     // The symbolic guides reach about 2.25 dial radii from the hub (spring
     // zigzag, free-axis arrows, the Z dial with its notch and needles); a
     // translation region adds its physical extent on top.
     const double pad = std::max(hub, 2.25 * guideSizes(hub).radius);
-    const Ranges ranges = describe(def);
+    const Ranges ranges = describe(view.definition);
     MBoundingBox box;
     for (unsigned int corner = 0; corner < 8; ++corner)
     {
@@ -338,8 +351,8 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         }
         box.expand(p * attachmentA * worldToLocal);
     }
-    if (live)
-        for (const MMatrix* m : {&attachmentB, &bodyA, &bodyB})
+    if (view.live)
+        for (const MMatrix* m : {&view.attachmentB, &view.bodyAWorld, &view.bodyBWorld})
             box.expand(MPoint::origin * *m * worldToLocal);
     return box;
 }

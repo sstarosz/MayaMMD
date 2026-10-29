@@ -95,7 +95,7 @@ class RigidBodyNode : public MPxLocatorNode
                              MMatrix& attachmentB) const;
     // The hub radius shared by every joint of this model (before the user's
     // jointDisplayScale); 0 while there is no simulation world.
-    double jointHubRadius() const { return mWorld ? mWorld->jointHubRadius : 0.0; }
+    double hubRadius() const { return mWorld ? mWorld->hubRadius : 0.0; }
     // The simulation's body index of a pmxRigidBodyShape (what a joint's
     // jointBodyA/B connection resolves to); -1 when the shape is not one of
     // this solver's bodies or there is no world.
@@ -127,7 +127,7 @@ class RigidBodyNode : public MPxLocatorNode
     // Viewport-only: the joint glyphs' SIZE multiplier (a plain double, read
     // by RigidBodyJointGeometryOverride through each joint's `solver` message).
     // The model's glyph size is otherwise derived from its rest poses
-    // (jointHubRadius) — this is the user's taste knob, per model.
+    // (hubRadius) — this is the user's taste knob, per model.
     static MObject aJointDisplayScale;
 
     // Output -> every joint's solverStep: the joints' viewport dependency on
@@ -205,8 +205,8 @@ class RigidBodyNode : public MPxLocatorNode
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
         // One hub radius for the model's joints, from the rest poses
-        // (modelHubRadius in rigid_body_node.cpp); recomputed with every rebuild.
-        double jointHubRadius = 0.0;
+        // (joint_display::hubRadiusForLinks); recomputed with every rebuild.
+        double hubRadius = 0.0;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
         // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.

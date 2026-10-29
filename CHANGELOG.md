@@ -131,6 +131,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Joint display refactor (no behavior change)** — the two geometry overrides
+  now share their plumbing instead of duplicating it:
+  - `rigid_body_display::fillMeshBuffers` fills a render item's vertex buffers
+    (it was copied verbatim in both overrides), and
+    `rigid_body_display::appendSphereMesh` is the one UV-sphere builder behind
+    both the hub and the sphere collider (it keeps the pole-single-vertex form,
+    so the collider no longer emits degenerate pole triangles);
+  - `isSelected` / `selectionColor` live in `rigid_body_display` (they were
+    duplicated, `selectionColor` with two different signatures), and the
+    collider's `kSelectionR/G/B` copy of `palette::kSelectionFallback` is gone;
+  - the hub's `Freedom` summary moved from the override into
+    `joint_display.hpp` next to `describe()`, and the `JointState` enum plus its
+    two-boolean re-encoding were replaced by that summary; the hub colours are
+    now derived from it directly;
+  - the hub-size policy moved into `joint_display.hpp`
+    (`hubRadiusForLinks`, unit-tested) — one formula, one name — and
+    `World::jointHubRadius` / `RigidBodyNode::jointHubRadius()` became
+    `hubRadius` for consistency with it;
+  - `RigidBodyJoint::resolveSolverView` resolves the owning solver, body
+    indices, live attachment frames and hub radius once, for both
+    `boundingBox()` and the viewport override (which also removes the
+    duplicated 0.05 display-scale clamp);
+  - `PMXNamingManager._unique_names` replaces the three near-identical
+    `_preprocess_{blendshape,joint,rigid_body}_names` uniquifiers.
+- **`scripts/maya/joint_glyph_demo.md` is gone** — the gallery instructions now
+  live in `docs/JointVisualization.md` ("Trying it"), so there is one place to
+  update when the visuals change.
 - **Breaking: joint "spring" attributes/flags renamed to "stiffness"** — the
   value is Bullet's axis stiffness (`btGeneric6DofSpringConstraint::setStiffness`),
   not a physical spring constant, so the user-facing names now say so:

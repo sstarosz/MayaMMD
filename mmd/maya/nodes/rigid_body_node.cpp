@@ -618,12 +618,12 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     return common;
 }
 
-// One hub radius for every joint of a model, from the median REST distance
-// between the bodies its joints link (about 0.5 units in real models), so
-// the hubs read at any model scale, all look alike, and never depend on the
-// simulation state.  The user's jointDisplayScale multiplies the result.
-[[nodiscard]] double modelHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
-                                    const std::vector<RigidBodySimulation::JointDefinition>& joints)
+// The hub radius every joint of a model shares (core joint_display), from the
+// REST distances between the bodies its joints link.  The user's
+// jointDisplayScale multiplies the result.
+[[nodiscard]] double
+resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
+                 const std::vector<RigidBodySimulation::JointDefinition>& joints)
 {
     std::vector<double> links;
     links.reserve(joints.size());
@@ -637,15 +637,11 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
         const Double3& b = bodies[joint.bodyB].restPos;
         const double link = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
                                       (a.z - b.z) * (a.z - b.z));
+        // A joint whose bodies coincide says nothing about the model's scale.
         if (link > 1e-4)
             links.push_back(link);
     }
-    if (links.empty())
-        return mmd::core::joint_display::kFallbackHubRadius;
-    const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
-    std::nth_element(links.begin(), middle, links.end());
-    // Keep the hub compact in dense rigs: a fraction of the median link.
-    return std::clamp(*middle * 0.35, 0.05, 0.5) * mmd::core::joint_display::kHubSizeFactor;
+    return mmd::core::joint_display::hubRadiusForLinks(std::move(links));
 }
 
 // Build a fresh world from the PMX-verbatim inputs: resolve the DAG wiring,
@@ -682,7 +678,7 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     world.bodyShapes = in.bodyShapes;
     world.joints = in.joints;
     world.gravity = in.gravity;
-    world.jointHubRadius = modelHubRadius(in.bodies, in.joints);
+    world.hubRadius = resolveHubRadius(in.bodies, in.joints);
 
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);

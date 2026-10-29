@@ -358,98 +358,57 @@ class PMXNamingManager:
             # Assign bone name to map
             self._bone_name_map[idx] = unique_bone_name
 
-    def _preprocess_blendshape_names(self):
-        """Pre-process blendshape names to handle duplicates and special characters."""
-        unique_names = set()
-        count_of_unique = defaultdict(int)
+    def _unique_names(self, pairs, prefix: str) -> list[str]:
+        """DAG-safe unique names from (first choice, second choice) name pairs.
 
-        for idx, morph in enumerate(self.pmx_data.morphs):
-            # Get the base name for this morph
-            if morph.name_universal and self._is_ascii_safe(morph.name_universal):
-                base_name = self._sanitize_name(morph.name_universal)
-            elif morph.name_local and self._is_ascii_safe(morph.name_local):
-                base_name = self._sanitize_name(morph.name_local)
-            else:
-                base_name = f"Morph_{idx}"
+        Each pair is tried in order; when neither name is ASCII-safe the name
+        falls back to ``{prefix}_{index}``.  Duplicates get a ``_N`` suffix, so
+        the result is unique across the whole list.
+        """
+        names: list[str] = []
+        used: set[str] = set()
+        count_of_unique: defaultdict[str, int] = defaultdict(int)
+        for idx, (first, second) in enumerate(pairs):
+            base_name = ""
+            for candidate in (first, second):
+                if candidate and self._is_ascii_safe(candidate):
+                    base_name = self._sanitize_name(candidate)
+                    break
+            if not base_name:
+                base_name = f"{prefix}_{idx}"
 
-            # Find a unique name
             occurrence_index = count_of_unique[base_name]
-            unique_morph_name = (
+            unique_name = (
                 base_name
                 if occurrence_index == 0
                 else f"{base_name}_{occurrence_index}"
             )
-            while unique_morph_name in unique_names:
+            while unique_name in used:
                 occurrence_index += 1
-                unique_morph_name = f"{base_name}_{occurrence_index}"
+                unique_name = f"{base_name}_{occurrence_index}"
 
-            unique_names.add(unique_morph_name)
+            used.add(unique_name)
             count_of_unique[base_name] = occurrence_index + 1
+            names.append(unique_name)
+        return names
 
-            # Assign morph name to map
-            self._blendshape_name_map[idx] = unique_morph_name
+    def _preprocess_blendshape_names(self):
+        """Pre-process blendshape names to handle duplicates and special characters."""
+        pairs = [(m.name_universal, m.name_local) for m in self.pmx_data.morphs]
+        for idx, name in enumerate(self._unique_names(pairs, "Morph")):
+            self._blendshape_name_map[idx] = name
 
     def _preprocess_joint_names(self):
         """Pre-process joint names to handle duplicates and special characters."""
-        unique_names = set()
-        count_of_unique = defaultdict(int)
-
-        for idx, joint in enumerate(self.pmx_data.joints):
-            # Get the base name for this joint
-            if joint.name_local and self._is_ascii_safe(joint.name_local):
-                base_name = self._sanitize_name(joint.name_local)
-            elif joint.name_universal and self._is_ascii_safe(joint.name_universal):
-                base_name = self._sanitize_name(joint.name_universal)
-            else:
-                base_name = f"Joint_{idx}"
-
-            # Find a unique name
-            occurrence_index = count_of_unique[base_name]
-            unique_joint_name = (
-                base_name
-                if occurrence_index == 0
-                else f"{base_name}_{occurrence_index}"
-            )
-            while unique_joint_name in unique_names:
-                occurrence_index += 1
-                unique_joint_name = f"{base_name}_{occurrence_index}"
-
-            unique_names.add(unique_joint_name)
-            count_of_unique[base_name] = occurrence_index + 1
-
-            # Assign joint name to map
-            self._joint_name_map[idx] = unique_joint_name
+        pairs = [(j.name_local, j.name_universal) for j in self.pmx_data.joints]
+        for idx, name in enumerate(self._unique_names(pairs, "Joint")):
+            self._joint_name_map[idx] = name
 
     def _preprocess_rigid_body_names(self):
         """Pre-process rigid body names to handle duplicates and special characters."""
-        unique_names = set()
-        count_of_unique = defaultdict(int)
-
-        for idx, body in enumerate(self.pmx_data.rigid_bodies):
-            # Get the base name for this rigid body
-            if body.name_local and self._is_ascii_safe(body.name_local):
-                base_name = self._sanitize_name(body.name_local)
-            elif body.name_universal and self._is_ascii_safe(body.name_universal):
-                base_name = self._sanitize_name(body.name_universal)
-            else:
-                base_name = f"RigidBody_{idx}"
-
-            # Find a unique name
-            occurrence_index = count_of_unique[base_name]
-            unique_body_name = (
-                base_name
-                if occurrence_index == 0
-                else f"{base_name}_{occurrence_index}"
-            )
-            while unique_body_name in unique_names:
-                occurrence_index += 1
-                unique_body_name = f"{base_name}_{occurrence_index}"
-
-            unique_names.add(unique_body_name)
-            count_of_unique[base_name] = occurrence_index + 1
-
-            # Assign rigid body name to map
-            self._rigid_body_name_map[idx] = unique_body_name
+        pairs = [(b.name_local, b.name_universal) for b in self.pmx_data.rigid_bodies]
+        for idx, name in enumerate(self._unique_names(pairs, "RigidBody")):
+            self._rigid_body_name_map[idx] = name
 
     def _preprocess_inherit_rotation_controller_names(self):
         """Pre-process inherit rotation controller names for bones with INHERIT_ROTATION flag.

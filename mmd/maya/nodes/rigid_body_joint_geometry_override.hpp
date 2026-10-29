@@ -124,18 +124,6 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
                                   const MHWRender::MFrameContext& frameContext,
                                   const MMatrix& worldToLocal) const;
 
-    // Constraint STATE — what kind of motion the joint permits.  This is the
-    // hub's COLOUR channel (the palette in the .cpp); an inactive joint's
-    // hub is hollow instead.
-    enum JointState : short
-    {
-        kStateWelded = 0,        // no freedom at all: a rigid link
-        kStateRotates,           // rotation only
-        kStateTranslates,        // translation only
-        kStateRotatesTranslates, // both
-        kStateInactive,          // constrains nothing (RigidBodySimulation::JointStatus)
-    };
-
     // The joint's plugs, resolved once (the attributes never change).  The
     // bodies are connections, read with RigidBodyJoint::bodyShape.
     struct Plugs
@@ -170,21 +158,16 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         MPoint bodyAWorld;
         MPoint bodyBWorld;
 
-        // From the solver: one hub radius per model (0 = no world yet) and
-        // the user's jointDisplayScale multiplier.
-        double modelHubRadius = 0.0;
-        double hubScale = 1.0;
-
-        // Derived (see classifyState / deriveSizes).
-        double hubRadius =
-            mmd::core::joint_display::kFallbackHubRadius; // the rendered sphere radius
-        short state = kStateWelded;
+        // What the joint permits — the core freedom model (joint_display.hpp),
+        // which the hub's colour encodes.  An inactive joint draws a hollow
+        // hub instead of a colour.
+        mmd::core::joint_display::Freedom freedom;
+        // The rendered sphere radius: the model's hub size x the user's scale.
+        double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
     };
 
-    // Constraint state from the limits/springs the solver actually reads.
+    // What the joint permits, from the limits/springs the solver reads.
     void classifyState();
-    // The model's hub size x the user's scale.
-    void deriveSizes();
     // Hub colour of the even and odd wedges; they differ only for a joint
     // that rotates AND translates.
     void stateColors(MColor& primary, MColor& secondary) const;
@@ -193,10 +176,6 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // axis planes, each one line strip so a dash pattern runs round it.
     void drawRings(MHWRender::MUIDrawManager& drawManager, const MPoint& local, double radius,
                    int segments) const;
-
-    // Selection helpers (render thread — displayStatus/wireframeColor safe).
-    static bool isSelected(const MDagPath& path);
-    static MColor selectionColor(const MDagPath& path);
 
     MObject fJoint;
     Plugs fPlugs;
