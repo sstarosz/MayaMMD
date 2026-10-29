@@ -390,7 +390,9 @@ readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
     std::vector<RigidBodySimulation::JointDefinition> out;
     MPlug shapesPlug(node, RigidBodyNode::aJointShapes);
     const unsigned int jointCount = shapesPlug.evaluateNumElements();
-    const MMatrix groupWorld = RigidBodyNode::groupWorldMatrix(node);
+    // Inverted ONCE: this runs on every evaluation and reads every joint of
+    // the model, so a per-joint inverse would dominate the loop.
+    const MMatrix groupWorldInverse = RigidBodyNode::groupWorldMatrix(node).inverse();
     out.reserve(jointCount);
     for (unsigned int i = 0; i < jointCount; ++i)
     {
@@ -400,7 +402,7 @@ readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
             continue;
         const MObject joint = sources[0].node();
         RigidBodySimulation::JointDefinition j;
-        if (!RigidBodyJoint::readJointDefinition(joint, groupWorld, j))
+        if (!RigidBodyJoint::readJointDefinition(joint, groupWorldInverse, j))
             continue;
         j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
         j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));

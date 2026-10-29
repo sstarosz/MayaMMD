@@ -98,21 +98,25 @@ class RigidBodyJoint : public MPxLocatorNode
     // Read this node into a core JointDefinition (used by the solver's
     // readJointData — it pulls each joint from its connected joint node).
     // The FRAME comes from the node's DAG transform, measured in the space of
-    // `groupWorld` — the {model}_RigidBodies group's world matrix
-    // (RigidBodyNode::groupWorldMatrix), the space the bodies' rest poses
-    // live in, so moving the model root or the group never re-rigs the
-    // joints.  The rest comes from attributes.  bodyA / bodyB stay -1: the
-    // bodies are connections (bodyShape), which only the solver can turn
-    // into its body indices (RigidBodyNode::bodyIndex).  Returns false when
-    // `node` is not a pmxRigidBodyJoint.
-    static bool readJointDefinition(const MObject& node, const MMatrix& groupWorld,
+    // the {model}_RigidBodies group — the space the bodies' rest poses live
+    // in, so moving the model root or the group never re-rigs the joints.
+    // `groupWorldInverse` is that group's INVERSE world matrix
+    // (RigidBodyNode::groupWorldMatrix(...).inverse()); the inverse is passed
+    // in because the solver reads every joint of a model on every evaluation,
+    // so inverting the group matrix per joint would dominate that loop.
+    // The rest comes from attributes.  bodyA / bodyB stay -1: the bodies are
+    // connections (bodyShape), which only the solver can turn into its body
+    // indices (RigidBodyNode::bodyIndex).  Returns false when `node` is not a
+    // pmxRigidBodyJoint.
+    static bool readJointDefinition(const MObject& node, const MMatrix& groupWorldInverse,
                                     mmd::core::RigidBodySimulation::JointDefinition& out);
     // The pmxRigidBodyShape connected to `end` (aJointBodyA / aJointBodyB);
     // null when the end is unconnected or not a rigid body.
     static MObject bodyShape(const MObject& joint, const MObject& end);
-    // Just the FRAME (translate + XYZ rotate in degrees, in `groupWorld`'s
-    // space) of a joint node; false when it has no parent transform.
-    static bool readJointFrame(const MObject& node, const MMatrix& groupWorld,
+    // Just the FRAME (translate + XYZ rotate in degrees, in the space of the
+    // {model}_RigidBodies group) of a joint node; false when it has no parent
+    // transform.  `groupWorldInverse` as in readJointDefinition.
+    static bool readJointFrame(const MObject& node, const MMatrix& groupWorldInverse,
                                mmd::core::Double3& translate, mmd::core::Double3& rotate);
 
     // Everything the joint DISPLAY needs from the owning solver, resolved once
@@ -139,10 +143,16 @@ class RigidBodyJoint : public MPxLocatorNode
         // the user's jointDisplayScale.
         double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
     };
-    // Resolves `view` for `node`.  Reads the solverStep input first, so the
-    // world it queries is the current one (that connection is what evaluates
-    // the solver).
-    [[nodiscard]] static SolverView resolveSolverView(const MObject& node);
+    // Resolves `view` for `node`.  With `evaluateSolver` (the viewport
+    // override's updateDG) it reads the solverStep input first, so the world
+    // it queries is the current one — that connection is what evaluates the
+    // solver.  boundingBox() must NOT do that: Maya asks for a node's bounds
+    // for culling, marquee picking and Frame Selected far more often than the
+    // solver needs to run, and a pull there would evaluate the whole solver
+    // (every body and joint) per query.  It passes false and gets the solver's
+    // current world as-is; the drawn geometry always comes from updateDG().
+    [[nodiscard]] static SolverView resolveSolverView(const MObject& node,
+                                                      bool evaluateSolver = true);
 
     // ------------------------------------------------------------------
     // Attributes — the PMX joint data.  The joint FRAME (position +

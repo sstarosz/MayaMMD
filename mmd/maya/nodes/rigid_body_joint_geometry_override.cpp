@@ -145,28 +145,6 @@ const Hub& unitHub()
     return MPoint(d.x, d.y, d.z);
 }
 
-// Whole-joint summary for the unselected state display: which kinds of
-// motion the joint permits.  Same freedom model as the selected motion
-// guides (joint_display.hpp); a joint that constrains nothing has no
-// freedom to show.
-struct Freedom
-{
-    bool translates = false; // some linear axis is limited or free
-    bool rotates = false;    // some angular axis is limited or free
-};
-Freedom summarize(const mmd::core::joint_display::Ranges& ranges)
-{
-    Freedom out;
-    for (int i = 0; i < 3; ++i)
-    {
-        out.translates =
-            out.translates || ranges.linear[i].kind() != mmd::core::joint_display::RangeKind::Fixed;
-        out.rotates =
-            out.rotates || ranges.angular[i].kind() != mmd::core::joint_display::RangeKind::Fixed;
-    }
-    return out;
-}
-
 // Isolate-select state of the viewport being drawn.  Maya < 2026 cannot query
 // it through M3dView, so there every view counts as showing everything and
 // only hidden bodies get a fallback outline.

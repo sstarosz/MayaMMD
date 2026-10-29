@@ -280,14 +280,19 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
 // Everything the joint display needs from the owning solver, in one place:
 // both RigidBodyJoint::boundingBox() and the viewport override resolve their
 // solver, frames and hub radius through this.
-RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node)
+RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node,
+                                                             bool evaluateSolver)
 {
     SolverView view;
     // Reading the solverStep input evaluates the owning solver (outStep ->
-    // solverStep), so the world queried below is the current one.
-    const MPlug solverStep(node, aSolverStep);
-    if (!solverStep.isNull())
-        solverStep.asDouble();
+    // solverStep), so the world queried below is the current one.  The
+    // bounding box opts out — see the header.
+    if (evaluateSolver)
+    {
+        const MPlug solverStep(node, aSolverStep);
+        if (!solverStep.isNull())
+            solverStep.asDouble();
+    }
 
     MPlugArray destinations;
     MPlug(node, aSolver).connectedTo(destinations, false, true);
@@ -298,7 +303,8 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
     if (view.solver == nullptr)
         return view;
 
-    readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject), view.definition);
+    readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
+                        view.definition);
     view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
     view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
     view.active = view.solver->jointStatus(view.definition) ==
@@ -318,6 +324,11 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
 // guides around the LIVE attachment on body A, plus attachment B and the body
 // centres a selected joint links.  Without a solver world the hub sits at the
 // frame.
+//
+// The solver is NOT evaluated here: a bounding box is a hint Maya asks for
+// far more often than the solver must run (see resolveSolverView), and one
+// stale-by-an-evaluation hull still contains the drawn hub.  updateDG() is
+// what evaluates the solver, and it is what dirties this drawing.
 MBoundingBox RigidBodyJoint::boundingBox() const
 {
     using namespace mmd::core::joint_display;
@@ -327,7 +338,7 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         return {};
     const MMatrix worldToLocal = path.inclusiveMatrixInverse();
 
-    const SolverView view = resolveSolverView(node);
+    const SolverView view = resolveSolverView(node, /*evaluateSolver=*/false);
     const double hub = view.hubRadius;
     // Without a live world the hub sits at the joint's own transform.
     const MMatrix& attachmentA = view.live ? view.attachmentA : path.inclusiveMatrix();
@@ -360,7 +371,7 @@ MBoundingBox RigidBodyJoint::boundingBox() const
 // ===========================================================================
 // Joint data reading (used by the solver)
 // ===========================================================================
-bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& groupWorld,
+bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& groupWorldInverse,
                                          RigidBodySimulation::JointDefinition& out)
 {
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
@@ -385,7 +396,7 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
     readDouble3(plug(aJointLinearStiffness), out.linearStiffness);
     readDouble3(plug(aJointAngularStiffness), out.angularStiffness);
 
-    readJointFrame(node, groupWorld, out.frameT, out.frameR);
+    readJointFrame(node, groupWorldInverse, out.frameT, out.frameR);
     return true;
 }
 
@@ -405,7 +416,9 @@ MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
 // Reading WORLD instead would move every frame with the model root while the
 // rest poses stay put — each pivot then ends up offset by the root move.
 // Moving/rotating the guide in the viewport repositions the constraint.
-bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWorld,
+// `groupWorldInverse` is passed in (not inverted here) so the solver, which
+// reads every joint of a model each evaluation, inverts the group matrix once.
+bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWorldInverse,
                                     Double3& translate, Double3& rotate)
 {
     if (!node.hasFn(MFn::kDagNode))
@@ -417,7 +430,7 @@ bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWor
     if (!stat || transform.isNull() || !transform.hasFn(MFn::kTransform) ||
         MDagPath::getAPathTo(transform, path) != MS::kSuccess)
         return false;
-    const MTransformationMatrix tm(path.inclusiveMatrix() * groupWorld.inverse());
+    const MTransformationMatrix tm(path.inclusiveMatrix() * groupWorldInverse);
     const MVector t = tm.getTranslation(MSpace::kTransform);
     const MEulerRotation e = tm.eulerRotation(); // radians, XYZ decomposition
     constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;

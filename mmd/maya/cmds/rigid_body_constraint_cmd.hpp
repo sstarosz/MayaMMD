@@ -32,10 +32,6 @@
  *                                   The joint stores CONNECTIONS, not the
  *                                   indices: bodyShapes[i]'s shape.message ->
  *                                   jointBodyA / jointBodyB
- *         -type <int>               PMX joint type; only 0 (Spring6Dof) is
- *                                   accepted (PMX 2.1 types not supported yet)
- *                                   SPRING_6DOF=0 / 6DOF=1 / P2P=2 /
- *                                   CONETWIST=3 / SLIDER=4 / HINGE=5
  *         -position <x y z>         joint frame position (MMD space; Z-flip)
  *         -rotation <x y z>         joint frame rotation (MMD radians;
  *                                   handedness flip to Maya degrees)
@@ -59,6 +55,11 @@
  * no solver stepping happens here (the ``time`` input is connected by the
  * Python builder once bodies AND joints exist).
  * Edit/query/remove and batch create are later steps.
+ *
+ * There is NO joint-type flag: PMX 2.0 defines only Spring6Dof (0), which is
+ * what the command (and the solver) always builds.  PMX 2.1 joint types reuse
+ * the limit/stiffness fields with different meanings, so the importer skips
+ * them instead of misreading them.
  */
 
 #pragma once

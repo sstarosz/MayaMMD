@@ -18,8 +18,9 @@ Only **PMX 2.0 joints (Spring6Dof)** are supported. They are simulated with
 Bullet's `btGeneric6DofSpringConstraint`, the constraint MMD's Bullet 2.75
 creates, with linear limits in body A's frame. PMX 2.1
 joint types (6Dof, P2P, ConeTwist, Slider, Hinge) reuse the limit and stiffness
-fields with different meanings. The importer skips them with a warning, and
-`pmxRigidBodyConstraint` rejects any `-type` other than `0`.
+fields with different meanings, so the importer skips them with a warning.
+`pmxRigidBodyConstraint` has no joint-type flag at all — it always builds the
+one type PMX 2.0 defines.
 
 ## How freedom is decided
 
