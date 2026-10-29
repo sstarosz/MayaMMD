@@ -412,7 +412,7 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
         editorTemplate -addControl "gravity";
     editorTemplate -endLayout;
     editorTemplate -beginLayout "Display" -collapse 0;
-        editorTemplate -addControl "jointDisplayScale" -label "Joint Hub Size";
+        editorTemplate -addControl -label "Joint Hub Size" "jointDisplayScale";
     editorTemplate -endLayout;
     editorTemplate -addExtraControls;
     editorTemplate -endScrollLayout;
@@ -441,25 +441,25 @@ global proc AEpmxRigidBodyJointTemplate( string $nodeName ) {
     editorTemplate -beginScrollLayout;
     editorTemplate -suppress "solver";
     editorTemplate -beginLayout "Joint" -collapse 0;
-        editorTemplate -addControl "jointNameLocal" -label "Local Name";
-        editorTemplate -addControl "jointNameUniversal" -label "Universal Name";
+        editorTemplate -addControl -label "Local Name" "jointNameLocal";
+        editorTemplate -addControl -label "Universal Name" "jointNameUniversal";
         editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
             "AEpmxRigidBodyJointBodyReplace" "jointBodyA";
         editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
             "AEpmxRigidBodyJointBodyReplace" "jointBodyB";
     editorTemplate -endLayout;
     editorTemplate -beginLayout "Limits" -collapse 0;
-        editorTemplate -addControl "jointLinearMin" -label "Linear Min";
-        editorTemplate -addControl "jointLinearMax" -label "Linear Max";
-        editorTemplate -addControl "jointAngularMin" -label "Angular Min";
-        editorTemplate -addControl "jointAngularMax" -label "Angular Max";
+        editorTemplate -addControl -label "Linear Min" "jointLinearMin";
+        editorTemplate -addControl -label "Linear Max" "jointLinearMax";
+        editorTemplate -addControl -label "Angular Min" "jointAngularMin";
+        editorTemplate -addControl -label "Angular Max" "jointAngularMax";
     editorTemplate -endLayout;
     editorTemplate -beginLayout "Stiffness" -collapse 0;
-        editorTemplate -addControl "jointLinearStiffness" -label "Linear Stiffness";
-        editorTemplate -addControl "jointAngularStiffness" -label "Angular Stiffness";
+        editorTemplate -addControl -label "Linear Stiffness" "jointLinearStiffness";
+        editorTemplate -addControl -label "Angular Stiffness" "jointAngularStiffness";
     editorTemplate -endLayout;
     editorTemplate -beginLayout "Display" -collapse 0;
-        editorTemplate -addControl "drawMode" -label "Draw Mode";
+        editorTemplate -addControl -label "Draw Mode" "drawMode";
     editorTemplate -endLayout;
     editorTemplate -addExtraControls;
     editorTemplate -endScrollLayout;
