@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import struct
+
 from maya import cmds
 from maya.api import OpenMaya as om
 
@@ -128,8 +129,9 @@ def build(show_ui=True):
                 cmds.setAttr(body + ".drawMode", 1)  # wire; no filled collider obscures attachments
                 bodies.append(body)
                 bones.append(bone)
-            index = cmds.pmxRigidBodyConstraint(solver, name=spec["name"], bodyA=0, bodyB=1,
-                                                type=0, position=(x, y, 0))
+            index = cmds.pmxRigidBodyConstraint(
+                solver, name=spec["name"], bodyA=0, bodyB=1, position=(x, y, 0)
+            )
             joint = _shape(solver, "jointShapes", index)
             # Set Maya-space attributes explicitly; command flags convert MMD handedness.
             for attr in _LIMITS:
@@ -145,9 +147,11 @@ def build(show_ui=True):
                 cmds.setAttr(bones[1] + ".translateY", _distance(y + 1.5))
                 cmds.setAttr(bones[1] + ".rotateZ", _angle(25))
                 cmds.getAttr(solver + ".outGuideTranslate[1]")
-            entries.append(dict(spec=spec, group=group, solver=solver, joint=joint,
-                                bodies=bodies, bones=bones))
-        result = dict(root=root, cases=entries, panel=None, camera=None)
+            entries.append(
+                {"spec": spec, "group": group, "solver": solver,
+                 "joint": joint, "bodies": bodies, "bones": bones}
+            )
+        result = {"root": root, "cases": entries, "panel": None, "camera": None}
     finally:
         cmds.select(previous, replace=True) if previous else cmds.select(clear=True)
         cmds.undoInfo(closeChunk=True)

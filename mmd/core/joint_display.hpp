@@ -178,6 +178,9 @@ inline GuideSizes guideSizes(double hubRadius)
 constexpr double kHubSizeFactor = 0.6;
 // Hub radius used before a model's size is known (no solver world yet).
 constexpr double kFallbackHubRadius = 0.12 * kHubSizeFactor;
+// Line width of a limit B presses on.  Every other guide is at most 3.5 wide,
+// so this (and anything bolder) reads as "bold" in the viewport and in tests.
+constexpr float kPressedWidth = 4.5f;
 
 // ===========================================================================
 // Motion-range guides
@@ -203,7 +206,7 @@ constexpr double kFallbackHubRadius = 0.12 * kHubSizeFactor;
 //   - effective springs: on a rotation axis the arc itself zigzags across
 //     its allowed span; on a translation axis a zigzag badge plus the
 //     equilibrium cross.  Neither encodes stiffness;
-//   - a limit B presses on is drawn bold (`highlight`): the needle and its
+//   - a limit B presses on is drawn bold (kPressedWidth): the needle and its
 //     end stop, or the ruler end / region faces in that axis's colour.
 //
 // Dashed always means "not reachable": a reference, never an allowed range.
@@ -221,9 +224,8 @@ struct GuideSegment
     Double3 a;
     Double3 b;
     GuideColor color = GuideColor::Neutral;
-    float width = 2.0f;
+    float width = 2.0f; // a limit B presses on is drawn bolder (kPressedWidth)
     bool dashed = false;
-    bool highlight = false; // B presses on the limit this segment marks
 };
 
 struct GuideInput
@@ -290,8 +292,6 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     using guide_detail::rotated;
     using guide_detail::V;
     constexpr double kPi = 3.14159265358979323846;
-    // Width of a limit B presses on (needles get their own, bolder width).
-    constexpr float kPressedWidth = 4.5f;
     // The smallest angle that counts as pressing on a stop (0.5 degrees).
     constexpr double kAngleHitFloor = 0.5 * kPi / 180.0;
     const Ranges& ranges = in.ranges;
@@ -306,9 +306,8 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     GuideColor color = GuideColor::Neutral;
     float width = 2.0f;
     bool dashed = false;
-    bool highlight = false;
     const auto line = [&](const V& a, const V& b)
-    { out.push_back({a.d3(), b.d3(), color, width, dashed, highlight}); };
+    { out.push_back({a.d3(), b.d3(), color, width, dashed}); };
     const auto cross = [&](const V& p, double size)
     {
         for (const auto& axis : axes)
@@ -364,7 +363,6 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         const auto end = [&](const V& p, bool pressed)
         {
             color = pressed ? axisColor[varyingAxis] : GuideColor::Neutral;
-            highlight = pressed;
             width = pressed ? kPressedWidth : 1.0f;
             line(p, p + offset * 1.25);
             width = pressed ? kPressedWidth : 3.0f;
@@ -373,7 +371,6 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         end(lo, linearHits[varyingAxis].lower);
         end(hi, linearHits[varyingAxis].upper);
         color = GuideColor::Neutral;
-        highlight = false;
         width = 2.0f;
     }
     else if (region)
@@ -399,14 +396,12 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
                     q[a] = hi[a];
                     const int face = pressed(u, iu) ? u : pressed(v, iv) ? v : -1;
                     color = face < 0 ? GuideColor::Neutral : axisColor[face];
-                    highlight = face >= 0;
                     width = face < 0 ? 2.0f : kPressedWidth;
                     line(p, q);
                     edges = true;
                 }
         }
         color = GuideColor::Neutral;
-        highlight = false;
         width = 2.0f;
         if (!edges && !anyFree)
         {
@@ -577,11 +572,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             // presses on is bold and longer.
             const auto stop = [&](double angle, bool pressed)
             {
-                highlight = pressed;
                 width = pressed ? kPressedWidth : 2.0f;
                 const double reach = pressed ? tick * 1.5 : tick;
                 line(at(angle, r - reach), at(angle, r + reach));
-                highlight = false;
                 width = 2.0f;
             };
             if (reachLower == lower)
@@ -595,11 +588,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             // stops, crossing the dial.  Pressing on a stop makes it bolder
             // still, so a joint held at its limit reads at once.
             const bool pressed = hits.lower || hits.upper;
-            highlight = pressed;
             width = pressed ? 6.0f : 3.5f;
             line(at(in.currentAngles[a], r * 0.6),
                  at(in.currentAngles[a], r + tick * (pressed ? 2.5 : 1.5)));
-            highlight = false;
             width = 2.0f;
         }
         // A notch outside the dial cannot disappear inside a radial body link.

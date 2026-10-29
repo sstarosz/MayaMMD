@@ -262,7 +262,6 @@ def _populate_rigid_body_constraints(
                 nameUniversal=joint.name_universal or "",
                 bodyA=int(joint.rigid_body_index_a),
                 bodyB=int(joint.rigid_body_index_b),
-                type=int(joint.type.value),
                 position=(joint.position.x, joint.position.y, joint.position.z),
                 rotation=(joint.rotation.x, joint.rotation.y, joint.rotation.z),
                 linearMin=(

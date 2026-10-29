@@ -48,8 +48,6 @@
 #include <maya/MPlugArray.h>
 
 #include <algorithm>
-#include <cmath>
-#include <string>
 
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
@@ -130,7 +128,6 @@ MObject RigidBodyJoint::aJointNameLocal;
 MObject RigidBodyJoint::aJointNameUniversal;
 MObject RigidBodyJoint::aJointBodyA;
 MObject RigidBodyJoint::aJointBodyB;
-MObject RigidBodyJoint::aJointType;
 MObject RigidBodyJoint::aJointLinearMin;
 MObject RigidBodyJoint::aJointLinearMax;
 MObject RigidBodyJoint::aJointAngularMin;
@@ -189,17 +186,6 @@ MStatus RigidBodyJoint::initialize()
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(false);
 
-    // PMX joint type — enum: PMX 2.0 only has Spring6Dof.  The joint FRAME
-    // (position + orientation) is NOT an attribute — it is the node's DAG
-    // transform.
-    {
-        aJointType = eAttr.create("jointType", "jt", kSpring6Dof, &stat);
-        MMD_CHECK_MSTATUS(stat);
-        eAttr.addField("Spring6Dof", kSpring6Dof);
-        eAttr.setStorable(true);
-        eAttr.setKeyable(false);
-    }
-
     aJointLinearMin = makeNumeric(nAttr, "jointLinearMin", "jlmn", MFnNumericData::k3Double, 0.0);
     aJointLinearMax = makeNumeric(nAttr, "jointLinearMax", "jlmx", MFnNumericData::k3Double, 0.0);
     aJointAngularMin = makeAngle3(nAttr, "jointAngularMin", "jamn");
@@ -235,8 +221,6 @@ MStatus RigidBodyJoint::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointBodyB);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointType);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointLinearMin);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointLinearMax);
@@ -258,7 +242,7 @@ MStatus RigidBodyJoint::initialize()
     // the DAG, not through attributeAffects), dirties the solver message ->
     // pmxRigidBodyNode.jointShapes[i] -> its outputs.
     for (const MObject& input :
-         {aJointBodyA, aJointBodyB, aJointType, aJointLinearMin, aJointLinearMax, aJointAngularMin,
+         {aJointBodyA, aJointBodyB, aJointLinearMin, aJointLinearMax, aJointAngularMin,
           aJointAngularMax, aJointLinearStiffness, aJointAngularStiffness, aFrameMatrix})
     {
         stat = attributeAffects(input, aSolver);
@@ -381,7 +365,6 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
 
     out.bodyA = -1; // connections, resolved by the solver (bodyShape)
     out.bodyB = -1;
-    out.type = plug(aJointType).asInt();
     readDouble3(plug(aJointLinearMin), out.linearMin);
     readDouble3(plug(aJointLinearMax), out.linearMax);
     readDouble3(plug(aJointAngularMin), out.angularMin);

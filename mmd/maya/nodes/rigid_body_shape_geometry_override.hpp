@@ -28,9 +28,10 @@
  * LIFECYCLE (per the devkit footPrintNode_GeometryOverride sample): the
  * render item is created once and appended to the override's persistent
  * render-item list — VP2 owns it, so the plugin never calls
- * MRenderItem::Destroy.  `cleanUp()` is empty; the stock shader is created
- * lazily and released in the destructor (while Maya is still alive — a
- * release at DLL-exit time can crash Maya).
+ * MRenderItem::Destroy.  cleanUp() is pure virtual in MPxGeometryOverride and
+ * is overridden with an empty body; the stock shader is created lazily and
+ * released in the destructor (while Maya is still alive — a release at
+ * DLL-exit time can crash Maya).
  *
  * Registered by MayaMMD.mll under the pmxRigidBodyShape classification.
  */
@@ -80,6 +81,7 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
                         const MFrameContext& frameContext) override;
     void populateGeometry(const MGeometryRequirements& requirements,
                           const MRenderItemList& renderItems, MGeometry& data) override;
+    // Pure virtual in MPxGeometryOverride; nothing to release (see the .cpp).
     void cleanUp() override;
 
     // Selection — the solid render item is pickable; granularity is object-level.

@@ -30,10 +30,6 @@ using namespace mmd::core::physics_math;
 
 namespace
 {
-// PMX 2.0 has a single joint type (Spring6Dof).  The PMX 2.1 types (1..5)
-// are not supported yet; joints of those types are skipped.
-constexpr int kJointSpring6Dof = 0;
-
 // RigidBodySimulation stepping constants (see initialize()/step()).
 constexpr int kSolverIterations = 10;         // Bullet's default, as MMD uses
 constexpr int kMaxSubSteps = 8;               // max internal steps per step()
@@ -721,8 +717,6 @@ RigidBodySimulation::jointStatus(const JointDefinition& joint,
     const BodyDefinition& b = bodies[joint.bodyB];
     if (!a.enabled || !b.enabled)
         return JointStatus::eDisabledBody;
-    if (joint.type != kJointSpring6Dof)
-        return JointStatus::eUnsupportedType;
     if (a.isKinematic() && b.isKinematic())
         return JointStatus::eBothKinematic;
     return JointStatus::eActive;

@@ -183,9 +183,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pmxRigidBodyConstraint` flags are still radians.  Re-import required.
 - **Breaking: only PMX 2.0 joints (Spring6Dof) are supported.**  The importer
   skips PMX 2.1 joint types (6Dof, P2P, ConeTwist, Slider, Hinge) with a
-  warning, `pmxRigidBodyConstraint -type` accepts only `0`, and `jointType`
-  has a single `Spring6Dof` field.  The 2.1 types reuse the limit/stiffness
+  warning.  The 2.1 types reuse the limit/stiffness
   fields with different meanings, so they are not misread as Spring6Dof.
+- **Breaking: the `jointType` attribute and the `-type` flag are gone.**  They
+  could only ever hold one value (`Spring6Dof`), so they were a dropdown that
+  did nothing and a flag that could only be `0`; PMX 2.1 types are already
+  rejected at import.  Remove `type=...` from `pmxRigidBodyConstraint` calls
+  and `jointType` reads/writes on saved scenes.
 - **Rigid-body schema: `bodies[]` compound → `bodyShapes[]` + per-body nodes**
   (breaking — re-import required).  `pmxRigidBodyNode.bodyShapes[]` is now a
   message array connected to one `pmxRigidBodyShape` per body; the body's

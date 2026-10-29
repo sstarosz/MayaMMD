@@ -114,7 +114,6 @@ def test_append_joint_data():
         nameUniversal="LeftChest_univ",
         bodyA=0,
         bodyB=1,
-        type=0,
         position=(1.0, 2.0, 3.0),
         rotation=(0.0, 1.5707963267948966, 0.0),  # pi/2
         linearMin=(-2.0, -3.0, -4.0),
@@ -139,14 +138,13 @@ def test_append_joint_data():
     # The bodies are linked by connection to their shapes, not by index.
     assert_eq(_linked_body(base, "A"), _body_shape_at(solver, 0), "jointBodyA link")
     assert_eq(_linked_body(base, "B"), _body_shape_at(solver, 1), "jointBodyB link")
-    assert_eq(int(cmds.getAttr(f"{base}.jointType")), 0, "jointType")
     # New joints are created at the Ranges draw mode (0=Off, 1=Hub, 2=Ranges).
     assert_eq(
         int(cmds.getAttr(f"{base}.drawMode")),
         2,
         "joint drawMode default (0=Off, 1=Hub, 2=Ranges)",
     )
-    print("✓ joint appended with names/bodyA/bodyB/type at the next free index")
+    print("✓ joint appended with names/bodyA/bodyB at the next free index")
     return True
 
 
@@ -159,7 +157,6 @@ def test_frame_conversion():
         solver,
         bodyA=0,
         bodyB=1,
-        type=0,
         position=(1.0, 2.0, 3.0),
         rotation=(1.5707963267948966, 0.0, 0.0),  # pi/2 rad on X
     )
@@ -196,7 +193,6 @@ def test_limits_springs_converted():
         solver,
         bodyA=0,
         bodyB=1,
-        type=0,
         linearMin=(-1.0, -2.0, -3.0),
         linearMax=(4.0, 5.0, 6.0),
         angularMin=(-0.5, -0.2, -0.7),
@@ -262,7 +258,6 @@ def test_asymmetric_angular_limits_real_model():
         solver,
         bodyA=0,
         bodyB=1,
-        type=0,
         angularMin=(-0.524, -0.175, -0.087),
         angularMax=(0.087, 0.175, 0.087),
     )
@@ -300,7 +295,6 @@ def test_frame_in_group_space():
         solver,
         bodyA=0,
         bodyB=1,
-        type=0,
         position=(1.0, 2.0, 3.0),  # Z-flip -> frame (1, 2, -3)
     )
     base = _joint_guide_at(solver, 0)
@@ -329,7 +323,7 @@ def test_self_constraint_rejected():
     _add_bodies(solver, 2)
 
     try:
-        cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=1, type=0)
+        cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=1)
         assert_true(False, "bodyA == bodyB was accepted")
     except RuntimeError:
         pass
@@ -347,15 +341,9 @@ def test_auto_increment_indices():
     _group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
 
-    assert_eq(
-        cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0), 0, "joint 0 idx"
-    )
-    assert_eq(
-        cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=0, type=0), 1, "joint 1 idx"
-    )
-    assert_eq(
-        cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0), 2, "joint 2 idx"
-    )
+    assert_eq(cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1), 0, "joint 0 idx")
+    assert_eq(cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=0), 1, "joint 1 idx")
+    assert_eq(cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1), 2, "joint 2 idx")
     assert_eq(int(cmds.getAttr(f"{solver}.jointShapes", size=True)), 3, "joints count")
     print("✓ joints auto-increment 0, 1, 2 ...")
     return True
@@ -367,12 +355,12 @@ def test_explicit_index_validation():
     _add_bodies(solver, 2)
 
     assert_eq(
-        cmds.pmxRigidBodyConstraint(solver, index=0, bodyA=0, bodyB=1, type=0),
+        cmds.pmxRigidBodyConstraint(solver, index=0, bodyA=0, bodyB=1),
         0,
         "explicit next-free index ok",
     )
     try:
-        cmds.pmxRigidBodyConstraint(solver, index=5, bodyA=0, bodyB=1, type=0)
+        cmds.pmxRigidBodyConstraint(solver, index=5, bodyA=0, bodyB=1)
         assert_true(False, "-index 5 (not next free) was accepted")
     except RuntimeError:
         pass
@@ -385,41 +373,6 @@ def test_explicit_index_validation():
     return True
 
 
-def test_type_validated():
-    """Only Spring6Dof (0) is accepted; PMX 2.1 types are not supported yet."""
-    _group, solver, _ja, _jb = _make_physics_scene()
-    _add_bodies(solver, 2)
-
-    for bad_type in (-1, 1, 2, 3, 4, 5, 6):
-        try:
-            cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=bad_type)
-            assert_true(False, f"joint type {bad_type} was accepted")
-        except RuntimeError:
-            pass
-    assert_eq(
-        int(cmds.getAttr(f"{solver}.jointShapes", size=True) or 0),
-        0,
-        "rejected type should not create a joint",
-    )
-    print("✓ joint type validated to Spring6Dof")
-    return True
-
-
-def test_joint_type_enum_fields_exposed():
-    """jointType is an enum exposing only PMX 2.0's Spring6Dof field."""
-    _group, solver, _ja, _jb = _make_physics_scene()
-    _add_bodies(solver, 2)
-
-    # The enum attribute lives on the per-joint node (not the solver).
-    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0)
-    joint = _joint_at(solver, 0)
-    fields = cmds.attributeQuery("jointType", node=joint, listEnum=True)
-    assert_eq(fields, ["Spring6Dof"], "jointType fields")
-    assert_eq(int(cmds.getAttr(f"{joint}.jointType")), 0, "enum value")
-    print("✓ jointType exposes only the Spring6Dof field")
-    return True
-
-
 def test_body_indices_validated():
     """bodyA/bodyB are validated against the node's current body count."""
     _group, solver, _ja, _jb = _make_physics_scene()
@@ -427,7 +380,7 @@ def test_body_indices_validated():
 
     for body_a, body_b in ((-1, 0), (0, -1), (2, 0), (0, 2), (99, 0)):
         try:
-            cmds.pmxRigidBodyConstraint(solver, bodyA=body_a, bodyB=body_b, type=0)
+            cmds.pmxRigidBodyConstraint(solver, bodyA=body_a, bodyB=body_b)
             assert_true(False, f"bodyA/bodyB ({body_a},{body_b}) was accepted")
         except RuntimeError:
             pass
@@ -448,9 +401,7 @@ def test_model_root_resolution():
     cmds.addAttr(root, longName="pmxRigidBodyNode", dataType="string")
     cmds.setAttr(f"{root}.pmxRigidBodyNode", solver, type="string")
 
-    idx = cmds.pmxRigidBodyConstraint(
-        root, bodyA=0, bodyB=1, type=0, position=(4.0, 0.0, 0.0)
-    )
+    idx = cmds.pmxRigidBodyConstraint(root, bodyA=0, bodyB=1, position=(4.0, 0.0, 0.0))
     assert_eq(idx, 0, "index via model root != 0")
     assert_true(
         approx_equal_tuple(
@@ -473,7 +424,7 @@ def test_query_edit_rejected():
     except RuntimeError:
         pass
     try:
-        cmds.pmxRigidBodyConstraint(solver, edit=True, bodyA=0, bodyB=1, type=0)
+        cmds.pmxRigidBodyConstraint(solver, edit=True, bodyA=0, bodyB=1)
         assert_true(False, "edit mode was accepted")
     except RuntimeError:
         pass
@@ -492,7 +443,7 @@ def test_invalid_target_rejected():
     plain = cmds.createNode("transform", name="plainTransform")
 
     try:
-        cmds.pmxRigidBodyConstraint(plain, bodyA=0, bodyB=1, type=0)
+        cmds.pmxRigidBodyConstraint(plain, bodyA=0, bodyB=1)
         assert_true(False, "non-solver target was accepted")
     except RuntimeError:
         pass
@@ -525,7 +476,7 @@ def test_joint_viewport_link_inputs():
     _group, solver, _ja, _jb = _make_physics_scene()
     cmds.pmxRigidBody(solver, name="LinkA", position=(-2, 0, 0), physicsMode="physics")
     cmds.pmxRigidBody(solver, name="LinkB", position=(2, 0, 0), physicsMode="physics")
-    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0)
+    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
     joint = _joint_at(solver, 0)
 
     selection = om.MSelectionList()
@@ -574,7 +525,7 @@ def test_joint_node_naming():
         ({"name": "髪"}, "testSolver_Joint_3_Constraint"),
     ]
     for index, (flags, expected) in enumerate(cases):
-        cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0, **flags)
+        cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, **flags)
         assert_eq(_joint_guide_at(solver, index), expected, f"joint {index} name")
     return True
 
@@ -588,8 +539,8 @@ def test_joint_links_follow_bodies():
     """
     _group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 3)
-    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1, type=0)
-    cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=2, type=0)
+    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
+    cmds.pmxRigidBodyConstraint(solver, bodyA=1, bodyB=2)
     body1, body2 = _body_shape_at(solver, 1), _body_shape_at(solver, 2)
     first, second = _joint_at(solver, 0), _joint_at(solver, 1)
 
@@ -684,8 +635,6 @@ _TESTS = [
     ("Self-constraint rejected", test_self_constraint_rejected),
     ("Auto-increment joint indices", test_auto_increment_indices),
     ("Explicit index validated", test_explicit_index_validation),
-    ("Joint type validated", test_type_validated),
-    ("Joint type enum dropdown", test_joint_type_enum_fields_exposed),
     ("Body indices validated", test_body_indices_validated),
     ("Model root resolution", test_model_root_resolution),
     ("Query/edit rejected", test_query_edit_rejected),

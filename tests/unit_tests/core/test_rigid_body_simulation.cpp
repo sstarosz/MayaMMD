@@ -1,4 +1,4 @@
-﻿/*
+/*
  * SPDX-License-Identifier: MIT
  *
  * test_rigid_body_simulation.cpp
@@ -91,7 +91,6 @@ RigidBodySimulation::Definition weldDefinition()
     RigidBodySimulation::JointDefinition weld;
     weld.bodyA = 0;
     weld.bodyB = 1;
-    weld.type = 0; // SPRING_6DOF
     weld.frameT = Double3(0.0, 0.5, 0.0);
     def.joints.push_back(weld);
     return def;
@@ -103,7 +102,6 @@ TEST_CASE("Joint display distinguishes fixed offsets, tiny ranges and free axes"
 {
     using namespace mmd::core::joint_display;
     RigidBodySimulation::JointDefinition j;
-    j.type = 0;
     j.linearMin = Double3(2.0, 0.0, 1.0);
     j.linearMax = Double3(2.0, 1e-7, -1.0);
     j.linearStiffness = Double3(3, 0, 0);
@@ -541,10 +539,12 @@ TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B",
 TEST_CASE("Motion guides: a limit B presses on is drawn bold", "[joint-display]")
 {
     using namespace mmd::core::joint_display;
+    // Bold == drawn at kPressedWidth or bolder; every other guide is at most
+    // 3.5 (the needle's unpressed width).
     const auto pressed = [](const std::vector<GuideSegment>& segments, GuideColor color)
     {
         return std::count_if(segments.begin(), segments.end(), [&](const GuideSegment& s)
-                             { return s.highlight && s.color == color; });
+                             { return s.width >= kPressedWidth && s.color == color; });
     };
 
     // Rotation: the needle and the stop it presses on.
@@ -559,7 +559,7 @@ TEST_CASE("Motion guides: a limit B presses on is drawn bold", "[joint-display]"
     auto segments = motionGuides(in);
     REQUIRE(pressed(segments, GuideColor::AxisZ) == 2);
     for (const auto& s : segments)
-        if (s.highlight)
+        if (s.width >= kPressedWidth)
             REQUIRE(s.width > 3.5f);
     in.currentAngles = Double3(0, 0, -0.1);
     REQUIRE(pressed(motionGuides(in), GuideColor::AxisZ) == 0);
@@ -597,12 +597,11 @@ TEST_CASE("Joint status says why a joint constrains nothing", "[sim][joint-displ
     bodies[1].physicsMode = RigidBodySimulation::PhysicsMode::ePhysics;
     bodies[2].enabled = false;
     bodies[3].physicsMode = RigidBodySimulation::PhysicsMode::eFollowBone;
-    const auto status = [&](long a, long b, long type = 0)
+    const auto status = [&](long a, long b)
     {
         RigidBodySimulation::JointDefinition j;
         j.bodyA = a;
         j.bodyB = b;
-        j.type = type;
         return RigidBodySimulation::jointStatus(j, bodies);
     };
     REQUIRE(status(0, 1) == Status::eActive);
@@ -611,7 +610,6 @@ TEST_CASE("Joint status says why a joint constrains nothing", "[sim][joint-displ
     REQUIRE(status(0, 4) == Status::eMissingBody);
     REQUIRE(status(1, 1) == Status::eSameBody);
     REQUIRE(status(1, 2) == Status::eDisabledBody);
-    REQUIRE(status(0, 1, 3) == Status::eUnsupportedType);
     REQUIRE(status(0, 3) == Status::eBothKinematic);
 }
 
@@ -994,7 +992,6 @@ TEST_CASE("Disabled kinematic bodies are excluded from the anchor order", "[sim]
     RigidBodySimulation::JointDefinition weld;
     weld.bodyA = 2;
     weld.bodyB = 3;
-    weld.type = 0; // SPRING_6DOF
     weld.frameT = Double3(0.0, 0.5, 0.0);
     def.joints.push_back(weld);
 
@@ -1125,29 +1122,6 @@ TEST_CASE("Spring6Dof freedom matches the joint display model", "[sim][joint-dis
     }
 }
 
-TEST_CASE("PMX 2.1 joint types are not simulated", "[sim]")
-{
-    // Only Spring6Dof (PMX 2.0) builds a constraint: with any other type the
-    // dynamic body is NOT carried by the moving anchor.
-    for (long type : {1L, 2L, 3L, 4L, 5L})
-    {
-        RigidBodySimulation::Definition def = weldDefinition();
-        def.joints[0].type = type;
-
-        RigidBodySimulation sim;
-        REQUIRE(sim.initialize(def));
-
-        // Move the anchor sideways, clear of the dynamic body (no contact).
-        RigidBodySimulation::Pose moved;
-        moved.pos.x = 5.0;
-        REQUIRE(sim.setKinematicPose(0, moved));
-        for (int i = 0; i < 60; ++i)
-            sim.step(RigidBodySimulation::kFixedDt);
-
-        REQUIRE(sim.bodyPose(1).pos.x == Catch::Approx(0.0).margin(1e-6));
-    }
-}
-
 TEST_CASE("initialize returns false for an empty body list", "[sim]")
 {
     RigidBodySimulation sim;
@@ -1178,7 +1152,6 @@ TEST_CASE("Spring6Dof with finite limits builds and steps without error", "[sim]
         RigidBodySimulation::JointDefinition joint;
         joint.bodyA = 0;
         joint.bodyB = 1;
-        joint.type = 0;
         joint.frameT = Double3(0.0, 0.5, 0.0);
         joint.linearMin = Double3(-1.0, -1.0, -1.0);
         joint.linearMax = Double3(1.0, 1.0, 1.0);

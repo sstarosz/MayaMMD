@@ -71,7 +71,6 @@ constexpr const char* kNameFlag = "n";
 constexpr const char* kNameUniversalFlag = "nu";
 constexpr const char* kBodyAFlag = "ba";
 constexpr const char* kBodyBFlag = "bb";
-constexpr const char* kTypeFlag = "t";
 constexpr const char* kPositionFlag = "p";
 constexpr const char* kRotationFlag = "rot";
 // NOTE: MSyntax silently rejects SHORT flag names longer than 3 chars (a
@@ -119,13 +118,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     int bodyA = 0;
     int bodyB = 0;
-    int type = 0;
     if (parser.isFlagSet(kBodyAFlag))
         bodyA = parser.flagArgumentInt(kBodyAFlag, 0);
     if (parser.isFlagSet(kBodyBFlag))
         bodyB = parser.flagArgumentInt(kBodyBFlag, 0);
-    if (parser.isFlagSet(kTypeFlag))
-        type = parser.flagArgumentInt(kTypeFlag, 0);
 
     MString nameLocal;
     MString nameUniversal;
@@ -139,10 +135,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
 
     Double3 pos;
     Double3 rot;
-    Double3 lmin0;
-    Double3 lmax0;
-    Double3 amin0;
-    Double3 amax0;
+    Double3 lmin;
+    Double3 lmax;
+    Double3 amin;
+    Double3 amax;
     Double3 ls;
     Double3 as;
     if (parser.isFlagSet(kPositionFlag))
@@ -158,22 +154,22 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     if (parser.isFlagSet(kLinearMinFlag))
     {
         for (int i = 0; i < 3; ++i)
-            lmin0[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
+            lmin[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
     }
     if (parser.isFlagSet(kLinearMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
-            lmax0[i] = parser.flagArgumentDouble(kLinearMaxFlag, i);
+            lmax[i] = parser.flagArgumentDouble(kLinearMaxFlag, i);
     }
     if (parser.isFlagSet(kAngularMinFlag))
     {
         for (int i = 0; i < 3; ++i)
-            amin0[i] = parser.flagArgumentDouble(kAngularMinFlag, i);
+            amin[i] = parser.flagArgumentDouble(kAngularMinFlag, i);
     }
     if (parser.isFlagSet(kAngularMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
-            amax0[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
+            amax[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
     }
     if (parser.isFlagSet(kLinearStiffnessFlag))
     {
@@ -184,15 +180,6 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     {
         for (int i = 0; i < 3; ++i)
             as[i] = parser.flagArgumentDouble(kAngularStiffnessFlag, i);
-    }
-
-    // ── Joint type validation (PMX 2.0: Spring6Dof only) ──
-    if (type != RigidBodyJoint::kSpring6Dof)
-    {
-        MGlobal::displayError("Unsupported joint type '" + MString(std::to_string(type).c_str()) +
-                              "' — only 0 (SPRING_6DOF) is supported; PMX 2.1 joint types "
-                              "are not supported yet");
-        return MS::kFailure;
     }
 
     // ── Solver / index ──
@@ -282,11 +269,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // swaps.  Angular: rotations about local X/Y negate (F·Rx·F⁻¹ = Rx(-θ)) so
     // their intervals negate AND swap; rotation about Z is invariant.  Springs
     // are magnitudes — invariant, passed through.
-    reflectJointLimits(lmin0, lmax0, amin0, amax0);
-    const Double3& lmin = lmin0;
-    const Double3& lmax = lmax0;
-    const Double3& amin = amin0;
-    const Double3& amax = amax0;
+    reflectJointLimits(lmin, lmax, amin, amax);
 
     // ── Create the per-joint node (pmxRigidBodyJoint) ──
     // One selectable joint per PMX constraint: a plain TRANSFORM holding the
@@ -342,17 +325,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                                 jointPlug(RigidBodyJoint::aJointBodyA));
     mmd::maya::connectOrReplace(MFnDependencyNode(shapeB).findPlug("message", true, &plugStat),
                                 jointPlug(RigidBodyJoint::aJointBodyB));
-    // jointType is an enum attribute — write through setShort (like the
-    // bodyGroupId enum).
-    jointPlug(RigidBodyJoint::aJointType).setShort(static_cast<short>(type));
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearMin), lmin);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearMax), lmax);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularMin), amin);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularMax), amax);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearStiffness), ls);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularStiffness), as);
-    // Visible by default (solid + wire) so imported constraints show up.
-    jointPlug(RigidBodyJoint::aDrawMode).setShort(RigidBodyJoint::kDrawRanges);
 
     // Register the joint on the solver: joint.solver -> solver.jointShapes[n]
     // (PMX order — the solver pulls each joint from its node in readJointData).
@@ -395,7 +373,6 @@ MSyntax RigidBodyConstraintCmd::syntaxCreator()
     syntax.addFlag(kNodeNameFlag, "nodeName", MSyntax::kString);
     syntax.addFlag(kBodyAFlag, "bodyA", MSyntax::kLong);
     syntax.addFlag(kBodyBFlag, "bodyB", MSyntax::kLong);
-    syntax.addFlag(kTypeFlag, "type", MSyntax::kLong);
     syntax.addFlag(kPositionFlag, "position", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
     syntax.addFlag(kRotationFlag, "rotation", MSyntax::kDouble, MSyntax::kDouble, MSyntax::kDouble);
     syntax.addFlag(kLinearMinFlag, "linearMin", MSyntax::kDouble, MSyntax::kDouble,

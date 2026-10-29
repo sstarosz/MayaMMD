@@ -81,6 +81,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
                         const MHWRender::MFrameContext& frameContext) override;
     void populateGeometry(const MGeometryRequirements& requirements,
                           const MRenderItemList& renderItems, MGeometry& data) override;
+    // Pure virtual in MPxGeometryOverride; nothing to release (see the .cpp).
     void cleanUp() override;
 
     // Selection — the hub is the only pickable item; the overlays are
@@ -139,7 +140,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // bodies are connections, read with RigidBodyJoint::bodyShape.
     struct Plugs
     {
-        MPlug drawMode, type;
+        MPlug drawMode;
         MPlug linearMin, linearMax, angularMin, angularMax;
         MPlug linearStiffness, angularStiffness;
         MPlug solver, solverStep;

@@ -143,7 +143,6 @@ def _add_weld_joint(
         assert_true(bool(source), f"bodyShapes[{body}] should have a shape")
         shape = str(source[0]).split(".")[0]
         cmds.connectAttr(f"{shape}.message", f"{joint}.jointBody{end}")
-    cmds.setAttr(f"{joint}.jointType", 0)
     cmds.setAttr(f"{joint}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{joint}.jointLinearMax", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{joint}.jointAngularMin", 0.0, 0.0, 0.0)
@@ -269,7 +268,6 @@ def test_attribute_surface_and_defaults():
         "jointNameUniversal",
         "jointBodyA",
         "jointBodyB",
-        "jointType",
         "jointLinearMin",
         "jointLinearMax",
         "jointAngularMin",

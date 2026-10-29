@@ -394,11 +394,6 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             assert_true(bool(linked), f"first joint body {end} should be connected")
             assert_eq(linked, expected, f"first joint body {end}")
         assert_eq(
-            int(cmds.getAttr(f"{jbase}.jointType")),
-            int(first.type.value),
-            "first joint type",
-        )
-        assert_eq(
             cmds.getAttr(f"{jbase}.jointNameLocal"),
             first.name_local,
             "first joint name_local",

@@ -69,7 +69,8 @@ constexpr HubItem kHubItems[4] = {
 };
 // Wedges around the hub sphere (its slices); half of them per colour.
 constexpr int kHubWedges = 8;
-// Opacity of the selected joint's X-ray ghost pass (see addUIDrawables).
+// Opacity of the X-ray pass that keeps a selected joint's overlay readable
+// through the geometry in front of it (see addUIDrawables).
 constexpr float kGhostAlpha = 0.3f;
 
 // A mesh: xyz-interleaved positions + normals, a triangle index list, and a
@@ -340,7 +341,6 @@ RigidBodyJointGeometryOverride::RigidBodyJointGeometryOverride(const MObject& ob
     : MHWRender::MPxGeometryOverride(obj), fJoint(obj)
 {
     fPlugs.drawMode = MPlug(obj, RigidBodyJoint::aDrawMode);
-    fPlugs.type = MPlug(obj, RigidBodyJoint::aJointType);
     fPlugs.linearMin = MPlug(obj, RigidBodyJoint::aJointLinearMin);
     fPlugs.linearMax = MPlug(obj, RigidBodyJoint::aJointLinearMax);
     fPlugs.angularMin = MPlug(obj, RigidBodyJoint::aJointAngularMin);
@@ -445,7 +445,6 @@ void RigidBodyJointGeometryOverride::updateDG()
 
     fState.drawMode = fPlugs.drawMode.asShort();
     auto& def = fState.definition;
-    def.type = fPlugs.type.isNull() ? 0 : fPlugs.type.asShort();
     // The bodies are connections; the solver turns them into its indices.
     const MObject bodyShapes[2] = {RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
                                    RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB)};
@@ -476,8 +475,9 @@ void RigidBodyJointGeometryOverride::updateDG()
         // The command registers joint.solver -> solver.jointShapes[index].
         // The solver is a DESTINATION of this message, not its source.
         fPlugs.solver.connectedTo(solverDestinations, false, true);
-    const bool selected = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
-    fState.picked = selected;
+    // "picked" = the joint itself is selected (not just one of its ancestors),
+    // which is what the overlay ownership rules key off.
+    fState.picked = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
     if (solverDestinations.length() > 0)
     {
         fSolver = solverDestinations[0].node();
@@ -514,7 +514,7 @@ void RigidBodyJointGeometryOverride::updateDG()
     // and visibility) so a body hidden or isolated out of a view can still be
     // outlined, and decide with the other selected joints which one owns
     // that fallback outline.  Unselected joints draw no overlays at all.
-    if (selected && !fSolver.isNull())
+    if (fState.picked && !fSolver.isNull())
     {
         for (int end = 0; end < 2; ++end)
         {
@@ -1028,11 +1028,10 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
     }
 }
 
-void RigidBodyJointGeometryOverride::cleanUp()
-{
-    // Render items live in VP2's persistent list and are owned by VP2 —
-    // nothing to release per frame.
-}
+// MPxGeometryOverride::cleanUp() is pure virtual, so it must be overridden even
+// though it does nothing: render items live in VP2's persistent list and are
+// owned by VP2 — there is no per-frame cache to release.
+void RigidBodyJointGeometryOverride::cleanUp() {}
 
 // ===========================================================================
 // Selection — object-level picking of the hub render items.

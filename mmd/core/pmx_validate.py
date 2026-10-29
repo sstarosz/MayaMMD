@@ -596,8 +596,10 @@ def _validate_physics(pmx_model: PmxModel, result: ValidationResult):
 
     if detached_inert:
         details = [
-            f"Each sits up to {worst_inert_gap:.1f} units from the nearest of the two rigid "
-            f"bodies it connects, on a model {extent:.1f} units across.",
+            (
+                f"Each sits up to {worst_inert_gap:.1f} units from the nearest of the two "
+                f"rigid bodies it connects, on a model {extent:.1f} units across."
+            ),
             "A joint is normally placed where its two bodies meet.",
         ]
         if detached_inert_at_origin:
@@ -611,10 +613,14 @@ def _validate_physics(pmx_model: PmxModel, result: ValidationResult):
                 "converting physics."
             )
         details += [
-            "Their limits are all free or wider than the model, with no stiffness set, so "
-            "they never pull their bodies back.",
-            "They do not change the simulation, but the viewport draws a hub at each "
-            "joint's position, so those hubs float far from the character.",
+            (
+                "Their limits are all free or wider than the model, with no stiffness set, "
+                "so they never pull their bodies back."
+            ),
+            (
+                "They do not change the simulation, but the viewport draws a hub at each "
+                "joint's position, so those hubs float far from the character."
+            ),
         ]
         result.add_issue(
             ValidationIssue(

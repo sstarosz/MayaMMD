@@ -94,7 +94,6 @@ class RigidBodySimulation
     {
         long bodyA = -1;
         long bodyB = -1;
-        long type = 0; // PMX JointType value; only 0 (Spring6Dof) is simulated
         Double3 frameT;
         Double3 frameR; // degrees
         Double3 linearMin;
@@ -108,7 +107,7 @@ class RigidBodySimulation
         /// Field-wise equality — the Maya node uses it to detect config edits.
         bool operator==(const JointDefinition& o) const
         {
-            return bodyA == o.bodyA && bodyB == o.bodyB && type == o.type &&
+            return bodyA == o.bodyA && bodyB == o.bodyB &&
                    frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
                    frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
                    linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
@@ -133,11 +132,10 @@ class RigidBodySimulation
     enum class JointStatus : short
     {
         eActive,
-        eMissingBody,     // an end is unset or out of range
-        eSameBody,        // both ends are the same body
-        eDisabledBody,    // an end is disabled (not in the world)
-        eUnsupportedType, // not Spring6Dof (a PMX 2.1 joint type)
-        eBothKinematic,   // both ends follow their bones
+        eMissingBody,   // an end is unset or out of range
+        eSameBody,      // both ends are the same body
+        eDisabledBody,  // an end is disabled (not in the world)
+        eBothKinematic, // both ends follow their bones
     };
     /// The status of `joint` linking `bodies` (Definition::bodies order).
     [[nodiscard]] static JointStatus jointStatus(const JointDefinition& joint,

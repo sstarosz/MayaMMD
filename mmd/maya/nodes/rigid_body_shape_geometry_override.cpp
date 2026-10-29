@@ -14,8 +14,9 @@
  * the identity and the collider follows the animated guide automatically.
  *
  * Lifecycle follows the devkit footPrintNode_GeometryOverride sample: the
- * render item lives in VP2's persistent list (never Destroy'd), cleanUp() is
- * empty, and the lazily-created stock shader is released in the destructor.
+ * render item lives in VP2's persistent list (never Destroy'd), cleanUp() has
+ * an empty body (it is pure virtual in the base class), and the lazily-created
+ * stock shader is released in the destructor.
  */
 
 #include "rigid_body_shape_geometry_override.hpp"
@@ -558,11 +559,10 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     }
 }
 
-void RigidBodyShapeGeometryOverride::cleanUp()
-{
-    // Render items live in VP2's persistent list and are owned by VP2 —
-    // nothing to release per frame.
-}
+// MPxGeometryOverride::cleanUp() is pure virtual, so it must be overridden even
+// though it does nothing: render items live in VP2's persistent list and are
+// owned by VP2 — there is no per-frame cache to release.
+void RigidBodyShapeGeometryOverride::cleanUp() {}
 
 // ===========================================================================
 // Selection — object-level picking of the solid render item.

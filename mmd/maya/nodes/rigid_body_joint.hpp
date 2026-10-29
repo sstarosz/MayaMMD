@@ -56,14 +56,6 @@ class RigidBodyJoint : public MPxLocatorNode
     static constexpr const char* kSelectionType = "pmxRigidBodyJoint";
     static constexpr int kSelectionPriority = 10;
 
-    // PMX joint type — enum attribute values match the engine
-    // JointDefinition::type.  PMX 2.0 only has Spring6Dof; the PMX 2.1 types
-    // (1..5) are not supported yet.
-    enum JointType : short
-    {
-        kSpring6Dof = 0,
-    };
-
     // Viewport draw mode (see docs/JointVisualization.md):
     //   0 Off    — nothing
     //   1 Hub    — the state-coloured hub; when selected, the A/B attachments
@@ -140,7 +132,6 @@ class RigidBodyJoint : public MPxLocatorNode
     // rigid_body_index_a / _b, linked by node so it survives body edits).
     static MObject aJointBodyA;
     static MObject aJointBodyB;
-    static MObject aJointType;          // enum — PMX joint type (JointType)
     static MObject aJointLinearMin;     // float3 — linear limit min (joint-frame offsets)
     static MObject aJointLinearMax;     // float3 — linear limit max (joint-frame offsets)
     static MObject

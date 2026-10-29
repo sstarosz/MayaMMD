@@ -443,7 +443,6 @@ global proc AEpmxRigidBodyJointTemplate( string $nodeName ) {
     editorTemplate -beginLayout "Joint" -collapse 0;
         editorTemplate -addControl "jointNameLocal" -label "Local Name";
         editorTemplate -addControl "jointNameUniversal" -label "Universal Name";
-        editorTemplate -addControl "jointType" -label "Type";
         editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
             "AEpmxRigidBodyJointBodyReplace" "jointBodyA";
         editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
