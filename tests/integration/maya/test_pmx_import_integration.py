@@ -14,6 +14,18 @@ import maya.api.OpenMayaAnim as oma
 from maya import cmds
 
 from mmd.core.data_types import PmxModel
+from mmd.maya.model_visibility import (
+    DEFAULT_VISIBILITY,
+    JOINTS,
+    RIGID_BODIES,
+    apply_default_visibility,
+    get_part_visibility,
+    hidden_descendant_counts,
+    resolve_part_nodes,
+    reveal_all,
+    set_all_parts_visibility,
+    set_part_visibility,
+)
 from tests.integration.test_helpers import (
     approx_equal_tuple,
     assert_eq,
@@ -718,6 +730,102 @@ def test_pmx_write_back_moves_bone(pmx_data: PmxModel, maya_pmx_data):
     return True
 
 
+def test_pmx_visibility_toggles(pmx_data: PmxModel, maya_pmx_data):
+    """The Visibility panel's containers resolve on a real import.
+
+    ``mmd.maya.model_visibility`` finds the Mesh / Bones / Rigid Bodies /
+    Joints containers *structurally* (by the shape types they hold, not by
+    name), and the panel plus the import defaults rely on it.  Its unit tests
+    fake the hierarchy, so this guards the one the builders actually create:
+    regrouping or renaming a container would otherwise only break the panel at
+    runtime.
+
+    Also leaves the scene in the import default state for any later suite.
+    """
+    root = maya_pmx_data.root_name
+    root_path = (cmds.ls(root, long=True) or [root])[0]
+
+    nodes = resolve_part_nodes(root)
+    for part, node in nodes.items():
+        assert_true(node is not None, f"{part} container was not resolved")
+        assert_true(cmds.objExists(node), f"{part} container missing: {node}")
+        parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
+        assert_true(
+            bool(parents) and parents[0].startswith(root_path),
+            f"{part} container is outside the model root: {node}",
+        )
+
+    assert_eq(
+        len({node for node in nodes.values()}),
+        len(nodes),
+        f"two parts resolve to the same container: {nodes}",
+    )
+
+    # Defaults: mesh + bones shown, rigid bodies + joints hidden.
+    states = apply_default_visibility(root)
+    for part, expected in DEFAULT_VISIBILITY.items():
+        assert_eq(states[part], expected, f"{part} default visibility wrong")
+    assert_eq(
+        get_part_visibility(root),
+        dict(DEFAULT_VISIBILITY),
+        "reading it back must agree with what was applied",
+    )
+
+    # Toggle every part and confirm the container attribute follows.
+    for part, node in nodes.items():
+        assert_true(set_part_visibility(root, part, False), f"{part} could not hide")
+        assert_eq(cmds.getAttr(f"{node}.visibility"), False, f"{part} not hidden")
+        assert_true(set_part_visibility(root, part, True), f"{part} could not show")
+        assert_eq(cmds.getAttr(f"{node}.visibility"), True, f"{part} not shown")
+
+    # Show All / Hide All (the panel's master button) drives every part.
+    assert_eq(
+        set_all_parts_visibility(root, False), len(nodes), "hide-all missed a part"
+    )
+    assert_eq(
+        get_part_visibility(root),
+        dict.fromkeys(nodes, False),
+        "hide-all left a part visible",
+    )
+    assert_eq(
+        set_all_parts_visibility(root, True), len(nodes), "show-all missed a part"
+    )
+    assert_eq(
+        get_part_visibility(root),
+        dict.fromkeys(nodes, True),
+        "show-all left a part hidden",
+    )
+
+    # Nodes hidden individually survive Hide All + Show All (the part toggles are
+    # only a gate), but reveal_all - the panel's Show All - must bring them back.
+    joint = cmds.listRelatives(nodes["bones"], allDescendents=True, type="joint")[0]
+    cmds.setAttr(f"{joint}.visibility", 0)
+    apply_default_visibility(root)  # bones shown again, physics hidden
+    assert_eq(
+        hidden_descendant_counts(root)["bones"],
+        1,
+        "an individually hidden joint must be reported",
+    )
+    assert_eq(cmds.getAttr(f"{joint}.visibility"), 0, "the joint must stay hidden")
+    reveal_all(root)
+    assert_eq(cmds.getAttr(f"{joint}.visibility"), 1, "reveal_all missed the joint")
+    assert_eq(
+        hidden_descendant_counts(root),
+        dict.fromkeys(nodes, 0),
+        "something is still hidden after reveal_all",
+    )
+
+    # Hiding the guides must not disturb the physics solver.
+    solver = cmds.getAttr(f"{root}.pmxRigidBodyNode")
+    set_part_visibility(root, RIGID_BODIES, False)
+    set_part_visibility(root, JOINTS, False)
+    assert_true(cmds.objExists(solver), "hiding the physics guides removed the solver")
+
+    apply_default_visibility(root)
+    print(f"PASS: visibility containers resolve and toggle on a real import ({nodes})")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Test registry and runner
 # ---------------------------------------------------------------------------
@@ -735,4 +843,5 @@ _TESTS = [
     ("Rigid Body Wiring", test_pmx_physics_wiring),
     ("Simulation Steps", test_pmx_simulation_steps),
     ("Write-back Moves Bone", test_pmx_write_back_moves_bone),
+    ("Visibility Toggles", test_pmx_visibility_toggles),
 ]

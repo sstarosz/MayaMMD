@@ -203,6 +203,15 @@ def install_maya_stub(profile: str | None = None) -> bool:
     )
     maya.OpenMayaMPx = open_maya_mpx
 
+    # ── OpenMayaUI (API 1.0) ───────────────────────────────────────────
+    # Widget-embedding code resolves Maya controls to Qt pointers; outside
+    # Maya there are none, so every lookup misses (``None``).
+    open_maya_ui = MagicMock(name="maya.OpenMayaUI")
+    open_maya_ui.MQtUtil.findControl.return_value = None
+    open_maya_ui.MQtUtil.findLayout.return_value = None
+    open_maya_ui.MQtUtil.findMenuItem.return_value = None
+    maya.OpenMayaUI = open_maya_ui
+
     # ── OpenMaya API 2.0 namespace ─────────────────────────────────────
     api = ModuleType("maya.api")
 
@@ -276,6 +285,7 @@ def install_maya_stub(profile: str | None = None) -> bool:
     sys.modules["maya.mel"] = maya.mel
     sys.modules["maya.OpenMaya"] = maya.OpenMaya
     sys.modules["maya.OpenMayaMPx"] = maya.OpenMayaMPx
+    sys.modules["maya.OpenMayaUI"] = maya.OpenMayaUI
     sys.modules["maya.api"] = api
     sys.modules["maya.api.OpenMaya"] = api.OpenMaya
     sys.modules["maya.api.OpenMayaAnim"] = api.OpenMayaAnim

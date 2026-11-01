@@ -63,6 +63,7 @@ _MMD_MODULES = [
     "mmd.core.vmd_importer",
     "mmd.core.vpd_importer",
     "mmd.maya.maya_data_types",
+    "mmd.maya.model_visibility",
     "mmd.maya.pmx.rigid_body_builder",
     "mmd.maya.pmx_scene_builder",
     "mmd.maya.pmx_model_utils",
@@ -74,6 +75,7 @@ _MMD_MODULES = [
     "mmd.maya.nodes.bone_morph_node",
     "mmd.maya.cmds.bone_blend_shape_cmd",
     "mmd.ui.morph_tree_widget",
+    "mmd.ui.visibility_panel",
     "mmd.ui.tool_main_widget",
 ]
 

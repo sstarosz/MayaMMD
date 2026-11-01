@@ -57,6 +57,7 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 
 - ✅ Dockable Maya workspaceControl panel
 - ✅ Pose editor with morph weight sliders
+- ✅ Model visibility toggles — show/hide the mesh, bones, rigid bodies and joints of the selected model, plus Show All / Hide All (rigid bodies and joints start hidden; Show All also reveals nodes hidden individually)
 - 🔄 Reset to Bind Pose — currently broken
 - ✅ Multiple models in one scene — selection-based targeting
 - 🔄 Undo — individual operations undoable, not the whole import
