@@ -105,6 +105,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Ensure Maya SDK (cache only — CI never downloads the DevKit)
+        run: python scripts/ci/strip_maya_sdk.py ensure --version 2026
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
