@@ -14,6 +14,16 @@ visualization (hubs, motion ranges, A/B links), editable Attribute-Editor
 templates, PMX physics validation, and MMD-matching Spring6Dof simulation
 with a selection-neutral import.
 
+Model visibility: a collapsible Visibility section in the tool panel gained
+Mesh / Bones / Rigid Bodies / Joints toggles plus Show All / Hide All for the
+selected model; freshly imported models start with rigid bodies and joints
+hidden.  Part toggles only gate the container, so nodes hidden individually
+stay hidden (the tooltips say so) and Show All - which does reveal them - is
+the explicit reset.  Import scaffolding hidden on purpose (`_InheritCtrl`,
+`_MorphCtrl`, IK handles) is never touched.  The toggles live in their own
+module (`mmd/ui/visibility_panel.py`) and drive the containers found by
+`mmd/maya/model_visibility.py`.
+
 ---
 
 ## [0.2.0] - 2026-08-14

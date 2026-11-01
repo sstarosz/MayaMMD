@@ -1,12 +1,13 @@
 import importlib
 import logging
+import os
 import sys
 
 import maya.api.OpenMaya as om
 import maya.OpenMayaUI as omui
 from maya import cmds
 from PySide6 import QtWidgets
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import QComboBox, QLabel, QWidgetAction
 from shiboken6 import isValid as is_qt_obj_valid
 from shiboken6 import wrapInstance
@@ -17,6 +18,15 @@ from mmd.core.vmd_importer import parse_vmd_file
 from mmd.core.vpd_importer import parse_vpd_file
 from mmd.maya.maya_data_types import ResolvedModelData
 from mmd.maya.model_context import ModelContext
+from mmd.maya.model_visibility import (
+    PART_LABELS,
+    apply_default_visibility,
+    get_part_visibility,
+    hidden_descendant_counts,
+    reveal_all,
+    set_all_parts_visibility,
+    set_part_visibility,
+)
 from mmd.maya.pmx_model_utils import (
     discover_model_roots_in_scene,
     find_all_model_roots_from_selection,
@@ -28,28 +38,45 @@ from mmd.maya.pmx_scene_builder import build_pmx_scene
 from mmd.maya.vmd_scene_builder import apply_vmd_to_scene
 from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene
 from mmd.ui.morph_tree_widget import MorphTreeWidget
+from mmd.ui.visibility_panel import VisibilityPanel, embed_visibility_section
 
-# Force reload modules during development
-if "mmd.maya.vmd_scene_builder" in sys.modules:
+# Force reload modules during development (set MAYAMMD_DEV=0 to disable;
+# reloading re-executes module globals, so tests run with it off).
+_DEV_RELOAD = os.environ.get("MAYAMMD_DEV", "1") == "1"
+if _DEV_RELOAD and "mmd.maya.vmd_scene_builder" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.vmd_scene_builder"])
     from mmd.maya.vmd_scene_builder import apply_vmd_to_scene
-if "mmd.maya.pmx_scene_builder" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.pmx_scene_builder" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.pmx_scene_builder"])
     from mmd.maya.pmx_scene_builder import build_pmx_scene
-if "mmd.maya.pmx_model_utils" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.pmx_model_utils" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.pmx_model_utils"])
     from mmd.maya.pmx_model_utils import reset_model_to_bind_pose
-if "mmd.maya.vpd_scene_builder" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.vpd_scene_builder" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.vpd_scene_builder"])
     from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene
-if "mmd.maya.maya_data_types" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.maya_data_types" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.maya_data_types"])
-if "mmd.maya.model_context" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.model_context" in sys.modules:
     importlib.reload(sys.modules["mmd.maya.model_context"])
     from mmd.maya.model_context import ModelContext
-if "mmd.ui.morph_tree_widget" in sys.modules:
+if _DEV_RELOAD and "mmd.maya.model_visibility" in sys.modules:
+    importlib.reload(sys.modules["mmd.maya.model_visibility"])
+    from mmd.maya.model_visibility import (
+        PART_LABELS,
+        apply_default_visibility,
+        get_part_visibility,
+        hidden_descendant_counts,
+        reveal_all,
+        set_all_parts_visibility,
+        set_part_visibility,
+    )
+if _DEV_RELOAD and "mmd.ui.morph_tree_widget" in sys.modules:
     importlib.reload(sys.modules["mmd.ui.morph_tree_widget"])
     from mmd.ui.morph_tree_widget import MorphTreeWidget
+if _DEV_RELOAD and "mmd.ui.visibility_panel" in sys.modules:
+    importlib.reload(sys.modules["mmd.ui.visibility_panel"])
+    from mmd.ui.visibility_panel import VisibilityPanel, embed_visibility_section
 
 
 # Simple PySide widget (no MayaQWidgetDockableMixin)
@@ -173,12 +200,17 @@ class MMMToolWidget(QtWidgets.QWidget):
         self.import_export_layout.addLayout(self.vmd_layout)
         self.import_export_layout.addLayout(self.pose_layout)
 
+        # Visibility section (self-contained widget; embedded in a Maya
+        # frameLayout below so it collapses like the Morphs section).
+        self.visibility_panel = VisibilityPanel()
+        self.visibility_panel.match_row_height(
+            self.pmx_import_button.sizeHint().height()
+        )
+        self.visibility_panel.partToggled.connect(self._on_visibility_toggled)
+        self.visibility_panel.allToggled.connect(self._on_visibility_all_toggled)
+
         self.main_layout.addWidget(QLabel("MayaMMD Main Widget"))
         self.main_layout.addLayout(self.import_export_layout)
-        self.main_layout.addLayout(self.model_ops_layout)
-
-        # Create Qt-based pose tree widget (similar to Shape Editor)
-        # Wrap in Maya's frameLayout for native Maya appearance
 
         # Convert Maya UI to Qt widget helper function
         def mayaToQtObject(inMayaUI):
@@ -189,6 +221,18 @@ class MMMToolWidget(QtWidgets.QWidget):
                 ptr = omui.MQtUtil.findMenuItem(inMayaUI)
             if ptr is not None:
                 return wrapInstance(int(ptr), QtWidgets.QWidget)
+
+        # Collapsible "Visibility" section, built best-effort: a Maya-side
+        # failure must not take the whole panel down, and the panel falls back
+        # to an inline row when the native section cannot be created.
+        embed_visibility_section(
+            self.main_layout, self.visibility_panel, mayaToQtObject
+        )
+
+        self.main_layout.addLayout(self.model_ops_layout)
+
+        # Create Qt-based pose tree widget (similar to Shape Editor)
+        # Wrap in Maya's frameLayout for native Maya appearance
 
         # Create a Maya frameLayout (native collapsible section)
         frame_name = cmds.frameLayout(label="Morphs", collapsable=True, collapse=False)
@@ -265,6 +309,69 @@ class MMMToolWidget(QtWidgets.QWidget):
         self.vmd_import_button.setEnabled(has_models)
         self.vpd_import_button.setEnabled(has_models)
         self.reset_pose_button.setEnabled(has_models)
+        self._refresh_visibility_buttons()
+
+    def _refresh_visibility_buttons(self) -> None:
+        """Sync the visibility panel with the active model's part visibility.
+
+        Toggles are disabled for parts the model does not have (e.g. rigid
+        bodies on a model imported without physics), and the panel is told how
+        many nodes are hidden individually so it can say why Show does not
+        reveal them.
+        """
+        if not self._qt_valid():
+            return
+        root = self.ctx.rootName
+        self.visibility_panel.sync(
+            get_part_visibility(root), hidden_descendant_counts(root)
+        )
+
+    def _on_visibility_toggled(self, part: str, visible: bool) -> None:
+        """Show or hide one model part on every targeted model."""
+        if not self._qt_valid():
+            return
+        roots = self._get_target_model_roots()
+        if not roots:
+            # The targeted model may have been deleted under us: put the button
+            # back and disable it rather than leaving it flipped.
+            self._refresh_visibility_buttons()
+            return
+        toggled = sum(set_part_visibility(root, part, visible) for root in roots)
+        if not toggled:
+            log.debug("No model had a %s part to toggle", part)
+        else:
+            log.debug(
+                "%s %s on %d model(s)",
+                "Showing" if visible else "Hiding",
+                PART_LABELS[part],
+                toggled,
+            )
+        # Re-read the scene: a model that lacks the part, or a rejected write,
+        # would otherwise leave the button showing a state the scene is not in.
+        self._refresh_visibility_buttons()
+
+    def _on_visibility_all_toggled(self, visible: bool) -> None:
+        """Show or hide every part of the targeted models (master button).
+
+        Showing uses :func:`reveal_all`, which also clears per-node hiding -
+        "Show All" must leave nothing invisible.  Hiding only gates the
+        containers, so the nodes' own visibility survives for later.
+        """
+        if not self._qt_valid():
+            return
+        roots = self._get_target_model_roots()
+        if roots:
+            if visible:
+                revealed = sum(reveal_all(root) for root in roots)
+                log.debug(
+                    "Revealed %d individually hidden node(s) across %d model(s)",
+                    revealed,
+                    len(roots),
+                )
+            else:
+                hidden = sum(set_all_parts_visibility(root, False) for root in roots)
+                log.debug("Hid every part on %d model(s)", hidden)
+        self._refresh_visibility_buttons()
 
     # ── Maya API 2.0 selection change callback ────────────────────────────
 
@@ -341,7 +448,7 @@ class MMMToolWidget(QtWidgets.QWidget):
         self._refresh_button_states()
         log.debug("Active model changed: %s", root_name or "(none)")
 
-    def _get_model_roots_for_import(self) -> list[str]:
+    def _get_target_model_roots(self) -> list[str]:
         """Resolve which PMX model roots to operate on.
 
         Returns roots from the current selection (allows multi-model
@@ -391,6 +498,10 @@ class MMMToolWidget(QtWidgets.QWidget):
 
                     maya_pmx_data = build_pmx_scene(pmx_data)
 
+                    # Start from the panel's default part visibility so the
+                    # toggles and the viewport agree right after import.
+                    apply_default_visibility(maya_pmx_data.root_name)
+
                     # TODO(viewport-transparency): MMD models often contain
                     # near-invisible transparent overlay materials (e.g. the
                     # `face00` nose/cheek piece in YYB Hatsune Miku NT, whose
@@ -437,7 +548,7 @@ class MMMToolWidget(QtWidgets.QWidget):
             log.debug("No PMX file selected.")
 
     def import_vmd(self):
-        roots = self._get_model_roots_for_import()
+        roots = self._get_target_model_roots()
         if not roots:
             if not discover_model_roots_in_scene():
                 cmds.confirmDialog(
@@ -497,7 +608,7 @@ class MMMToolWidget(QtWidgets.QWidget):
             log.debug("No VMD file selected.")
 
     def import_vpd(self):
-        roots = self._get_model_roots_for_import()
+        roots = self._get_target_model_roots()
         if not roots:
             if not discover_model_roots_in_scene():
                 cmds.confirmDialog(
@@ -569,7 +680,7 @@ class MMMToolWidget(QtWidgets.QWidget):
 
     def reset_to_bind_pose(self):
         """Reset the current PMX model(s) to their bind pose."""
-        roots = self._get_model_roots_for_import()
+        roots = self._get_target_model_roots()
         if not roots:
             if not discover_model_roots_in_scene():
                 cmds.confirmDialog(
