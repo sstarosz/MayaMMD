@@ -205,6 +205,22 @@ def _current_platform() -> str:
         return "linux"
 
 
+# Keys used by DEVKIT_URLS (Autodesk's own capitalisation).
+_DEVKIT_PLATFORM_NAMES = {"windows": "Windows", "linux": "Linux", "macos": "macOS"}
+
+
+def _running_in_ci() -> bool:
+    """True when executing on a CI runner.
+
+    The Autodesk DevKit is ~527 MB and only needed once per developer machine;
+    CI must always pull the small pre-stripped cache instead.
+    """
+    for var in ("CI", "GITHUB_ACTIONS", "TF_BUILD", "BUILDKITE", "GITLAB_CI"):
+        if os.environ.get(var, "").lower() in ("1", "true", "yes"):
+            return True
+    return False
+
+
 def _setup_platform_libs(sdk_path: Path) -> None:
     """After extracting a combined SDK, set up the current platform's libs.
 
@@ -329,6 +345,9 @@ def _download_github_stripped(version: int, dest: Path) -> bool:
             print(f"    ✓ {asset} ({dest.stat().st_size / (1024*1024):.0f} MB)")
             return True
         # If gh fails (no auth, wrong repo, etc.), fall through to HTTP
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        print(f"    ⚠ gh CLI failed: {detail[-1] if detail else 'unknown error'}")
+        print(f"    (GH_TOKEN needs read access to {owner}/{repo})")
 
     # Fallback: direct HTTP download (works for public repos)
     url = _github_asset_url(version)
@@ -606,6 +625,8 @@ def cmd_ensure(args: argparse.Namespace) -> int:
       1. Already extracted at thirdy-party/sdk-maya{version}/  →  done
       2. Download stripped SDK from GitHub Releases            →  fast (~44 MB)
       3. Download full DevKit from Autodesk                    →  slow (~527 MB), strips it
+
+    Step 3 runs on developer machines only; in CI a failed step 2 is a hard error.
     """
     version = args.version or _detect_maya_version()
     if _SDK_CACHE_URL:
@@ -619,7 +640,7 @@ def cmd_ensure(args: argparse.Namespace) -> int:
         print(f"✓ Maya {version} SDK already at: {sdk_path}")
         return 0
 
-    platform = "Windows"
+    platform = _DEVKIT_PLATFORM_NAMES[_current_platform()]
     _SDK_CACHE.mkdir(parents=True, exist_ok=True)
 
     # ── 2. Try GitHub Releases (fast, stripped, cross-platform) ──
@@ -632,42 +653,53 @@ def cmd_ensure(args: argparse.Namespace) -> int:
         print(f"✓ Maya {version} SDK ready from GitHub cache at: {sdk_path}")
         return 0
 
-    # ── 3. Fall back to full DevKit from Autodesk (slow) ──
-    devkit_name = f"Autodesk_Maya_{version}_DevKit_{platform}"
-    zip_path = _SDK_CACHE / f"{devkit_name}.zip"
+    # ── 3. Fall back to the full DevKit from Autodesk (local development only) ──
+    # CI runners must never pull ~527 MB per job — a cache miss there is a
+    # configuration error, not something to paper over with a slow download.
+    if _running_in_ci():
+        print()
+        print("✗ Maya SDK cache unavailable — refusing the Autodesk fallback in CI.")
+        print("  CI uses the pre-stripped cache; the full DevKit is local-dev only.")
+        print()
+        if _SDK_CACHE_URL:
+            print("  Most likely cause: the GH_TOKEN secret is missing, expired, or")
+            print("  lacks read access to the private cache repository.")
+        else:
+            print("  MAYAMMD_SDK_CACHE_URL is not set for this workflow.")
+        print()
+        print(f"  Locally: python {Path(__file__).as_posix()} ensure --version {version}")
+        return 1
 
-    if not zip_path.exists():
-        url = DEVKIT_URLS.get(version, {}).get(platform)
-        if not url:
-            print(f"✗ No download URL known for Maya {version} / {platform}")
-            print("  Download manually and place the ZIP in thirdy-party/")
-            return 1
+    url = DEVKIT_URLS.get(version, {}).get(platform)
+    if not url:
+        print(f"✗ No download URL known for Maya {version} / {platform}")
+        print("  Download manually and place the ZIP in thirdy-party/")
+        return 1
 
+    archive_path = _SDK_CACHE / url.rsplit("/", 1)[-1]
+
+    if not archive_path.exists():
         print(f"\n! Autodesk download (slow, ~527 MB). This is a one-time cost.")
         print(f"  After it finishes, run 'python scripts/ci/strip_maya_sdk.py publish --version {version}' to")
         print(f"  create a stripped artifact for fast future downloads.\n")
-        if not _download_file(url, zip_path, f"Maya {version} DevKit"):
+        if not _download_file(url, archive_path, f"Maya {version} DevKit"):
             return 1
 
     # Strip to sdk-maya{version}/
     print(f"Stripping to: {sdk_path}")
-    extracted_dir = _SDK_CACHE / devkit_name / "devkitBase"
-    if extracted_dir.exists():
-        _strip_from_dir(extracted_dir, sdk_path, args)
+    pre_extracted = _SDK_CACHE / archive_path.stem / "devkitBase"
+    if pre_extracted.exists():
+        _strip_from_dir(pre_extracted, sdk_path, args)
     else:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            print("  Extracting DevKit ZIP...")
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(tmp)
-            base = Path(tmp)
-            devkit_base = base / devkit_name / "devkitBase"
-            if not devkit_base.exists():
-                devkit_base = base / "devkitBase"
-            _strip_from_dir(
-                devkit_base if devkit_base.exists() else base, sdk_path, args
-            )
+            devkit_base = _extract_archive(archive_path, Path(tmp))
+            if devkit_base is None or not (devkit_base / "include" / "maya").exists():
+                print(f"✗ Could not locate devkitBase/ inside {archive_path.name}")
+                print("  Extract it manually, then use 'strip --source <dir>'")
+                return 1
+            _strip_from_dir(devkit_base, sdk_path, args)
 
     print(f"\n✓ Maya {version} SDK ready at: {sdk_path}")
     print(f"  Tip: run 'python scripts/ci/strip_maya_sdk.py publish --version {version}' to create a stripped ZIP")

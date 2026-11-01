@@ -80,6 +80,8 @@ option(BUILD_DEV_INSTALL "Generate dev-install layout with .mod file for local d
 #
 # For faster downloads, set MAYAMMD_SDK_CACHE_URL to a pre-stripped SDK cache:
 #   $env:MAYAMMD_SDK_CACHE_URL = "https://github.com/.../releases/download/latest"
+# CI requires this cache (plus GH_TOKEN when the cache repo is private); the
+# full Autodesk DevKit is fetched on developer machines only.
 #
 # Get the SDK from Autodesk:
 #   https://www.autodesk.com/developer-network/platform-technologies/maya
@@ -99,8 +101,12 @@ if(NOT DEFINED SDK_DIR)
             )
             if(NOT _ensure_rc EQUAL 0)
                 message(FATAL_ERROR
-                    "Failed to download Maya ${MAYA_VERSION} SDK.\n\n"
-                    "  Provide it manually:\n"
+                    "Failed to obtain the Maya ${MAYA_VERSION} SDK.\n\n"
+                    "  On CI: the pre-stripped cache is required — check that\n"
+                    "  MAYAMMD_SDK_CACHE_URL and GH_TOKEN are set and that the token\n"
+                    "  can read the cache repository's releases. CI never downloads\n"
+                    "  the full DevKit from Autodesk.\n\n"
+                    "  Locally, provide it manually:\n"
                     "    -DSDK_DIR=/path/to/maya-sdk\n\n"
                     "  Download from Autodesk:\n"
                     "    https://www.autodesk.com/developer-network/platform-technologies/maya\n"
