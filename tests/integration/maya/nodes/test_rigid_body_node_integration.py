@@ -1348,7 +1348,81 @@ def test_disabled_kinematic_body_does_not_shift_anchor_write_back():
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_body_deletion_preserves_output_slots_and_undo():
+    """Deleting an earlier body must not redirect surviving guides or bones."""
+    for mode in ("followBone", "physics"):
+        setup_test_environment()
+        group = cmds.createNode("transform", name="deletionPhysics")
+        solver = cmds.createNode(_NODE_TYPE, parent=group)
+        _connect_time(solver)
+        cmds.setAttr(f"{solver}.gravity", 0, 0, 0, type="double3")
+        guides, bones = [], []
+        for index in range(3):
+            cmds.select(clear=True)
+            bone = cmds.joint(name=f"deletionBone{index}", position=(10 * index, 0, 0))
+            bones.append(bone)
+            cmds.pmxRigidBody(
+                solver, name=f"body{index}", bone=bone,
+                position=(10 * index, 0, 0), physicsMode=mode,
+            )
+            shape = cmds.listConnections(
+                f"{solver}.bodyShapes[{index}]", source=True, destination=False, plugs=True
+            )[0].rsplit(".", 1)[0]
+            guides.append(cmds.listRelatives(shape, parent=True)[0])
+        cmds.currentTime(1)
+        for index, guide in enumerate(guides):
+            assert_eq(cmds.getAttr(f"{guide}.translateX"), 10.0 * index)
+        cmds.delete(guides[0])
+        for index in (1, 2):
+            assert_eq(cmds.getAttr(f"{guides[index]}.translateX"), 10.0 * index, mode)
+            assert_eq(cmds.getAttr(f"{bones[index]}.translateX"), 10.0 * index, mode)
+        cmds.undo()
+        assert_true(cmds.objExists(guides[0]), "Undo restores the deleted body")
+        for index, guide in enumerate(guides):
+            assert_eq(cmds.getAttr(f"{guide}.translateX"), 10.0 * index, "undo")
+        cmds.redo()
+        for index in (1, 2):
+            assert_eq(cmds.getAttr(f"{guides[index]}.translateX"), 10.0 * index, "redo")
+        # Test a genuinely sparse array, not just an unconnected element.
+        cmds.removeMultiInstance(f"{solver}.bodyShapes[0]", b=True)
+        for index in (1, 2):
+            assert_eq(cmds.getAttr(f"{guides[index]}.translateX"), 10.0 * index, "sparse")
+        if mode == "followBone":
+            cmds.setAttr(f"{bones[2]}.translateX", 25)
+            assert_eq(cmds.getAttr(f"{guides[2]}.translateX"), 25.0, "surviving anchor")
+    return True
+
+
+def test_physics_reader_resolves_duplicate_shape_names():
+    from mmd.maya.rigid_body_info import JointStatus, read_physics
+
+    setup_test_environment()
+    root = cmds.createNode("transform", name="duplicatePhysics")
+    solver = cmds.createNode(_NODE_TYPE, parent=root)
+    shapes = []
+    for index in range(2):
+        guide = cmds.createNode("transform", name=f"guide{index}", parent=root)
+        shape = cmds.createNode("pmxRigidBodyShape", name="sharedShape", parent=guide)
+        cmds.connectAttr(f"{shape}.solver", f"{solver}.bodyShapes[{index}]")
+        shapes.append(cmds.ls(shape, long=True)[0])
+    frame = cmds.createNode("transform", parent=root)
+    joint = cmds.createNode("pmxRigidBodyJoint", parent=frame)
+    cmds.connectAttr(f"{joint}.message", f"{solver}.jointShapes[0]")
+    cmds.connectAttr(f"{shapes[0]}.message", f"{joint}.jointBodyA")
+    cmds.connectAttr(f"{shapes[1]}.message", f"{joint}.jointBodyB")
+    info = read_physics(root)
+    assert_eq([body.node for body in info.bodies], shapes)
+    for shape in shapes:
+        assert_true(info.row_at(shape) is not None, "full selection path resolves")
+    assert_eq(info.joints[0].body_a_node, shapes[0])
+    assert_eq(info.joints[0].body_b_node, shapes[1])
+    assert_eq(info.joints[0].status, JointStatus.ACTIVE)
+    return True
+
+
 _TESTS = [
+    ("Deletion Preserves Output Slots and Undo", test_body_deletion_preserves_output_slots_and_undo),
+    ("Physics Reader Resolves Duplicate Shapes", test_physics_reader_resolves_duplicate_shape_names),
     ("Node Registration & Creation", test_node_registration_and_creation),
     ("Attribute Surface & Defaults", test_attribute_surface_and_defaults),
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),

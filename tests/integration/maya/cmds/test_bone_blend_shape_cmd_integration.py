@@ -1204,7 +1204,44 @@ def test_jointorient_preserved_after_morph_controller_insertion():
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ──────────────────────────────────────────────────────────────────────────
 
+def test_parser_keeps_syntax_alive_during_validation():
+    """Other Maya API allocations must not invalidate the command's flags."""
+    from unittest.mock import patch
+
+    from maya.api import OpenMaya as om
+
+    from mmd.maya.cmds.bone_blend_shape_cmd import BoneBlendShapeCmd
+
+    command = BoneBlendShapeCmd()
+    allocations = []
+
+    def validate(_name):
+        # Reuse freed syntax storage instead of relying on an intermittent
+        # crash during a full PMX import.
+        for _ in range(200):
+            syntax = om.MSyntax()
+            syntax.addFlag("zz", "unrelatedFlag", om.MSyntax.kString)
+            allocations.append(syntax)
+        return True
+
+    args = om.MArgList()
+    values = ("test", "joint", "0,0,0", "0,0,0,1")
+    for value in ("node", "-edit", "-addTarget", *values):
+        args.addArg(value)
+    with (
+        patch.object(command, "_nodeExistsAndIsValid", side_effect=validate),
+        patch.object(command, "_addTarget") as add_target,
+    ):
+        command.doIt(args)
+        add_target.assert_called_once_with(*values)
+    return True
+
+
 _TESTS = [
+    (
+        "Parser retains syntax through validation",
+        test_parser_keeps_syntax_alive_during_validation,
+    ),
     ("Query empty node", test_query_list_targets_empty),
     ("Query with targets", test_query_list_targets_with_data),
     ("Add rotation-only target", test_add_target_rotation_only),

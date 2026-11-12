@@ -998,6 +998,36 @@ class TestCallbackLifecycle(unittest.TestCase):
 
     @patch("mmd.ui.morph_tree_widget.cmds")
     @patch("mmd.ui.morph_tree_widget.om")
+    def test_deleted_timer_still_releases_maya_callbacks(self, mock_om, mock_cmds):
+        from shiboken6 import delete
+
+        mock_cmds.ls.return_value = []
+        mock_om.MEventMessage.addEventCallback.return_value = 99
+        widget = MorphTreeWidget()
+        widget._callbacks["nodeA"] = 42
+        delete(widget._scrub_timer)
+        MorphTreeWidget._on_time_changed()
+        self.assertIsNone(MorphTreeWidget._active_instance)
+        self.assertIsNone(widget._time_callback)
+        mock_om.MEventMessage.removeCallback.assert_called_with(99)
+        mock_om.MNodeMessage.removeCallback.assert_called_with(42)
+        widget._cleanup_callbacks()  # Repeated cleanup must also be safe.
+        widget.deleteLater()
+
+    @patch("mmd.ui.morph_tree_widget.cmds")
+    @patch("mmd.ui.morph_tree_widget.om")
+    def test_refresh_restores_callback_target_after_cleanup(self, mock_om, mock_cmds):
+        mock_cmds.ls.return_value = []
+        widget = MorphTreeWidget()
+        widget._cleanup_callbacks()
+        self.assertIsNone(MorphTreeWidget._active_instance)
+        widget.refresh()
+        self.assertIs(MorphTreeWidget._active_instance, widget)
+        widget._cleanup_callbacks()
+        widget.deleteLater()
+
+    @patch("mmd.ui.morph_tree_widget.cmds")
+    @patch("mmd.ui.morph_tree_widget.om")
     def test_register_callback_idempotent(
         self, mock_om: MagicMock, mock_cmds: MagicMock
     ) -> None:

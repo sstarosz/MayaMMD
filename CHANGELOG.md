@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added a scene-wide rigid body and joint editor with grouping, filtering, selection sync, deletion, joint diagnostics, collapsible scrolling panels, and improved callback cleanup.
+
 Rigid-body physics: per-body and per-joint viewport guides with joint
 visualization (hubs, motion ranges, A/B links), editable Attribute-Editor
 templates, PMX physics validation, and MMD-matching Spring6Dof simulation

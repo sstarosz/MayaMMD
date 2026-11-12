@@ -141,7 +141,7 @@ class RigidBodyNode : public MPxLocatorNode
     // shape node via RigidBodyShape::readBodyDefinition — the REST pose from
     // the shape's bodyRestTranslate/bodyRestRotate attributes (the guide
     // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
-    // Unconnected slots are skipped.
+    // Unconnected slots remain disabled placeholders to preserve output indices.
     static MObject aBodyShapes;
 
     // Per-joint message array: aJointShapes[i] -> the pmxRigidBodyJoint node

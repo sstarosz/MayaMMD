@@ -19,6 +19,7 @@ import logging
 import os
 import sys
 import traceback
+from typing import TYPE_CHECKING
 
 import maya.api.OpenMaya as om
 from maya import cmds, mel
@@ -29,7 +30,9 @@ from maya import cmds, mel
 # headless / batch / CI mode where the UI is never created.
 from mmd.maya.cmds.bone_blend_shape_cmd import BoneBlendShapeCmd
 from mmd.maya.nodes.bone_morph_node import BoneMorphNode
-from mmd.ui.tool_main_widget import MMMToolWidget
+
+if TYPE_CHECKING:
+    from mmd.ui.tool_main_widget import MMMToolWidget
 
 # Dev mode detection — enabled when running from source (``.py`` files).
 # Disable with the MAYAMMD_DEV=0 environment variable.
@@ -76,6 +79,7 @@ _MMD_MODULES = [
     "mmd.maya.cmds.bone_blend_shape_cmd",
     "mmd.ui.morph_tree_widget",
     "mmd.ui.visibility_panel",
+    "mmd.ui.maya_section",
     "mmd.ui.tool_main_widget",
 ]
 
@@ -149,17 +153,9 @@ def _cleanup_widget() -> None:
     global _mmd_widget
     if _mmd_widget is None:
         return
-    # 1. Remove Maya API 2.0 selection callback
-    _mmd_widget._stop_selection_listener()
-    # 2. Disconnect the model-changed signal (pure-Python QObject — no
-    #    C++ wrapper to check, just guard against double-disconnect)
-    try:
-        if _mmd_widget.ctx is not None:
-            _mmd_widget.ctx.modelChanged.disconnect(_mmd_widget._on_model_changed)
-    except (RuntimeError, TypeError):
-        pass
-    # 3. Release the reference so the Python wrapper + its ModelContext
-    #    can be garbage-collected promptly
+    # Maya can destroy a workspace control without delivering closeEvent to
+    # its children. Remove both selection and morph/time callbacks first.
+    _mmd_widget.cleanup()
     _mmd_widget = None
 
 
@@ -172,6 +168,11 @@ def show_dockable_widget() -> None:
     import shiboken6
     from maya import OpenMayaUI as omui
     from PySide6 import QtWidgets
+
+    # Resolve the class after reloads. A module-level class import survives
+    # importlib.reload(tool_main_widget), mixing an old window constructor
+    # with new child controls and leaving their edit signals disconnected.
+    from mmd.ui import tool_main_widget
 
     # Tear down any previous instance cleanly before building a new one
     _cleanup_widget()
@@ -205,7 +206,16 @@ def show_dockable_widget() -> None:
     control_widget = shiboken6.wrapInstance(int(control_ptr), QtWidgets.QWidget)
 
     global _mmd_widget
-    _mmd_widget = widget = MMMToolWidget(parent=control_widget)
+    try:
+        _mmd_widget = widget = tool_main_widget.MMMToolWidget(parent=control_widget)
+    except Exception:
+        # A half-built panel shows as an empty dock; make the cause visible
+        # in the Script Editor instead of leaving the user with a blank window.
+        import traceback
+
+        traceback.print_exc()
+        print("[FAIL] MayaMMD panel could not be built — see the traceback above.")
+        return
     control_layout = control_widget.layout()
     if control_layout is not None:
         control_layout.addWidget(widget)
