@@ -6,16 +6,15 @@ Maya's own latched toggles.  It owns no scene logic: it emits the requested
 state and the caller applies it with :mod:`mmd.maya.model_visibility`, then
 calls :meth:`VisibilityPanel.sync` with what the scene actually reports.
 
-``embed_visibility_section`` wraps the panel in a Maya ``frameLayout`` so it
-collapses natively, falling back to an inline row when the Maya side is
-unavailable (no GUI, stale workspace control, ...).
+The tool panel hosts it inside a
+:class:`~mmd.ui.collapsible_section.CollapsibleSection`, like Morphs and
+Physics, so all three sections share one header style and scroll together.
 """
 
 from __future__ import annotations
 
 import logging
 
-from maya import cmds
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtGui import QColor
 
@@ -239,63 +238,7 @@ class VisibilityPanel(QtWidgets.QWidget):
             f"{hidden_total} {suffix} hidden individually"
         )
 
-    # ── Internals ─────────────────────────────────────────────────────────
+    # â”€â”€ Internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _on_master_clicked(self) -> None:
         self.allToggled.emit(not self._all_visible)
-
-
-def embed_visibility_section(
-    layout: QtWidgets.QBoxLayout,
-    panel: VisibilityPanel,
-    to_qt=None,
-) -> bool:
-    """Add *panel* to *layout* inside a collapsible Maya ``frameLayout``.
-
-    ``to_qt`` converts a Maya control name to a Qt widget (the caller's
-    ``MQtUtil`` wrapper); without it the Maya side cannot be built.
-
-    Returns:
-        ``True`` when the native section was created, ``False`` when the panel
-        was added inline because the Maya side was unavailable.
-    """
-    if to_qt is None:
-        log.warning("No Maya-to-Qt bridge - showing the Visibility row inline")
-        layout.addWidget(panel)
-        return False
-
-    qt_frame = None
-    frame = None
-    # Count the Maya layouts actually entered: if the build fails part-way the
-    # parent stack must still be restored, or the section created next would be
-    # nested inside this one.
-    maya_depth = 0
-    try:
-        frame = cmds.frameLayout(label="Visibility", collapsable=True, collapse=False)
-        maya_depth = 1
-        cmds.paneLayout(configuration="single", backgroundColor=[0.286, 0.286, 0.286])
-        maya_depth = 2
-        placeholder = to_qt(cmds.text(label="", height=panel.sizeHint().height() + 8))
-        if placeholder is not None:
-            body = QtWidgets.QVBoxLayout(placeholder)
-            body.setContentsMargins(0, 0, 0, 0)
-            body.addWidget(panel)
-        qt_frame = to_qt(frame)
-    except Exception as exc:  # noqa: BLE001 - Maya UI is best-effort here
-        log.warning("Could not build the Visibility section: %s", exc)
-        qt_frame = None
-    finally:
-        while maya_depth:
-            maya_depth -= 1
-            try:
-                cmds.setParent("..")
-            except Exception:  # noqa: BLE001 - already unwinding a failure
-                break
-
-    if qt_frame is not None:
-        layout.addWidget(qt_frame)
-        return True
-
-    log.warning("Visibility section unavailable (frame=%r) - showing it inline", frame)
-    layout.addWidget(panel)
-    return False

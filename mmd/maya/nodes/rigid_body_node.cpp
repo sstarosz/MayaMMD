@@ -292,28 +292,33 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
 // order — written DENSELY by the builder): each connected pmxRigidBodyShape
 // node provides one BodyDefinition (PMX-verbatim fields; the REST pose comes
 // from the shape's bodyRestTranslate/bodyRestRotate attributes, not the
-// guide transform, which holds the CURRENT pose).  Unconnected slots are
-// skipped, keeping the body index == connected-shape order; `shapes` gets
-// each body's shape node in the same order.
+// guide transform, which holds the CURRENT pose). Missing slots remain
+// disabled placeholders: guide/bone output connections use logical indices
+// and must never shift when another body is deleted.
 [[nodiscard]] std::vector<RigidBodySimulation::BodyDefinition>
 readBodyData(const MObject& node, RigidBodyNode::BodyShapes& shapes)
 {
     std::vector<RigidBodySimulation::BodyDefinition> out;
     MPlug shapesPlug(node, RigidBodyNode::aBodyShapes);
-    const unsigned int bodyCount = shapesPlug.evaluateNumElements();
+    const unsigned int elementCount = shapesPlug.evaluateNumElements();
+    unsigned int bodyCount = 0;
+    for (unsigned int i = 0; i < elementCount; ++i)
+        bodyCount = std::max(bodyCount, shapesPlug.elementByPhysicalIndex(i).logicalIndex() + 1);
     out.reserve(bodyCount);
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
         MPlugArray sources;
         shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
-        if (sources.length() == 0)
-            continue;
         RigidBodySimulation::BodyDefinition b;
-        if (RigidBodyShape::readBodyDefinition(sources[0].node(), b))
+        MObject shape = MObject::kNullObj;
+        if (sources.length() && RigidBodyShape::readBodyDefinition(sources[0].node(), b))
         {
-            out.push_back(b);
-            shapes.add(sources[0].node());
+            shape = sources[0].node();
         }
+        else
+            b.enabled = false;
+        out.push_back(b);
+        shapes.add(shape);
     }
     return out;
 }
@@ -331,17 +336,14 @@ void resolveBodyWiring(const MObject& node,
 {
     jointPaths.assign(bodies.size(), MDagPath());
     MPlug shapesPlug(node, RigidBodyNode::aBodyShapes);
-    const unsigned int bodyCount = shapesPlug.evaluateNumElements();
-    size_t bi = 0;
-    for (unsigned int i = 0; i < bodyCount && bi < bodies.size(); ++i)
+    for (unsigned int i = 0; i < bodies.size(); ++i)
     {
         MPlugArray sources;
         shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
         if (sources.length() == 0)
             continue;
-        resolveRelatedBones(sources[0].node(), jointPaths[bi], bodies[bi].relatedBoneIndex,
-                            bodies[bi].parentBoneIndex);
-        ++bi;
+        resolveRelatedBones(sources[0].node(), jointPaths[i], bodies[i].relatedBoneIndex,
+                            bodies[i].parentBoneIndex);
     }
     deriveResetAnchors(bodies, jointPaths);
 }
@@ -397,7 +399,7 @@ readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
     for (unsigned int i = 0; i < jointCount; ++i)
     {
         MPlugArray sources;
-        shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
+        shapesPlug.elementByPhysicalIndex(i).connectedTo(sources, true, false);
         if (sources.length() == 0)
             continue;
         const MObject joint = sources[0].node();
@@ -1154,7 +1156,8 @@ RigidBodyNode::RigidBodyNode() = default;
 
 void RigidBodyNode::BodyShapes::add(const MObject& shape)
 {
-    byHash.emplace(MObjectHandle(shape).hashCode(), static_cast<long>(nodes.size()));
+    if (!shape.isNull())
+        byHash.emplace(MObjectHandle(shape).hashCode(), static_cast<long>(nodes.size()));
     nodes.emplace_back(shape);
 }
 

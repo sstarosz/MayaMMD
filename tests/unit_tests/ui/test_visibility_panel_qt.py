@@ -4,8 +4,8 @@ Three layers are covered:
 
 * :class:`VisibilityPanel` - the standalone widget (toggles, master button,
   styling, syncing).
-* :func:`embed_visibility_section` - the Maya ``frameLayout`` wrapper and its
-  fallbacks.
+* ``CollapsibleSection`` hosting - the shared collapsible header the panel is
+  embedded in.
 * ``MMMToolWidget`` wiring - dispatching a toggle to the targeted models and
   mirroring the scene back into the panel.
 
@@ -26,7 +26,6 @@ from tests.unit_tests.maya.maya_stub import install_maya_stub
 
 install_maya_stub(profile="headless")
 
-from PySide6 import QtWidgets
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
@@ -40,7 +39,7 @@ from mmd.maya import model_visibility as mv
 from mmd.ui import tool_main_widget as tw
 from mmd.ui import visibility_panel as vp
 from mmd.ui.tool_main_widget import MMMToolWidget
-from mmd.ui.visibility_panel import VisibilityPanel, embed_visibility_section
+from mmd.ui.visibility_panel import VisibilityPanel
 
 del os.environ["MAYAMMD_DEV"]
 
@@ -320,83 +319,6 @@ class TestVisibilityPanelWidget(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  embed_visibility_section - the Maya frameLayout wrapper
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestVisibilitySection(unittest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        for command in ("frameLayout", "paneLayout", "text", "setParent"):
-            getattr(vp.cmds, command).reset_mock()
-        self.host = QtWidgets.QWidget()
-        self.addCleanup(self.host.deleteLater)
-        self.layout = QtWidgets.QVBoxLayout(self.host)
-        self.panel = VisibilityPanel()
-        self.addCleanup(self.panel.deleteLater)
-
-    def test_creates_a_collapsible_section_open_by_default(self) -> None:
-        embed_visibility_section(self.layout, self.panel, to_qt=lambda _name: None)
-
-        frame = vp.cmds.frameLayout.call_args
-        self.assertEqual(frame.kwargs["label"], "Visibility")
-        self.assertTrue(frame.kwargs["collapsable"])
-        self.assertFalse(frame.kwargs["collapse"])
-
-    def test_body_sits_on_the_section_background(self) -> None:
-        embed_visibility_section(self.layout, self.panel, to_qt=lambda _name: None)
-        pane = vp.cmds.paneLayout.call_args
-        self.assertEqual(pane.kwargs["backgroundColor"], [0.286, 0.286, 0.286])
-
-    def test_maya_placeholder_fits_the_row(self) -> None:
-        self.panel.match_row_height(38)
-        embed_visibility_section(self.layout, self.panel, to_qt=lambda _name: None)
-        text = vp.cmds.text.call_args
-        self.assertGreater(text.kwargs["height"], self.panel.buttons[mv.MESH].height())
-
-    def test_falls_back_inline_without_a_maya_bridge(self) -> None:
-        self.assertFalse(embed_visibility_section(self.layout, self.panel, None))
-        self.assertIs(self.panel.parent(), self.host)
-
-    def test_returns_true_when_the_section_is_created(self) -> None:
-        built: dict[str, QtWidgets.QWidget] = {}
-
-        def to_qt(name):
-            if name is None:
-                return None
-            widget = QtWidgets.QWidget(self.host)
-            built[name] = widget
-            return widget
-
-        self.assertTrue(embed_visibility_section(self.layout, self.panel, to_qt))
-        self.assertIs(self.panel.parent(), built[vp.cmds.text.return_value])
-
-    def test_survives_a_maya_side_failure(self) -> None:
-        real_frame_layout = vp.cmds.frameLayout
-
-        def frame_layout(**kwargs):
-            if kwargs.get("label") == "Visibility":
-                raise RuntimeError("boom")
-            return real_frame_layout(**kwargs)
-
-        with patch.object(vp.cmds, "frameLayout", side_effect=frame_layout):
-            created = embed_visibility_section(
-                self.layout, self.panel, to_qt=lambda _name: None
-            )
-
-        self.assertFalse(created)
-        self.assertIs(self.panel.parent(), self.host)
-
-    def test_failure_after_the_frame_restores_the_parent_stack(self) -> None:
-        """A half-built section must not swallow the next section's layouts."""
-        with patch.object(vp.cmds, "paneLayout", side_effect=RuntimeError("boom")):
-            embed_visibility_section(self.layout, self.panel, to_qt=lambda _name: None)
-
-        # frameLayout was entered (depth 1) before the pane failed.
-        self.assertEqual(vp.cmds.setParent.call_args_list, [call("..")])
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 #  MMMToolWidget wiring
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -404,8 +326,6 @@ class TestVisibilitySection(unittest.TestCase):
 class TestToolWidgetWiring(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
-        for command in ("frameLayout", "paneLayout", "text", "setParent"):
-            getattr(tw.cmds, command).reset_mock()
 
     def _make_widget(self) -> MMMToolWidget:
         widget = MMMToolWidget()
