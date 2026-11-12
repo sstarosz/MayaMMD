@@ -161,9 +161,6 @@ class SectionHeader(QtWidgets.QWidget):
         super().mousePressEvent(event)
 
 
-NO_MAXIMUM = 16777215
-"""Qt's "no maximum", restored when a section is expanded."""
-
 
 class CollapsibleSection(QtWidgets.QWidget):
     """A titled section that can be collapsed, holding one content widget.

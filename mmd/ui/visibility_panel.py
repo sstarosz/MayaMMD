@@ -153,7 +153,7 @@ class VisibilityPanel(QtWidgets.QWidget):
 
         self._all_visible = False
 
-    # â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Public API ────────────────────────────────────────────────────────
 
     @property
     def buttons(self) -> dict[str, QtWidgets.QPushButton]:
