@@ -1,4 +1,4 @@
-"""Qt headless tests for the Visibility panel and its Maya section.
+"""Qt headless tests for the Visibility panel and its section.
 
 Three layers are covered:
 

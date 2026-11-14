@@ -77,9 +77,12 @@ _MMD_MODULES = [
     "mmd.maya.pmx.morph_builder",
     "mmd.maya.nodes.bone_morph_node",
     "mmd.maya.cmds.bone_blend_shape_cmd",
+    "mmd.maya.rigid_body_info",
+    "mmd.ui.collapsible_section",
+    "mmd.ui.physics_controls",
+    "mmd.ui.physics_panel",
     "mmd.ui.morph_tree_widget",
     "mmd.ui.visibility_panel",
-    "mmd.ui.maya_section",
     "mmd.ui.tool_main_widget",
 ]
 
@@ -402,15 +405,64 @@ def _register_ae_template_path() -> None:
     log.debug("No AE template folder found")
 
 
-# Classic MEL Attribute-Editor template for the solver node: a small
-# scrollLayout that shows ``gravity`` and the joint hub size, and suppresses
-# the solver's message
-# arrays / outputs (the per-body and per-joint data lives on the connected
-# pmxRigidBodyShape / pmxRigidBodyJoint nodes, each with its own grouped
-# template).  The proc is only invoked when the plugin clears the
-# ``AEpmxRigidBodyNodeCustomView`` optionVar, so the AE takes the
-# ``createEditor`` path (a named view would route it to the XML template
-# instead).
+# Both the grouped XML view and default MEL view use a read-only Mode enum:
+# changing modes requires rewiring the imported bone and solver connections.
+_AE_BODY_TEMPLATE_MEL = """\
+global proc AEpmxRigidBodyModeNew(string $plug) {
+    setUITemplate -pushTemplate attributeEditorTemplate;
+    attrEnumOptionMenuGrp -label "Mode (read-only)" -attribute $plug -enable false
+        -annotation "Mode determines bone and solver connections at import. Change it in the PMX file and re-import the model."
+        "AEpmxRigidBodyMode";
+    setUITemplate -popTemplate;
+}
+global proc AEpmxRigidBodyModeReplace(string $plug) {
+    attrEnumOptionMenuGrp -edit -attribute $plug -enable false "AEpmxRigidBodyMode";
+}
+// XML views call controls with plug, label and annotation arguments.
+global proc PPpmxRigidBodyMode(string $plug, string $label, string $annotation) {
+    AEpmxRigidBodyModeNew($plug);
+}
+// Default AE view: use the same read-only enum as the grouped XML view.
+global proc AEpmxRigidBodyShapeTemplate(string $nodeName) {
+    editorTemplate -beginScrollLayout;
+    editorTemplate -beginLayout "Body" -collapse 0;
+        editorTemplate -addControl -label "Local Name" "bodyNameLocal";
+        editorTemplate -addControl -label "Universal Name" "bodyNameUniversal";
+        editorTemplate -addControl -label "Collision Group" "bodyGroupId";
+        editorTemplate -addControl -label "Collider Type" "bodyColliderType";
+        editorTemplate -addControl -label "Shape Size" "bodyShapeSize";
+        editorTemplate -addControl -label "Enabled" "bodyEnabled";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Rest Pose" -collapse 0;
+        editorTemplate -addControl -label "Rest Translate" "bodyRestTranslate";
+        editorTemplate -addControl -label "Rest Rotate" "bodyRestRotate";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Physics" -collapse 0;
+        editorTemplate -callCustom "AEpmxRigidBodyModeNew"
+            "AEpmxRigidBodyModeReplace" "bodyPhysicsMode";
+        editorTemplate -addControl -label "Mass" "bodyMass";
+        editorTemplate -addControl -label "Move Attenuation" "bodyLinearDamping";
+        editorTemplate -addControl -label "Rotation Damping" "bodyAngularDamping";
+        editorTemplate -addControl -label "Repulsion" "bodyRestitution";
+        editorTemplate -addControl -label "Friction" "bodyFriction";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Collision Mask" -collapse 0;
+        for ($i = 0; $i < 16; ++$i) {
+            editorTemplate -addControl -label ("Collides with Group " + $i)
+                ("bodyMaskGroup" + $i);
+        }
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Display" -collapse 0;
+        editorTemplate -addControl -label "Draw Mode" "drawMode";
+    editorTemplate -endLayout;
+    editorTemplate -addExtraControls;
+    editorTemplate -endScrollLayout;
+}
+"""
+
+
+# Classic solver template hides internal arrays and exposes global settings.
+# Clearing AEpmxRigidBodyNodeCustomView selects this instead of an XML view.
 _AE_SOLVER_TEMPLATE_MEL = """\
 global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
     editorTemplate -beginScrollLayout;
@@ -480,7 +532,8 @@ global proc AEpmxRigidBodyJointTemplate( string $nodeName ) {
 
 
 def _register_ae_mel_templates() -> None:
-    """Define the solver's and the joint's MEL AE templates."""
+    """Define physics AE templates and the XML view's read-only Mode callback."""
+    mel.eval(_AE_BODY_TEMPLATE_MEL)
     mel.eval(_AE_SOLVER_TEMPLATE_MEL)
     mel.eval(_AE_JOINT_TEMPLATE_MEL)
 
@@ -520,8 +573,7 @@ def initializePlugin() -> None:
         except Exception:
             log.debug("Could not set MAYA_CUSTOM_TEMPLATE_PATH", exc_info=True)
 
-        # Solver and joint nodes: classic MEL AE templates (see
-        # _AE_SOLVER_TEMPLATE_MEL / _AE_JOINT_TEMPLATE_MEL).
+        # Register physics MEL templates and the body XML view's Mode callback.
         try:
             _register_ae_mel_templates()
         except Exception:

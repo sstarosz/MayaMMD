@@ -1348,6 +1348,7 @@ def test_disabled_kinematic_body_does_not_shift_anchor_write_back():
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ══════════════════════════════════════════════════════════════════════════
 
+
 def test_body_deletion_preserves_output_slots_and_undo():
     """Deleting an earlier body must not redirect surviving guides or bones."""
     for mode in ("followBone", "physics"):
@@ -1362,11 +1363,17 @@ def test_body_deletion_preserves_output_slots_and_undo():
             bone = cmds.joint(name=f"deletionBone{index}", position=(10 * index, 0, 0))
             bones.append(bone)
             cmds.pmxRigidBody(
-                solver, name=f"body{index}", bone=bone,
-                position=(10 * index, 0, 0), physicsMode=mode,
+                solver,
+                name=f"body{index}",
+                bone=bone,
+                position=(10 * index, 0, 0),
+                physicsMode=mode,
             )
             shape = cmds.listConnections(
-                f"{solver}.bodyShapes[{index}]", source=True, destination=False, plugs=True
+                f"{solver}.bodyShapes[{index}]",
+                source=True,
+                destination=False,
+                plugs=True,
             )[0].rsplit(".", 1)[0]
             guides.append(cmds.listRelatives(shape, parent=True)[0])
         cmds.currentTime(1)
@@ -1386,7 +1393,9 @@ def test_body_deletion_preserves_output_slots_and_undo():
         # Test a genuinely sparse array, not just an unconnected element.
         cmds.removeMultiInstance(f"{solver}.bodyShapes[0]", b=True)
         for index in (1, 2):
-            assert_eq(cmds.getAttr(f"{guides[index]}.translateX"), 10.0 * index, "sparse")
+            assert_eq(
+                cmds.getAttr(f"{guides[index]}.translateX"), 10.0 * index, "sparse"
+            )
         if mode == "followBone":
             cmds.setAttr(f"{bones[2]}.translateX", 25)
             assert_eq(cmds.getAttr(f"{guides[2]}.translateX"), 25.0, "surviving anchor")
@@ -1420,9 +1429,47 @@ def test_physics_reader_resolves_duplicate_shape_names():
     return True
 
 
+def test_restitution_limits_and_legacy_scene_values():
+    import tempfile
+    from pathlib import Path
+
+    setup_test_environment()
+    shape = cmds.createNode("pmxRigidBodyShape")
+    assert_eq(cmds.attributeQuery("bodyRestitution", node=shape, minimum=True), [0.0])
+    assert_eq(cmds.attributeQuery("bodyRestitution", node=shape, softMax=True), [1.0])
+    cmds.setAttr(f"{shape}.bodyRestitution", 1.5)
+    try:
+        cmds.setAttr(f"{shape}.bodyRestitution", -0.25)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Negative restitution edits must be rejected")
+    assert_eq(cmds.getAttr(f"{shape}.bodyRestitution"), 1.5)
+    # File loading preserves legacy data even though new setAttr edits are bounded.
+    with tempfile.TemporaryDirectory() as directory:
+        scene = Path(directory) / "legacy.ma"
+        scene.write_text(
+            '//Maya ASCII scene\n'
+            'createNode transform -n "legacyGuide";\n'
+            'createNode pmxRigidBodyShape -n "legacyShape" -p "legacyGuide";\n'
+            'setAttr ".bre" -0.25;\n',
+            encoding="utf-8",
+        )
+        cmds.file(str(scene), open=True, force=True)
+    assert_eq(cmds.getAttr("legacyShape.bodyRestitution"), -0.25)
+    return True
+
+
 _TESTS = [
-    ("Deletion Preserves Output Slots and Undo", test_body_deletion_preserves_output_slots_and_undo),
-    ("Physics Reader Resolves Duplicate Shapes", test_physics_reader_resolves_duplicate_shape_names),
+    ("Restitution Bounds Preserve Legacy Data", test_restitution_limits_and_legacy_scene_values),
+    (
+        "Deletion Preserves Output Slots and Undo",
+        test_body_deletion_preserves_output_slots_and_undo,
+    ),
+    (
+        "Physics Reader Resolves Duplicate Shapes",
+        test_physics_reader_resolves_duplicate_shape_names,
+    ),
     ("Node Registration & Creation", test_node_registration_and_creation),
     ("Attribute Surface & Defaults", test_attribute_surface_and_defaults),
     ("Empty Node Evaluates Cleanly", test_empty_node_evaluates_without_error),

@@ -13,14 +13,10 @@ Physics, so all three sections share one header style and scroll together.
 
 from __future__ import annotations
 
-import logging
-
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtGui import QColor
 
 from mmd.maya.model_visibility import DEFAULT_VISIBILITY, PART_LABELS, PARTS
-
-log = logging.getLogger(__name__)
 
 MAYA_SELECTION_BLUE = "#5285A6"  # Maya's selection colour (viewport, outliner)
 
@@ -238,7 +234,7 @@ class VisibilityPanel(QtWidgets.QWidget):
             f"{hidden_total} {suffix} hidden individually"
         )
 
-    # â”€â”€ Internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Internals ─────────────────────────────────────────────────────────
 
     def _on_master_clicked(self) -> None:
         self.allToggled.emit(not self._all_visible)

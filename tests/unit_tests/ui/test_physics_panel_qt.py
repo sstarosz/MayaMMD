@@ -1,4 +1,4 @@
-"""Qt headless tests for the Physics panel and its Maya section.
+"""Qt headless tests for the Physics panel and its section handling.
 
 Covers the list/inspector widget, the four groupings, selection syncing in both
 directions, the filter, delete requests, and the tree's column setup.
@@ -241,7 +241,7 @@ class TestGroupingPure(unittest.TestCase):
     def test_row_detail_reports_an_inactive_joint(self) -> None:
         info = _info(joints=[_joint(0, "j", status=JointStatus.SAME_BODY)])
         row = grouped_rows(info, Grouping.PMX_ORDER)[1][1][0][1][0]
-        self.assertEqual(row[2], "0 → 1 · same body")
+        self.assertEqual(row[2], "hip → knee · same body")
 
 
 # ── Panel ──────────────────────────────────────────────────────────────────
@@ -289,8 +289,10 @@ class TestListContent(_PanelTestBase):
         self.panel.tabs.setCurrentIndex(1)
         joint = self.panel._items[0]
         self.assertEqual(
-            [joint.text(column) for column in range(3)], ["0", "knee_joint", "0 → 1"]
+            [joint.text(column) for column in range(3)], ["0", "knee_joint", "hip → knee"]
         )
+        self.assertIn("Body A: 0: hip", joint.toolTip(2))
+        self.assertIn("Body B: 1: knee", joint.toolTip(2))
 
     def test_switching_grouping_rebuilds_the_list(self) -> None:
         self.panel.grouping_box.setCurrentIndex(
@@ -311,18 +313,32 @@ class TestScenePhysics(_PanelTestBase):
         super().setUp()
         self.first = _info([_body(0, "hip", group=1)], [_joint(0, "joint")])
         self.second = replace(
-            self.first, root="|Rin_Root",
-            bodies=tuple(replace(row, node=row.node.replace("Miku", "Rin"),
-                                 guide=row.guide.replace("Miku", "Rin"), group=7)
-                         for row in self.first.bodies),
-            joints=tuple(replace(row, node=row.node.replace("Miku", "Rin"),
-                                 guide=row.guide.replace("Miku", "Rin"))
-                         for row in self.first.joints),
+            self.first,
+            root="|Rin_Root",
+            bodies=tuple(
+                replace(
+                    row,
+                    node=row.node.replace("Miku", "Rin"),
+                    guide=row.guide.replace("Miku", "Rin"),
+                    group=7,
+                )
+                for row in self.first.bodies
+            ),
+            joints=tuple(
+                replace(
+                    row,
+                    node=row.node.replace("Miku", "Rin"),
+                    guide=row.guide.replace("Miku", "Rin"),
+                )
+                for row in self.first.joints
+            ),
         )
         self.panel.showScene([self.first, self.second])
 
     def test_models_have_separate_parents_and_scene_counts(self) -> None:
-        self.assertEqual([item.text(0) for item in self.groups()], ["Miku_Root", "Rin_Root"])
+        self.assertEqual(
+            [item.text(0) for item in self.groups()], ["Miku_Root", "Rin_Root"]
+        )
         self.assertEqual(self.panel.tabs.tabText(0), "Rigid Bodies (2)")
         self.assertEqual(self.panel.tabs.tabText(1), "Joints (2)")
 
@@ -645,6 +661,28 @@ class TestLayout(_PanelTestBase):
 
 
 class TestNumericPrecision(_PanelTestBase):
+    def test_restitution_slider_and_legacy_values(self) -> None:
+        from mmd.ui.physics_controls import ScalarControl
+
+        for initial in (0.0, -0.25, 1.5):
+            edits = []
+            control = ScalarControl(initial, 1.0, edits.append, self.panel, minimum=0.0)
+            self.assertEqual(control.field.value(), initial)
+            control.field.editingFinished.emit()
+            self.assertEqual(edits, [])
+            if initial < 0:
+                control.field.setValue(-0.1)
+                control.field.editingFinished.emit()
+                self.assertEqual(control.field.value(), initial)
+                self.assertEqual(edits, [])
+            control.slider.setValue(500)
+            self.assertEqual(edits, [0.5])
+            self.assertEqual(control.field.minimum(), 0.0)
+            control.field.setValue(1.5)
+            control.field.editingFinished.emit()
+            self.assertEqual(edits[-1], 1.5)
+            self.assertEqual(control._high, 1.0)
+
     def test_display_edit_and_focus_preserve_precision(self) -> None:
         from mmd.ui.physics_controls import ScalarControl
 
@@ -713,6 +751,31 @@ class TestInspectorStyle(_PanelTestBase):
 
     def test_empty_inspector_has_no_sections(self) -> None:
         self.assertEqual(self.panel.inspector.sections, {})
+
+    def test_status_is_a_derived_read_only_enum(self) -> None:
+        for status in JointStatus:
+            self.panel.inspector.showJoint(replace(self.joint, status=status))
+            combo = self.panel.inspector._sections[0].body.findChild(QtWidgets.QComboBox, "Status")
+            self.assertFalse(combo.isEnabled())
+            self.assertEqual(combo.count(), len(JointStatus))
+            self.assertEqual(combo.currentData(), status.value)
+
+    def test_collision_mask_uses_the_shared_label_column(self) -> None:
+        self.panel.syncSelection([self.body.node])
+        section = next(s for s in self.panel.inspector._sections if s.header.text() == "Collision Mask")
+        layout = section.body.layout()
+        label = layout.itemAtPosition(0, 0).widget()
+        control = layout.itemAtPosition(0, 1).widget()
+        self.assertEqual(label.text(), "Collides With")
+        self.assertEqual(control.objectName(), "Collides With")
+        self.assertTrue(label.alignment() & QtCore.Qt.AlignmentFlag.AlignRight)
+
+    def test_tabs_share_morph_tab_styling(self) -> None:
+        from mmd.ui.maya_styles import MAYA_TAB_STYLE
+
+        self.assertEqual(self.panel.tabs.styleSheet(), MAYA_TAB_STYLE)
+        self.assertTrue(self.panel.tabs.documentMode())
+        self.assertFalse(self.panel.tabs.drawBase())
 
     def test_body_shows_its_node_name_as_the_title(self) -> None:
         self.panel.syncSelection([self.body.node])
@@ -808,12 +871,12 @@ class TestInspectorStyle(_PanelTestBase):
         enabled = inspector.findChild(QtWidgets.QCheckBox, "Enabled")
         enabled.click()
         self.assertEqual(edits.pop(), (self.body.node, "bodyEnabled", False))
-        self.assertIsNone(inspector.findChild(QtWidgets.QComboBox, "Mode"))
-        mode = inspector.findChild(QtWidgets.QLineEdit, "Mode")
-        self.assertTrue(mode.isReadOnly())
-        self.assertEqual(mode.text(), self.body.physics_mode_label)
+        mode = inspector.findChild(QtWidgets.QComboBox, "Mode")
+        self.assertFalse(mode.isEnabled())
+        self.assertEqual(mode.currentText(), self.body.physics_mode_label)
+        self.assertEqual(mode.count(), 3)
         self.assertIn("re-import", mode.toolTip())
-        mode.editingFinished.emit()
+        mode.activated.emit(0)
         self.assertEqual(edits, [])
         mass = inspector.findChild(ScalarControl, "Mass")
         mass.field.setValue(2.5)
@@ -824,6 +887,17 @@ class TestInspectorStyle(_PanelTestBase):
         self.assertFalse(mask.checkboxes[3].isChecked())
         mask.checkboxes[3].click()
         self.assertEqual(edits.pop(), (self.body.node, "bodyMaskGroup3", True))
+
+    def test_joint_limits_show_the_scene_angle_unit(self) -> None:
+        """The limit editors replace the formatted text, so they carry the unit."""
+        joint = _joint(0, "knee", angle_unit="deg")
+        self.panel.showModel(_info([], [joint]))
+        self.panel.syncSelection([joint.node])
+        limits = self.panel.inspector.findChild(QtWidgets.QWidget, "Angular Min")
+        self.assertIsNotNone(limits)
+        self.assertEqual(
+            [label.text() for label in limits.findChildren(QtWidgets.QLabel)], ["deg"]
+        )
 
     def test_title_stays_fixed_when_details_scroll(self) -> None:
         self.panel.resize(850, 360)
@@ -884,6 +958,17 @@ class TestInspectorStyle(_PanelTestBase):
 
 
 class TestToolWidgetWiring(unittest.TestCase):
+    def test_negative_restitution_does_not_write_to_maya(self) -> None:
+        widget = self._make_widget()
+        with (
+            patch.object(tw.cmds, "setAttr") as write,
+            patch.object(tw.cmds, "warning") as warning,
+            patch.object(QtCore.QTimer, "singleShot"),
+        ):
+            widget._on_physics_attribute_edited("|body", "bodyRestitution", -0.1)
+        write.assert_not_called()
+        warning.assert_called_once()
+
     def test_cleanup_after_workspace_has_destroyed_qt_children(self) -> None:
         import shiboken6
 
@@ -897,10 +982,11 @@ class TestToolWidgetWiring(unittest.TestCase):
             widget.cleanup()
             self.assertEqual(remove.call_count, len(callbacks))
         self.assertEqual(widget._physics_callbacks, [])
-        self.assertIsNone(tw._OPEN_PANEL)
 
     def setUp(self) -> None:
-        discovery = patch.object(tw, "discover_model_roots_in_scene", return_value=["|Miku_Root"])
+        discovery = patch.object(
+            tw, "discover_model_roots_in_scene", return_value=["|Miku_Root"]
+        )
         discovery.start()
         self.addCleanup(discovery.stop)
 
@@ -950,6 +1036,7 @@ class TestToolWidgetWiring(unittest.TestCase):
                 write.assert_called_once_with(f"{body.node}.bodyMass", 2.5)
 
     def test_editor_writes_use_maya_attribute_types(self) -> None:
+        """Triples are written without a type: joint limits are ``angle3``."""
         widget = self._make_widget()
         for attr, value, args, kwargs in (
             ("bodyMass", 2.5, (2.5,), {}),
@@ -957,7 +1044,8 @@ class TestToolWidgetWiring(unittest.TestCase):
             ("bodyGroupId", 4, (4,), {}),
             ("bodyMaskGroup3", False, (False,), {}),
             ("bodyNameUniversal", "", ("",), {"type": "string"}),
-            ("bodyShapeSize", (1.0, 2.0, 3.0), (1.0, 2.0, 3.0), {"type": "double3"}),
+            ("bodyShapeSize", (1.0, 2.0, 3.0), (1.0, 2.0, 3.0), {}),
+            ("jointAngularMin", (-30.0, 0.0, 30.0), (-30.0, 0.0, 30.0), {}),
         ):
             with (
                 self.subTest(attribute=attr),
@@ -1032,21 +1120,31 @@ class TestToolWidgetWiring(unittest.TestCase):
         panel = self._make_widget().physics_panel
         a, b = _body(0, "hip"), _body(2, "ankle")
         joint = _joint(
-            3, "link", body_a_index=0, body_b_index=2,
-            body_a="hip", body_b="ankle",
-            body_a_node=a.node, body_b_node=b.node,
+            3,
+            "link",
+            body_a_index=0,
+            body_b_index=2,
+            body_a="hip",
+            body_b="ankle",
+            body_a_node=a.node,
+            body_b_node=b.node,
         )
         # Another model may have exactly the same PMX indices.
         other_a = replace(a, node="|Other|a|shape", guide="|Other|a")
         other_b = replace(b, node="|Other|b|shape", guide="|Other|b")
         other_joint = replace(
-            joint, node="|Other|joint|shape", guide="|Other|joint",
-            body_a_node=other_a.node, body_b_node=other_b.node,
+            joint,
+            node="|Other|joint|shape",
+            guide="|Other|joint",
+            body_a_node=other_a.node,
+            body_b_node=other_b.node,
         )
-        panel.showScene([
-            _info([a, b], [joint]),
-            _info([other_a, other_b], [other_joint], root="|Other"),
-        ])
+        panel.showScene(
+            [
+                _info([a, b], [joint]),
+                _info([other_a, other_b], [other_joint], root="|Other"),
+            ]
+        )
         panel.syncSelection([a.node])
         panel.applyAttributeEdit(a.node, "bodyEnabled", False)
         panel.applyAttributeEdit(a.node, "bodyNameLocal", "renamed")
@@ -1163,10 +1261,6 @@ class TestToolWidgetWiring(unittest.TestCase):
             widget.physics_section.setExpanded(True)
         read.assert_called_once()
 
-    def test_the_physics_section_refreshes_when_expanded(self) -> None:
-        """The Maya frame's expandCommand is wired to the open panel."""
-        self.assertIn("refresh_open_panel", tw.PHYSICS_EXPAND_COMMAND)
-
     def test_refresh_reads_models_from_the_scene(self) -> None:
         widget = self._make_widget()
         info = _info([_body(0, "hip")])
@@ -1190,7 +1284,10 @@ class TestToolWidgetWiring(unittest.TestCase):
             widget._schedule_physics_refresh()
             widget._schedule_physics_refresh()
             refresh.assert_not_called()
-            QtTest.QTest.qWait(150)
+            deadline = QtCore.QElapsedTimer()
+            deadline.start()
+            while not refresh.called and deadline.elapsed() < 1000:
+                QtTest.QTest.qWait(10)
             refresh.assert_called_once()
 
     def test_picking_a_row_selects_the_node_in_maya(self) -> None:

@@ -1204,6 +1204,7 @@ def test_jointorient_preserved_after_morph_controller_insertion():
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ──────────────────────────────────────────────────────────────────────────
 
+
 def test_parser_keeps_syntax_alive_during_validation():
     """Other Maya API allocations must not invalidate the command's flags."""
     from unittest.mock import patch

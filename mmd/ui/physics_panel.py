@@ -30,10 +30,12 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from enum import Enum
+from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from mmd.maya.rigid_body_info import (
+    COLLISION_GROUP_COUNT,
     AxisRange,
     JointInfo,
     PhysicsInfo,
@@ -42,10 +44,15 @@ from mmd.maya.rigid_body_info import (
     refresh_joint_bodies,
 )
 from mmd.ui.collapsible_section import SectionHeader
+from mmd.ui.maya_styles import MAYA_TAB_STYLE
 from mmd.ui.physics_controls import (
+    BODY_DRAW_MODE_LABELS,
     BODY_SCALARS,
     BODY_VECTORS,
+    COLLIDER_LABELS,
+    JOINT_DRAW_MODE_LABELS,
     JOINT_VECTORS,
+    PHYSICS_MODE_LABELS,
     _group_icon,
     attribute_control,
 )
@@ -191,9 +198,17 @@ def _body_row(body: RigidBodyInfo) -> _GroupRow:
 
 
 def _joint_row(joint: JointInfo) -> _GroupRow:
-    bodies = f"{joint.body_a_index} → {joint.body_b_index}"
+    bodies = f"{joint.body_a or '(missing body)'} → {joint.body_b or '(missing body)'}"
     detail = bodies if joint.status.is_active else f"{bodies} · {joint.status.value}"
     return (joint.index, joint.name, detail, joint.node, joint.guide)
+
+
+def _joint_tooltip(joint: JointInfo) -> str:
+    return (
+        f"Body A: {joint.body_a_index}: {joint.body_a or '(missing body)'}\n"
+        f"Body B: {joint.body_b_index}: {joint.body_b or '(missing body)'}\n"
+        f"Status: {joint.status.value}"
+    )
 
 
 # ── Value formatting ───────────────────────────────────────────────────────
@@ -352,6 +367,82 @@ _JOINT_SECTIONS: tuple[_JointSection, ...] = (
 )
 
 
+# ── Applying an editor's write ─────────────────────────────────────────────
+
+_BODY_MEMBERS: dict[str, str] = {
+    "bodyNameLocal": "name_local",
+    "bodyNameUniversal": "name_universal",
+    "drawMode": "draw_mode",
+    "bodyEnabled": "enabled",
+    "bodyGroupId": "group",
+    "bodyColliderType": "collider_type",
+    "bodyPhysicsMode": "physics_mode",
+    **{attr: member for member, attr in BODY_VECTORS.values()},
+    **{attr: member for member, attr, _ in BODY_SCALARS.values()},
+}
+
+_JOINT_MEMBERS: dict[str, str] = {
+    "jointNameLocal": "name_local",
+    "jointNameUniversal": "name_universal",
+    "drawMode": "draw_mode",
+    **{attr: member for member, attr in JOINT_VECTORS.values()},
+}
+
+_BODY_ENUM_LABELS: dict[str, tuple[str, dict[int, str]]] = {
+    "bodyColliderType": ("collider_label", COLLIDER_LABELS),
+    "bodyPhysicsMode": ("physics_mode_label", PHYSICS_MODE_LABELS),
+    "drawMode": ("draw_mode_label", BODY_DRAW_MODE_LABELS),
+}
+
+_JOINT_ENUM_LABELS: dict[str, tuple[str, dict[int, str]]] = {
+    "drawMode": ("draw_mode_label", JOINT_DRAW_MODE_LABELS),
+}
+
+
+def _with_enum_label(
+    changes: dict[str, Any],
+    attribute: str,
+    value: object,
+    table: dict[str, tuple[str, dict[int, str]]],
+) -> None:
+    """Keep the cached label of an enum field in step with its new value."""
+    entry = table.get(attribute)
+    if entry is None:
+        return
+    member, labels = entry
+    changes[member] = (
+        labels.get(value, str(value)) if isinstance(value, int) else str(value)
+    )
+
+
+def _edited_body(
+    body: RigidBodyInfo, attribute: str, value: object
+) -> RigidBodyInfo | None:
+    """``body`` with one written attribute applied, or ``None`` if unknown."""
+    changes: dict[str, Any] = {}
+    if attribute.startswith("bodyMaskGroup"):
+        mask = list(body.collision_mask)
+        mask.extend([True] * (COLLISION_GROUP_COUNT - len(mask)))
+        mask[int(attribute.removeprefix("bodyMaskGroup"))] = bool(value)
+        changes["collision_mask"] = tuple(mask)
+    elif attribute in _BODY_MEMBERS:
+        changes[_BODY_MEMBERS[attribute]] = value
+    else:
+        return None
+    _with_enum_label(changes, attribute, value, _BODY_ENUM_LABELS)
+    return replace(body, **changes)
+
+
+def _edited_joint(joint: JointInfo, attribute: str, value: object) -> JointInfo | None:
+    """``joint`` with one written attribute applied, or ``None`` if unknown."""
+    member = _JOINT_MEMBERS.get(attribute)
+    if member is None:
+        return None
+    changes: dict[str, Any] = {member: value}
+    _with_enum_label(changes, attribute, value, _JOINT_ENUM_LABELS)
+    return replace(joint, **changes)
+
+
 # ── Inspector ──────────────────────────────────────────────────────────────
 
 LABEL_COLUMN_PADDING = 4
@@ -435,12 +526,14 @@ class _InspectorSection(QtWidgets.QWidget):
         content.setHorizontalSpacing(6)
         content.setVerticalSpacing(2)
         content.setColumnStretch(1, 1)
+        self._names = [name for name, _ in rows]
         self._values = [value for _, value in rows]
         for row, (name, value) in enumerate(rows):
             key = QtWidgets.QLabel(name, self.body)
             key.setStyleSheet(f"color: {LABEL_COLOR};")
             key.setAlignment(
-                QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+                QtCore.Qt.AlignmentFlag.AlignRight
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
             )
             key.setFixedWidth(label_width)
             key.setObjectName("attributeLabel")
@@ -450,14 +543,11 @@ class _InspectorSection(QtWidgets.QWidget):
                 control = _ValueField(value, self.body)
             control.setObjectName(name)
             if title == "Collision Mask":
-                content.removeWidget(key)
-                content.addWidget(key, 0, 0, 1, 2)
-                content.addWidget(control, 1, 0, 1, 2)
                 key.setToolTip(
                     "Checked groups collide with this body; unchecked groups are ignored."
                 )
-            else:
-                content.addWidget(control, row, 1)
+                key.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignTop)
+            content.addWidget(control, row, 1)
         layout.addWidget(self.body)
         self.header.toggled.connect(self.body.setVisible)
 
@@ -465,6 +555,18 @@ class _InspectorSection(QtWidgets.QWidget):
     def values(self) -> list[str]:
         """The rendered value texts, in row order."""
         return list(self._values)
+
+    def update_values(self, values: Sequence[str]) -> None:
+        """Replace the rendered values, keeping the live editors in place."""
+        self._values = list(values)
+        for name, text in zip(self._names, self._values, strict=True):
+            field = self.body.findChild(_ValueField, name)
+            if field is not None:
+                field.setText(text)
+                field.setToolTip(text)
+            enum = self.body.findChild(QtWidgets.QComboBox, name)
+            if enum is not None and enum.property("readOnlyEnum"):
+                enum.setCurrentIndex(enum.findText(text))
 
 
 class PhysicsInspector(QtWidgets.QWidget):
@@ -558,6 +660,36 @@ class PhysicsInspector(QtWidgets.QWidget):
             ],
             joint,
         )
+
+    def update_after_edit(self, source: RigidBodyInfo | JointInfo) -> None:
+        """Refresh the values shown for ``source`` after an in-place edit.
+
+        Only the read-only fields are rewritten: every editor keeps its
+        instance, focus and geometry, so a commit does not fight the widget
+        that produced it.
+        """
+        self._header.setText(source.name)
+        if isinstance(source, RigidBodyInfo):
+            self._update_sections(_BODY_SECTIONS, source)
+            self._refresh_group_icons(source)
+        else:
+            self._update_sections(_JOINT_SECTIONS, source)
+
+    def _update_sections(
+        self,
+        tables: Sequence[tuple[str, Sequence[tuple[str, Callable[..., str]]]]],
+        source: RigidBodyInfo | JointInfo,
+    ) -> None:
+        for section, (_, rows) in zip(self._sections, tables, strict=True):
+            section.update_values([getter(source) for _, getter in rows])
+
+    def _refresh_group_icons(self, body: RigidBodyInfo) -> None:
+        """Re-shade the collision-group swatches for the body's new state."""
+        combo = self.findChild(QtWidgets.QComboBox, "Collision Group")
+        if combo is None:
+            return
+        for index in range(combo.count()):
+            combo.setItemIcon(index, _group_icon(combo.itemData(index), body))
 
     # ── Internals ─────────────────────────────────────────────────────────
 
@@ -677,6 +809,9 @@ class PhysicsPanel(QtWidgets.QWidget):
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
         self.tabs = QtWidgets.QTabBar(self)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setDrawBase(False)
+        self.tabs.setStyleSheet(MAYA_TAB_STYLE)
         self.tabs.setExpanding(False)
         self.tabs.addTab("Rigid Bodies (0)")
         self.tabs.addTab("Joints (0)")
@@ -853,7 +988,9 @@ class PhysicsPanel(QtWidgets.QWidget):
         """Show every model, preserving browsing state across scene refreshes."""
         self._models = tuple(models)
         self._update_snapshot()
-        for index, (title, _) in enumerate(grouped_rows(self._info, Grouping.PMX_ORDER)):
+        for index, (title, _) in enumerate(
+            grouped_rows(self._info, Grouping.PMX_ORDER)
+        ):
             self.tabs.setTabText(index, title)
         self._details_node = ""
         self._rebuild()
@@ -869,7 +1006,8 @@ class PhysicsPanel(QtWidgets.QWidget):
             joints=tuple(row for model in self._models for row in model.joints),
             warnings=tuple(
                 f"{model.root.rsplit('|', 1)[-1]}: {warning}"
-                for model in self._models for warning in model.warnings
+                for model in self._models
+                for warning in model.warnings
             ),
         )
 
@@ -910,93 +1048,50 @@ class PhysicsPanel(QtWidgets.QWidget):
         source = self._info.row_at(node)
         if source is None:
             return
-        body = isinstance(source, RigidBodyInfo)
-        prefix = "body" if body else "joint"
-        members = {
-            prefix + "NameLocal": "name_local",
-            prefix + "NameUniversal": "name_universal",
-            "drawMode": "draw_mode",
-        }
-        vectors = BODY_VECTORS if body else JOINT_VECTORS
-        members.update({attr: member for member, attr in vectors.values()})
-        if body:
-            members.update({attr: member for member, attr, _ in BODY_SCALARS.values()})
-            members.update(
-                bodyEnabled="enabled",
-                bodyGroupId="group",
-                bodyColliderType="collider_type",
-                bodyPhysicsMode="physics_mode",
-            )
-        if body and attribute.startswith("bodyMaskGroup"):
-            mask = list(source.collision_mask)
-            mask.extend([True] * (16 - len(mask)))
-            mask[int(attribute.removeprefix("bodyMaskGroup"))] = bool(value)
-            changes = {"collision_mask": tuple(mask)}
-        elif attribute in members:
-            changes = {members[attribute]: value}
-        else:
+        updated: RigidBodyInfo | JointInfo | None = (
+            _edited_body(source, attribute, value)
+            if isinstance(source, RigidBodyInfo)
+            else _edited_joint(source, attribute, value)
+        )
+        if updated is None:
             return
-        enum_labels = {
-            "bodyColliderType": (
-                "collider_label",
-                {1: "Box", 2: "Sphere", 3: "Capsule"},
-            ),
-            "bodyPhysicsMode": (
-                "physics_mode_label",
-                {0: "FollowBone", 1: "Physics", 2: "PhysicsBone"},
-            ),
-            "drawMode": (
-                "draw_mode_label",
-                {0: "Off", 1: "Wire", 2: "Solid", 3: "WireSolid"}
-                if body
-                else {0: "Off", 1: "Hub", 2: "Ranges"},
-            ),
-        }
-        if attribute in enum_labels:
-            member, labels = enum_labels[attribute]
-            changes[member] = labels.get(value, str(value))
-        updated = replace(source, **changes)
-        collection = "bodies" if body else "joints"
-        self._models = tuple(replace(
-            model,
-            **{
-                collection: tuple(
-                    updated if row.node == node else row
-                    for row in getattr(model, collection)
-                )
-            },
-        ) for model in self._models)
-        if body:
+        if isinstance(updated, RigidBodyInfo):
             self._models = tuple(
-                refresh_joint_bodies(model)
-                if any(row.node == node for row in model.bodies)
-                else model
+                replace(
+                    model,
+                    bodies=tuple(
+                        updated if row.node == node else row for row in model.bodies
+                    ),
+                )
+                for model in self._models
+            )
+            # A body's state is part of every joint's status, too.
+            self._models = tuple(refresh_joint_bodies(model) for model in self._models)
+        else:
+            self._models = tuple(
+                replace(
+                    model,
+                    joints=tuple(
+                        updated if row.node == node else row for row in model.joints
+                    ),
+                )
                 for model in self._models
             )
         self._update_snapshot()
         index = self._index_of(node)
         if index is not None:
-            row = _body_row(updated) if body else _joint_row(updated)
+            row = (
+                _body_row(updated)
+                if isinstance(updated, RigidBodyInfo)
+                else _joint_row(updated)
+            )
             self._items[index].setText(1, row[1])
             self._items[index].setText(2, row[2])
+            self._items[index].setToolTip(
+                2, _joint_tooltip(updated) if isinstance(updated, JointInfo) else row[2]
+            )
         if self._details_node == node:
-            self._inspector._header.setText(updated.name)
-            tables = _BODY_SECTIONS if body else _JOINT_SECTIONS
-            for section, (_, rows) in zip(
-                self._inspector._sections, tables, strict=True
-            ):
-                section._values = [getter(updated) for _, getter in rows]
-                for (name, _), text in zip(rows, section._values, strict=True):
-                    field = section.body.findChild(_ValueField, name)
-                    if field is not None:
-                        field.setText(text)
-                        field.setToolTip(text)
-            if body:
-                combo = self._inspector.findChild(
-                    QtWidgets.QComboBox, "Collision Group"
-                )
-                for i in range(combo.count()):
-                    combo.setItemIcon(i, _group_icon(combo.itemData(i), updated))
+            self._inspector.update_after_edit(updated)
         regroup = (
             attribute == "bodyGroupId" and self.grouping is Grouping.COLLISION_GROUP
         ) or (attribute == "bodyPhysicsMode" and self.grouping is Grouping.PHYSICS_MODE)
@@ -1006,6 +1101,7 @@ class PhysicsPanel(QtWidgets.QWidget):
             self._tree.verticalScrollBar().setValue(scroll)
         if self._filter.text():
             self._apply_filter(self._filter.text())
+        self._update_footer()
 
     def revealSelected(self) -> None:
         """Explicitly reveal selection without moving the view on every click."""
@@ -1049,7 +1145,9 @@ class PhysicsPanel(QtWidgets.QWidget):
         previous = self.selected_node
         selected = {item.data(0, _NodeRole) for item in self._tree.selectedItems()}
         scroll = self._tree.verticalScrollBar().value()
-        expanded = {self._group_key(group): group.isExpanded() for group in self._groups}
+        expanded = {
+            self._group_key(group): group.isExpanded() for group in self._groups
+        }
         self._syncing = True
         try:
             self._tree.clear()
@@ -1060,7 +1158,9 @@ class PhysicsPanel(QtWidgets.QWidget):
                 _, buckets = grouped_rows(model, self.grouping)[self._active_tab]
                 if not any(rows for _, rows in buckets):
                     continue
-                root = self._add_heading(None, model.root.rsplit('|', 1)[-1], strong=True)
+                root = self._add_heading(
+                    None, model.root.rsplit("|", 1)[-1], strong=True
+                )
                 root.setToolTip(0, model.root)
                 self._groups.append(root)
                 for bucket_title, rows in buckets:
@@ -1079,7 +1179,9 @@ class PhysicsPanel(QtWidgets.QWidget):
         self._apply_filter(self._filter.text())
         with QtCore.QSignalBlocker(self._tree):
             for item in self._items:
-                item.setSelected(item.data(0, _NodeRole) in selected and not item.isHidden())
+                item.setSelected(
+                    item.data(0, _NodeRole) in selected and not item.isHidden()
+                )
         self._tree.verticalScrollBar().setValue(scroll)
         self._update_delete_button()
 
@@ -1136,6 +1238,10 @@ class PhysicsPanel(QtWidgets.QWidget):
             )
             item.setText(2, detail)
             item.setToolTip(1, node or name)
+            source = self._info.row_at(node)
+            item.setToolTip(
+                2, _joint_tooltip(source) if isinstance(source, JointInfo) else detail
+            )
             item.setData(0, _NodeRole, node)
             item.setData(0, _GuideRole, guide)
             self._items.append(item)

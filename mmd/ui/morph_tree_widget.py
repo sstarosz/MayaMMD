@@ -44,6 +44,8 @@ from PySide6.QtWidgets import (
 
 from shiboken6 import isValid
 
+from mmd.ui.maya_styles import MAYA_TAB_STYLE
+
 from mmd.maya.pmx_model_utils import (
     discover_model_roots_in_scene,
     find_blend_shape_node,
@@ -138,43 +140,7 @@ _STYLESHEETS = {  # module-level constant
             border: 1px solid #aaaaaa;
         }
     """,
-    "tab": """
-        QTabWidget {
-            background-color: #444444;
-        }
-        QTabWidget::pane {
-            border: none;
-            background-color: #444444;
-        }
-        QTabWidget > QStackedWidget > QWidget {
-            background-color: #444444;
-        }
-        QTabBar {
-            background-color: #373737;
-            qproperty-drawBase: 0;
-        }
-        QTabBar::tab {
-            background-color: #373737;
-            padding: 2px 10px;
-            min-width: 80px;
-            margin-right: 2px;
-            margin-top: 2px;
-            border: 1px solid #2B2B2B;
-            border-bottom: none;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        }
-        QTabBar::tab:first {
-            margin-left: 2px;
-        }
-        QTabBar::tab:selected {
-            background-color: #444444;
-            border: none;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #404040;
-        }
-    """,
+    "tab": MAYA_TAB_STYLE,
     "weight_error": """
         QDoubleSpinBox {
             border: 2px solid #CD2729;

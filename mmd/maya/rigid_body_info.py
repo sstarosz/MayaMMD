@@ -504,45 +504,6 @@ def _types_of(nodes: Sequence[str]) -> list[str]:
     return [_type_of(node) for node in nodes]
 
 
-_ENUM_FIELDS: dict[tuple[str, str], dict[int, str]] = {}
-
-
-def enum_fields(node: str, attr: str) -> dict[int, str]:
-    """``{value: name}`` from the node type's own enum definition.
-
-    Maya reports the field names as one colon-separated string and writes the
-    numeric value only for fields that need it (``Box=1:Sphere:Capsule``), so
-    values are filled in sequentially.  Cached per node type: a model can carry
-    hundreds of bodies and the definition is per type.  The panel itself uses
-    :meth:`_Columns.labels` (``getAttr -asString``), which needs no mapping;
-    this is here for the editors that will write these enums back.
-    """
-    node_type = str(_safe(lambda: cmds.nodeType(node), ""))
-    if not node_type:
-        return {}
-    key = (node_type, attr)
-    if key in _ENUM_FIELDS:
-        return _ENUM_FIELDS[key]
-    entries = (
-        _safe(lambda: cmds.attributeQuery(attr, node=node, listEnum=True), []) or []
-    )
-    fields: dict[int, str] = {}
-    value = 0
-    for entry in str(entries[0]).split(":") if entries else []:
-        name, sep, explicit = entry.partition("=")
-        if sep and explicit.lstrip("-").isdigit():
-            value = int(explicit)
-        fields[value] = name
-        value += 1
-    _ENUM_FIELDS[key] = fields
-    return fields
-
-
-def clear_enum_cache() -> None:
-    """Drop the cached enum fields (after a plugin reload, or in tests)."""
-    _ENUM_FIELDS.clear()
-
-
 # ── Bulk attribute reads ───────────────────────────────────────────────────
 
 
@@ -661,15 +622,20 @@ def read_physics(root_name: str) -> PhysicsInfo:
         joint_nodes = _dag_nodes(root_name, TYPE_JOINT)
         if shapes or joint_nodes:
             warnings.append("No pmxRigidBodyNode: listing physics nodes from the DAG")
-    elif not shapes or not joint_nodes:
-        # The nodes exist but are not (all) wired into the solver: show what
-        # the DAG has, ordered by path, rather than hiding the model's physics.
-        loose_bodies = _dag_nodes(root_name, TYPE_BODY_SHAPE)
-        loose_joints = _dag_nodes(root_name, TYPE_JOINT)
-        if shapes or joint_nodes or loose_bodies or loose_joints:
-            shapes = shapes or loose_bodies
-            joint_nodes = joint_nodes or loose_joints
-            warnings.append("Some physics nodes are not wired into the solver")
+    else:
+        # One of the arrays can legitimately be empty — a model may have rigid
+        # bodies and no joints. Only nodes the solver does not cover at all are
+        # worth a warning; they are read from the DAG, ordered by path.
+        if not shapes:
+            loose_bodies = _dag_nodes(root_name, TYPE_BODY_SHAPE)
+            if loose_bodies:
+                shapes = loose_bodies
+                warnings.append("Rigid bodies are not wired into the solver")
+        if not joint_nodes:
+            loose_joints = _dag_nodes(root_name, TYPE_JOINT)
+            if loose_joints:
+                joint_nodes = loose_joints
+                warnings.append("Joints are not wired into the solver")
 
     angle_unit = _angle_unit()
     bodies = _read_bodies(shapes, warnings)
@@ -878,14 +844,16 @@ def refresh_joint_bodies(info: PhysicsInfo) -> PhysicsInfo:
     for joint in info.joints:
         body_a = bodies.get(joint.body_a_node)
         body_b = bodies.get(joint.body_b_node)
-        joints.append(replace(
-            joint,
-            body_a_index=body_a.index if body_a else -1,
-            body_a=body_a.name if body_a else "",
-            body_b_index=body_b.index if body_b else -1,
-            body_b=body_b.name if body_b else "",
-            status=_joint_status(body_a, body_b),
-        ))
+        joints.append(
+            replace(
+                joint,
+                body_a_index=body_a.index if body_a else -1,
+                body_a=body_a.name if body_a else "",
+                body_b_index=body_b.index if body_b else -1,
+                body_b=body_b.name if body_b else "",
+                status=_joint_status(body_a, body_b),
+            )
+        )
     return replace(info, joints=tuple(joints))
 
 

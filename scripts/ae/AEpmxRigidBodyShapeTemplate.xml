@@ -46,7 +46,8 @@
       <label>Rest Rotate</label>
     </attribute>
     <attribute name='bodyPhysicsMode' type='maya.enum'>
-      <label>Mode</label>
+      <label>Mode (read-only)</label>
+      <description language='cb'>PPpmxRigidBodyMode</description>
     </attribute>
     <attribute name='bodyMass' type='maya.double'>
       <label>Mass</label>

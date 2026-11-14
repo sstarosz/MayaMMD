@@ -37,60 +37,15 @@ from mmd.maya.pmx_scene_builder import build_pmx_scene
 from mmd.maya.vmd_scene_builder import apply_vmd_to_scene
 from mmd.maya.vpd_scene_builder import apply_vpd_pose_to_scene
 from mmd.ui.collapsible_section import CollapsibleSection
-from mmd.ui.maya_section import MayaSection, embed_maya_section
 from mmd.ui.morph_tree_widget import MorphTreeWidget
 from mmd.ui.physics_panel import PhysicsPanel
 from mmd.ui.visibility_panel import VisibilityPanel
-
-_OPEN_PANEL: "MMMToolWidget | None" = None
-"""The panel Maya's ``frameLayout`` commands call back into, if one is open."""
-
-
-def _is_section_collapsed(section: object) -> bool:
-    """Whether ``section`` is collapsed, for either section implementation.
-
-    ``MayaSection`` clamps itself to its header; the Qt fallback expands and
-    collapses on its own.  Both expose their state for lazy panel refreshes.
-    """
-    if section is None:
-        return False
-    if hasattr(section, "isCollapsed"):
-        return bool(section.isCollapsed)
-    if hasattr(section, "isExpanded"):
-        return not bool(section.isExpanded())
-    return False
-
-
-PHYSICS_EXPAND_COMMAND = (
-    'python("import mmd.ui.tool_main_widget as tw; tw.refresh_open_panel()")'
-)
-"""MEL run by the Physics frame when it is expanded (see refresh_open_panel)."""
 
 MORPHS_SECTION_HEIGHT = 440
 """Fixed body height for six 40px morph rows plus model row, tabs and headers."""
 
 PHYSICS_SECTION_HEIGHT = 680
 """Fixed expanded body height of the Physics section."""
-
-COLLAPSED_SECTION_HEIGHT = 24
-"""What a collapsed section is clamped to: just its Maya title bar."""
-
-
-def refresh_open_panel() -> None:
-    """Re-read the physics data of the open panel.
-
-    Called from the Physics frame's ``expandCommand``, so collapsing and
-    expanding the section is what picks up hand edits made in the Attribute
-    Editor.
-    """
-    panel = _OPEN_PANEL
-    if panel is None:
-        return
-    try:
-        if is_qt_obj_valid(panel):
-            panel._refresh_physics_panel()
-    except RuntimeError:  # pragma: no cover - panel closed mid-call
-        pass
 
 
 # Force reload modules during development (set MAYAMMD_DEV=0 to disable;
@@ -141,10 +96,6 @@ if _DEV_RELOAD and "mmd.ui.physics_controls" in sys.modules:
 if _DEV_RELOAD and "mmd.ui.physics_panel" in sys.modules:
     importlib.reload(sys.modules["mmd.ui.physics_panel"])
     from mmd.ui.physics_panel import PhysicsPanel
-
-if _DEV_RELOAD and "mmd.ui.maya_section" in sys.modules:
-    importlib.reload(sys.modules["mmd.ui.maya_section"])
-    from mmd.ui.maya_section import MayaSection, embed_maya_section
 
 
 # Simple PySide widget (no MayaQWidgetDockableMixin)
@@ -304,26 +255,16 @@ class MMMToolWidget(QtWidgets.QWidget):
 
         self.content_layout.addLayout(self.import_export_layout)
 
-        self.visibility_section = embed_maya_section(
-            self.content_layout,
-            "Visibility",
-            self.visibility_panel,
-            fallback_factory=CollapsibleSection,
-        )
+        self.visibility_section = self._add_section("Visibility", self.visibility_panel)
 
         self.content_layout.addLayout(self.model_ops_layout)
 
         # Fixed-height sections share the outer scroll area. Their own trees
         # retain internal scrolling; unused dock space stays below the panels.
         self.morph_tree_widget = MorphTreeWidget()
-        self.morphs_section = embed_maya_section(
-            self.content_layout,
-            "Morphs",
-            self.morph_tree_widget,
-            fallback_factory=self._fallback_section,
-            height=MORPHS_SECTION_HEIGHT,
+        self.morphs_section = self._add_section(
+            "Morphs", self.morph_tree_widget, MORPHS_SECTION_HEIGHT
         )
-        self._bind_section(self.morphs_section)
 
         # Physics section: the rigid-body / joint list + inspector.  The
         # panel owns no scene logic — it renders what `read_physics` returns
@@ -339,14 +280,12 @@ class MMMToolWidget(QtWidgets.QWidget):
         # Guard against the select -> Maya callback -> sync -> select loop.
         self._applying_physics_selection = False
 
-        self.physics_section = embed_maya_section(
-            self.content_layout,
-            "Physics",
-            self.physics_panel,
-            fallback_factory=self._fallback_section,
-            height=PHYSICS_SECTION_HEIGHT,
+        self.physics_section = self._add_section(
+            "Physics", self.physics_panel, PHYSICS_SECTION_HEIGHT
         )
-        self._bind_section(self.physics_section)
+        # Expanding is the gesture that picks up hand edits made in the
+        # Attribute Editor: the panel is a snapshot with no Refresh button.
+        self.physics_section.toggled.connect(self._on_physics_section_toggled)
 
         self.content_layout.addStretch(1)
 
@@ -356,10 +295,6 @@ class MMMToolWidget(QtWidgets.QWidget):
 
         self.setLayout(self.main_layout)
         self.setWindowTitle("MayaMMD")
-
-        # Let Maya's frameLayout expandCommand find the open panel.
-        global _OPEN_PANEL
-        _OPEN_PANEL = self
 
         # Install the selection-changed callback.  This is safe now because
         # _on_maya_selection_changed guards against both in-progress imports
@@ -381,31 +316,29 @@ class MMMToolWidget(QtWidgets.QWidget):
 
     def __del__(self) -> None:
         """Clean up the Maya callback when the Python wrapper is destroyed."""
-        global _OPEN_PANEL
-        if _OPEN_PANEL is self:
-            _OPEN_PANEL = None
         self._stop_selection_listener()
 
-    def _fallback_section(self, title: str, content: QtWidgets.QWidget):
-        """A fixed-height Qt section when Maya's native frame is unavailable."""
-        section = CollapsibleSection(title, content)
-        section.setContentHeight(
-            MORPHS_SECTION_HEIGHT if title == "Morphs" else PHYSICS_SECTION_HEIGHT
-        )
-        section.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.Fixed,
-        )
-        return section
+    def _add_section(
+        self,
+        title: str,
+        content: QtWidgets.QWidget,
+        height: int | None = None,
+    ) -> CollapsibleSection:
+        """Add one collapsible section to the scrolling panel body.
 
-    def _bind_section(self, section: object) -> None:
-        """Refresh the scene snapshot when Physics is expanded."""
-        if getattr(section, "title", "") != "Physics":
-            return
-        if isinstance(section, MayaSection):
-            section.on_toggle = self._on_physics_section_toggled_soon
-        elif isinstance(section, CollapsibleSection):
-            section.toggled.connect(self._on_physics_section_toggled)
+        Qt sections are deliberate: a native ``frameLayout``/``paneLayout``
+        keeps Maya-managed geometry after reparenting, which clips its content
+        and scrollbars at the bottom of the viewport.
+        """
+        section = CollapsibleSection(title, content)
+        if height is not None:
+            section.setContentHeight(height)
+            section.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+        self.content_layout.addWidget(section)
+        return section
 
     # ── Qt validity guard ─────────────────────────────────────────────────
 
@@ -474,19 +407,41 @@ class MMMToolWidget(QtWidgets.QWidget):
         self._refresh_physics_panel()
 
     def _start_physics_listener(self) -> None:
-        """Coalesce structural edits; ordinary selection never reloads physics."""
-        try:
-            for node_type in ("pmxRigidBodyShape", "pmxRigidBodyJoint", "pmxRigidBodyNode"):
-                for register in (om.MDGMessage.addNodeAddedCallback, om.MDGMessage.addNodeRemovedCallback):
-                    self._physics_callbacks.append(
-                        register(self._schedule_physics_refresh, node_type)
-                    )
-            for event in ("SceneOpened", "NewSceneOpened", "Undo", "Redo", "NameChanged"):
+        """Coalesce structural edits; ordinary selection never reloads physics.
+
+        Each callback is registered on its own: one event name a given Maya
+        version does not know must not silently drop every later callback.
+        """
+        registrations = [
+            (register, node_type)
+            for node_type in (
+                "pmxRigidBodyShape",
+                "pmxRigidBodyJoint",
+                "pmxRigidBodyNode",
+            )
+            for register in (
+                om.MDGMessage.addNodeAddedCallback,
+                om.MDGMessage.addNodeRemovedCallback,
+            )
+        ] + [
+            (om.MEventMessage.addEventCallback, event)
+            for event in (
+                "SceneOpened",
+                "NewSceneOpened",
+                "Undo",
+                "Redo",
+                "NameChanged",
+            )
+        ]
+        for register, argument in registrations:
+            try:
                 self._physics_callbacks.append(
-                    om.MEventMessage.addEventCallback(event, self._schedule_physics_refresh)
+                    register(self._schedule_physics_refresh, argument)
                 )
-        except (RuntimeError, TypeError, AttributeError) as exc:
-            log.warning("Could not install all physics scene callbacks: %s", exc)
+            except (RuntimeError, TypeError, AttributeError) as exc:
+                log.warning(
+                    "Could not register the physics callback for %s: %s", argument, exc
+                )
 
     def _on_physics_attribute_edited(
         self, node: str, attribute: str, value: object
@@ -494,6 +449,8 @@ class MMMToolWidget(QtWidgets.QWidget):
         """Commit one editor gesture through Maya's undoable setAttr command."""
         plug = f"{node}.{attribute}"
         try:
+            if attribute == "bodyRestitution" and float(value) < 0:
+                raise ValueError("Repulsion must be zero or greater.")
             if not cmds.objExists(plug):
                 raise RuntimeError(f"Attribute no longer exists: {plug}")
             if not cmds.getAttr(plug, settable=True):
@@ -502,7 +459,9 @@ class MMMToolWidget(QtWidgets.QWidget):
             if isinstance(value, tuple):
                 if current and tuple(current[0]) == value:
                     return
-                cmds.setAttr(plug, *value, type="double3")
+                # No explicit type: the joint limit triples are angle3, not
+                # double3, and Maya infers the right type from the plug.
+                cmds.setAttr(plug, *value)
             elif isinstance(value, str):
                 if current == value:
                     return
@@ -536,16 +495,6 @@ class MMMToolWidget(QtWidgets.QWidget):
         if expanded:
             self._refresh_physics_panel()
 
-    def _on_physics_section_toggled_soon(self) -> None:
-        """:meth:`_on_physics_section_toggled` for a section with ``on_toggle``.
-
-        ``MayaSection`` reports the new state through its own clamp, so the
-        expansion is read back from the section instead of passed in.
-        """
-        section = self.physics_section
-        if section is not None and not _is_section_collapsed(section):
-            self._refresh_physics_panel()
-
     def _on_physics_selection_changed(self, node: str) -> None:
         """Select the node picked in the panel (switching model if needed)."""
         if not self._qt_valid() or self._applying_physics_selection or not node:
@@ -567,8 +516,8 @@ class MMMToolWidget(QtWidgets.QWidget):
 
         Only the picked nodes are removed — a body's joints are left alone, so
         they start reporting ``missing body`` in the same list rather than
-        silently disappearing.  That keeps the delete surgical, which is what
-        a read-only panel should do.
+        silently disappearing.  Deleting stays surgical: the panel edits
+        attributes, not topology.
         """
         if not self._qt_valid() or not paths:
             return
@@ -599,6 +548,10 @@ class MMMToolWidget(QtWidgets.QWidget):
             log.warning("Could not delete physics nodes: %s", exc)
         finally:
             self._import_in_progress = False
+            # Deleting changes the selection, and the selection callback just
+            # swallowed it; clear the flag instead of replaying it on the next
+            # unrelated import.
+            self._pending_selection_refresh = False
         self._refresh_physics_panel()
 
     def _on_visibility_toggled(self, part: str, visible: bool) -> None:
@@ -699,7 +652,9 @@ class MMMToolWidget(QtWidgets.QWidget):
     def cleanup(self) -> None:
         """Release callbacks before Maya deletes the workspace control."""
         self._stop_selection_listener()
-        if hasattr(self, "_physics_scene_timer") and is_qt_obj_valid(self._physics_scene_timer):
+        if hasattr(self, "_physics_scene_timer") and is_qt_obj_valid(
+            self._physics_scene_timer
+        ):
             self._physics_scene_timer.stop()
         for callback in getattr(self, "_physics_callbacks", []):
             try:
@@ -713,17 +668,14 @@ class MMMToolWidget(QtWidgets.QWidget):
             pass
         try:
             # Qt already disconnects slots when their receiver is destroyed.
-            if is_qt_obj_valid(self) and self.ctx is not None and is_qt_obj_valid(self.ctx):
+            if (
+                is_qt_obj_valid(self)
+                and self.ctx is not None
+                and is_qt_obj_valid(self.ctx)
+            ):
                 self.ctx.modelChanged.disconnect(self._on_model_changed)
         except (RuntimeError, TypeError):
             pass
-        for name in ("visibility_section", "morphs_section", "physics_section"):
-            section = getattr(self, name, None)
-            if isinstance(section, MayaSection):
-                section.dispose()
-        global _OPEN_PANEL
-        if _OPEN_PANEL is self:
-            _OPEN_PANEL = None
 
     def closeEvent(self, event) -> None:
         self.cleanup()

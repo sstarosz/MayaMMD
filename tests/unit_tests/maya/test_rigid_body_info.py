@@ -286,8 +286,6 @@ class _FakeScene:
 
 class _PhysicsTestBase(unittest.TestCase):
     def setUp(self) -> None:
-        rbi.clear_enum_cache()
-        self.addCleanup(rbi.clear_enum_cache)
         patcher = patch("mmd.maya.rigid_body_info.cmds")
         self.cmds = patcher.start()
         self.addCleanup(patcher.stop)
@@ -339,7 +337,9 @@ class TestRigidBodies(_PhysicsTestBase):
         paths = ["|Root|guide0|sharedShape", "|Root|guide1|sharedShape"]
         self.cmds.ls.return_value = paths
         self.assertEqual(
-            rbi._long_paths(["guide0|sharedShape", "guide1|sharedShape", "sharedShape", ""]),
+            rbi._long_paths(
+                ["guide0|sharedShape", "guide1|sharedShape", "sharedShape", ""]
+            ),
             [*paths, "", ""],
         )
 
@@ -583,9 +583,19 @@ class TestFallbacks(_PhysicsTestBase):
         self.assertTrue(info.warnings)
 
     def test_bodies_without_joints(self) -> None:
+        """A model with no joints is complete, not unwired."""
         scene = self.scene()
         scene.add_body("hip")
-        self.assertEqual(rbi.read_physics(scene.root).counts, (1, 0))
+        info = rbi.read_physics(scene.root)
+        self.assertEqual(info.counts, (1, 0))
+        self.assertEqual(info.warnings, ())
+
+    def test_joints_without_bodies(self) -> None:
+        scene = self.scene()
+        scene.add_joint("joint", None, None)
+        info = rbi.read_physics(scene.root)
+        self.assertEqual(info.counts, (0, 1))
+        self.assertEqual(info.warnings, ())
 
     def test_convenience_readers(self) -> None:
         scene = self.scene()
@@ -620,31 +630,6 @@ class TestFallbacks(_PhysicsTestBase):
         self.assertEqual(joint.name, "joint")
         self.assertIsNone(info.body(9))
         self.assertIsNone(info.joint(9))
-
-
-class TestEnumFields(_PhysicsTestBase):
-    def test_sparse_enum_values_are_read_from_maya(self) -> None:
-        """``Box=1:Sphere:Capsule`` means values 1..3, not 0..2."""
-        scene = self.scene()
-        scene.add_body("hip")
-        shape = scene.body_shapes["hip"]
-        self.assertEqual(
-            rbi.enum_fields(shape, "bodyColliderType"),
-            {1: "Box", 2: "Sphere", 3: "Capsule"},
-        )
-
-    def test_dense_enum_values_start_at_zero(self) -> None:
-        scene = self.scene()
-        scene.add_body("hip")
-        self.assertEqual(
-            rbi.enum_fields(scene.body_shapes["hip"], "bodyPhysicsMode"),
-            {0: "FollowBone", 1: "Physics", 2: "PhysicsBone"},
-        )
-
-    def test_unknown_enum_is_empty(self) -> None:
-        scene = self.scene()
-        scene.add_body("hip")
-        self.assertEqual(rbi.enum_fields(scene.body_shapes["hip"], "nope"), {})
 
 
 if __name__ == "__main__":

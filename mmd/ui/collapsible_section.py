@@ -161,14 +161,14 @@ class SectionHeader(QtWidgets.QWidget):
         super().mousePressEvent(event)
 
 
-
 class CollapsibleSection(QtWidgets.QWidget):
-    """A titled section that can be collapsed, holding one content widget.
+    """A titled, collapsible section holding one content widget.
 
-    Used where Maya cannot draw a ``frameLayout`` (tests, headless tools);
-    :class:`mmd.ui.maya_section.MayaSection` is the native equivalent and
-    behaves the same way, including the height clamp that lets a splitter give
-    a collapsed section's space to its neighbour.
+    This is the panel's only section container: every section sits inside the
+    tool panel's ``QScrollArea``, and a native Maya ``frameLayout`` keeps
+    Maya-managed geometry after reparenting, which clips its content and
+    scrollbars. The header is custom-painted so Maya's application-wide
+    stylesheet cannot restyle it.
 
     Signals:
         toggled: ``(expanded)`` after the user (or :meth:`setExpanded`) changes
