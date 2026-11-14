@@ -192,7 +192,12 @@ class BoneBlendShapeCmd(om.MPxCommand):
         """Execute the command."""
         try:
             # Parse arguments
-            argData = om.MArgParser(BoneBlendShapeCmd.syntaxCreator(), args)
+            # MArgParser borrows the syntax's native flag storage. Keep its
+            # Python owner alive through validation and query/edit dispatch;
+            # passing a temporary leaves dangling flags (missing arguments or
+            # a native crash in TargParser::numberOfFlagUses in Maya 2027).
+            syntax = BoneBlendShapeCmd.syntaxCreator()
+            argData = om.MArgParser(syntax, args)
 
             # Get node name and validate
             self._nodeName = argData.commandArgumentString(0)

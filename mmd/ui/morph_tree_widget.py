@@ -42,6 +42,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from shiboken6 import isValid
+
+from mmd.ui.maya_styles import MAYA_TAB_STYLE
+
 from mmd.maya.pmx_model_utils import (
     discover_model_roots_in_scene,
     find_blend_shape_node,
@@ -136,43 +140,7 @@ _STYLESHEETS = {  # module-level constant
             border: 1px solid #aaaaaa;
         }
     """,
-    "tab": """
-        QTabWidget {
-            background-color: #444444;
-        }
-        QTabWidget::pane {
-            border: none;
-            background-color: #444444;
-        }
-        QTabWidget > QStackedWidget > QWidget {
-            background-color: #444444;
-        }
-        QTabBar {
-            background-color: #373737;
-            qproperty-drawBase: 0;
-        }
-        QTabBar::tab {
-            background-color: #373737;
-            padding: 2px 10px;
-            min-width: 80px;
-            margin-right: 2px;
-            margin-top: 2px;
-            border: 1px solid #2B2B2B;
-            border-bottom: none;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        }
-        QTabBar::tab:first {
-            margin-left: 2px;
-        }
-        QTabBar::tab:selected {
-            background-color: #444444;
-            border: none;
-        }
-        QTabBar::tab:hover:!selected {
-            background-color: #404040;
-        }
-    """,
+    "tab": MAYA_TAB_STYLE,
     "weight_error": """
         QDoubleSpinBox {
             border: 2px solid #CD2729;
@@ -1068,6 +1036,7 @@ class MorphTreeWidget(QWidget):
 
     def _register_time_callback(self) -> None:
         """Register the timeChanged Maya callback if not already active."""
+        MorphTreeWidget._active_instance = self
         if self._time_callback is not None:
             return
         try:
@@ -1079,7 +1048,10 @@ class MorphTreeWidget(QWidget):
 
     def _cleanup_callbacks(self) -> None:
         """Remove all registered Maya attribute-change callbacks."""
-        self._scrub_timer.stop()
+        if MorphTreeWidget._active_instance is self:
+            MorphTreeWidget._active_instance = None
+        if isValid(self._scrub_timer):
+            self._scrub_timer.stop()
         for _node, cid in list(self._callbacks.items()):
             try:
                 om.MNodeMessage.removeCallback(cid)
@@ -1181,6 +1153,9 @@ class MorphTreeWidget(QWidget):
         widget = MorphTreeWidget._active_instance
         if widget is None:
             return
+        if not isValid(widget) or not isValid(widget._scrub_timer):
+            widget._cleanup_callbacks()
+            return
         QtCore.QTimer.singleShot(0, widget._refresh_animated_values)
         widget._scrub_timer.start()
 
@@ -1192,6 +1167,8 @@ class MorphTreeWidget(QWidget):
         Works regardless of what drives the weight (animCurve,
         pairBlend, expression, custom node, …).
         """
+        if not isValid(self) or self._time_callback is None:
+            return
         if not self._anim_curve_attrs:
             return
 

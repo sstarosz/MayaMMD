@@ -219,6 +219,8 @@ MStatus RigidBodyShape::initialize()
     aBodyAngularDamping =
         makeNumeric(nAttr, "bodyAngularDamping", "bad", MFnNumericData::kDouble, 0.0);
     aBodyRestitution = makeNumeric(nAttr, "bodyRestitution", "bre", MFnNumericData::kDouble, 0.0);
+    nAttr.setMin(0.0);
+    nAttr.setSoftMax(1.0);
     aBodyFriction = makeNumeric(nAttr, "bodyFriction", "bfr", MFnNumericData::kDouble, 0.5);
 
     // PMX physics mode — enum: followBone / physics / physicsBone (field

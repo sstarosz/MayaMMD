@@ -58,6 +58,7 @@ Supports **PMX** models, **VMD** motions, and **VPD** poses — with bone hierar
 - ✅ Dockable Maya workspaceControl panel
 - ✅ Pose editor with morph weight sliders
 - ✅ Model visibility toggles — show/hide the mesh, bones, rigid bodies and joints of the selected model, plus Show All / Hide All (rigid bodies and joints start hidden; Show All also reveals nodes hidden individually)
+- ✅ Physics panel — lists the selected model's rigid bodies and joints next to a read-only, Attribute-Editor-style inspector and follows the Maya selection both ways; joints report their per-axis freedom (locked / limited / free, plus springs) and why an inactive joint does nothing. The list filters, and groups by **PMX order**, **collision group**, **physics mode** or **bone**, so "what does this group collide with" and "who drives this chain" are one glance away. Selected rows can be deleted (adding bodies and joints comes later). The panel scrolls, sits under **Morphs** like the PMX file orders them, and reads the scene's `pmxRigidBodyShape` / `pmxRigidBodyJoint` nodes — so hand edits made in the Attribute Editor appear when the section is re-expanded
 - 🔄 Reset to Bind Pose — currently broken
 - ✅ Multiple models in one scene — selection-based targeting
 - 🔄 Undo — individual operations undoable, not the whole import
