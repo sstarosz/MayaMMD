@@ -107,9 +107,9 @@ class RigidBodySimulation
         /// Field-wise equality — the Maya node uses it to detect config edits.
         bool operator==(const JointDefinition& o) const
         {
-            return bodyA == o.bodyA && bodyB == o.bodyB &&
-                   frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
-                   frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
+            return bodyA == o.bodyA && bodyB == o.bodyB && frameT.x == o.frameT.x &&
+                   frameT.y == o.frameT.y && frameT.z == o.frameT.z && frameR.x == o.frameR.x &&
+                   frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
                    linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
                    linearMin.z == o.linearMin.z && linearMax.x == o.linearMax.x &&
                    linearMax.y == o.linearMax.y && linearMax.z == o.linearMax.z &&

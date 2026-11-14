@@ -206,7 +206,9 @@ struct Inputs
         }
         chain.push_back(p);
         if (p.pop() != MS::kSuccess)
+        {
             break;
+        }
     }
     // Compose from the cached ancestor (or identity at the root) down to the
     // joint, caching every intermediate rest world by its bone index.
@@ -215,7 +217,9 @@ struct Inputs
         world = jointRestLocalMatrix(*it) * world;
         const int bone = mmd::maya::jointPmxBoneIndex(*it);
         if (bone >= 0)
+        {
             cache.emplace(bone, world);
+        }
     }
     return world;
 }
@@ -234,15 +238,21 @@ bool resolveRelatedBones(const MObject& shapeNode, MDagPath& jointPath, int& bon
     boneIndex = -1;
     parentBoneIndex = -1;
     if (shapeNode.isNull() || !shapeNode.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
     MPlugArray sources;
     MPlug(shapeNode, RigidBodyShape::aBodyJoint).connectedTo(sources, true, false);
     if (sources.length() == 0 || MDagPath::getAPathTo(sources[0].node(), jointPath) != MS::kSuccess)
+    {
         return false;
+    }
     boneIndex = mmd::maya::jointPmxBoneIndex(jointPath);
     MDagPath parentPath = jointPath;
     if (parentPath.pop() == MS::kSuccess)
+    {
         parentBoneIndex = mmd::maya::jointPmxBoneIndex(parentPath);
+    }
     return true;
 }
 
@@ -260,19 +270,27 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
     for (const RigidBodySimulation::BodyDefinition& b : bodies)
     {
         if (!b.isKinematic() || !b.enabled)
+        {
             continue;
+        }
         if (b.relatedBoneIndex >= 0)
+        {
             boneToAnchor.emplace(b.relatedBoneIndex, kinOrder);
+        }
         ++kinOrder;
     }
     for (size_t i = 0; i < bodies.size(); ++i)
     {
         RigidBodySimulation::BodyDefinition& b = bodies[i];
         if (b.isKinematic() || !b.enabled || b.relatedBoneIndex < 0)
+        {
             continue;
+        }
         MDagPath jp = jointPaths[i];
         if (!jp.isValid())
+        {
             continue;
+        }
         for (size_t steps = 0; steps < 256; ++steps) // cycle guard
         {
             const int bone = mmd::maya::jointPmxBoneIndex(jp);
@@ -283,7 +301,9 @@ void deriveResetAnchors(std::vector<RigidBodySimulation::BodyDefinition>& bodies
                 break;
             }
             if (jp.pop() != MS::kSuccess)
+            {
                 break;
+            }
         }
     }
 }
@@ -303,7 +323,9 @@ readBodyData(const MObject& node, RigidBodyNode::BodyShapes& shapes)
     const unsigned int elementCount = shapesPlug.evaluateNumElements();
     unsigned int bodyCount = 0;
     for (unsigned int i = 0; i < elementCount; ++i)
+    {
         bodyCount = std::max(bodyCount, shapesPlug.elementByPhysicalIndex(i).logicalIndex() + 1);
+    }
     out.reserve(bodyCount);
     for (unsigned int i = 0; i < bodyCount; ++i)
     {
@@ -316,7 +338,9 @@ readBodyData(const MObject& node, RigidBodyNode::BodyShapes& shapes)
             shape = sources[0].node();
         }
         else
+        {
             b.enabled = false;
+        }
         out.push_back(b);
         shapes.add(shape);
     }
@@ -341,7 +365,9 @@ void resolveBodyWiring(const MObject& node,
         MPlugArray sources;
         shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
         if (sources.length() == 0)
+        {
             continue;
+        }
         resolveRelatedBones(sources[0].node(), jointPaths[i], bodies[i].relatedBoneIndex,
                             bodies[i].parentBoneIndex);
     }
@@ -357,7 +383,9 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
                     const std::vector<RigidBodySimulation::BodyDefinition>& b)
 {
     if (a.size() != b.size())
+    {
         return false;
+    }
     for (size_t i = 0; i < a.size(); ++i)
     {
         const RigidBodySimulation::BodyDefinition& x = a[i];
@@ -401,11 +429,15 @@ readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
         MPlugArray sources;
         shapesPlug.elementByPhysicalIndex(i).connectedTo(sources, true, false);
         if (sources.length() == 0)
+        {
             continue;
+        }
         const MObject joint = sources[0].node();
         RigidBodySimulation::JointDefinition j;
         if (!RigidBodyJoint::readJointDefinition(joint, groupWorldInverse, j))
+        {
             continue;
+        }
         j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
         j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));
         out.push_back(j);
@@ -450,10 +482,14 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
     for (size_t i = 0; i < bodies.size(); ++i)
     {
         if (!bodies[i].enabled || bodies[i].relatedBoneIndex < 0)
+        {
             continue;
+        }
         const MDagPath& jointPath = jointPaths[i];
         if (!jointPath.isValid())
+        {
             continue;
+        }
         const MMatrix jointRestWorld = jointRestWorldMatrix(jointPath, restWorldCache);
         const MMatrix bodyWorld = mmd::maya::matrixFromTR(bodies[i].restPos, bodies[i].restRot);
         k[i] = jointRestWorld * bodyWorld.inverse();
@@ -486,17 +522,23 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
 bool updateKinematicAnchors(World& world, const MObject& node)
 {
     if (!world.sim.initialized())
+    {
         return false;
+    }
     bool anchorsMoved = false;
     int anchorIndex = 0;
     for (size_t i = 0; i < world.bodies.size(); ++i)
     {
         const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
+        {
             continue;
+        }
         const MObject shape = bodyShapeNode(node, (unsigned int) i);
         if (shape.isNull())
+        {
             continue;
+        }
         MMatrix w = mmd::maya::readPlugMatrix(MPlug(shape, RigidBodyShape::aBodyAnchorWorld));
         // RAW rigid attachment (row-vector): the body is a child of its joint
         // at a constant local offset, so bodyWorld = bodyRest * anchorRest^-1 *
@@ -516,7 +558,9 @@ bool updateKinematicAnchors(World& world, const MObject& node)
         const btTransform t = mayaMatrixToBtTransform(w);
         storePose(pose.pos, pose.quat, t);
         if (world.sim.setKinematicPose(anchorIndex, pose))
+        {
             anchorsMoved = true;
+        }
         ++anchorIndex;
     }
     return anchorsMoved;
@@ -532,10 +576,14 @@ bool updateKinematicAnchors(World& world, const MObject& node)
     {
         const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
+        {
             continue;
+        }
         const MObject shape = bodyShapeNode(node, (unsigned int) i);
         if (shape.isNull())
+        {
             continue;
+        }
         out.push_back(mmd::maya::readPlugMatrix(MPlug(shape, RigidBodyShape::aBodyAnchorWorld)));
     }
     return out;
@@ -566,11 +614,15 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
 {
     const btVector3 d = a.getOrigin() - b.getOrigin();
     if (d.length2() > distTol * distTol)
+    {
         return false;
+    }
     for (int c = 0; c < 3; ++c)
     {
         if (a.getBasis().getColumn(c).dot(b.getBasis().getColumn(c)) < 1.0 - rotTol)
+        {
             return false;
+        }
     }
     return true;
 }
@@ -587,14 +639,18 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
                                                                  const std::vector<MMatrix>& cur)
 {
     if (prev.size() != cur.size() || cur.empty())
+    {
         return std::nullopt;
+    }
     std::optional<btTransform> common;
     size_t anchor = 0;
     for (size_t i = 0; i < world.bodies.size(); ++i)
     {
         const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
+        {
             continue;
+        }
         if (b.relatedBoneIndex < 0) // boneless pin — not part of the skeleton
         {
             ++anchor;
@@ -615,10 +671,14 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
         ++anchor;
     }
     if (!common)
+    {
         return std::nullopt;
+    }
     // The shared move must be a real move (not the identity transform).
     if (transformsNear(*common, btTransform::getIdentity()))
+    {
         return std::nullopt;
+    }
     return common;
 }
 
@@ -636,14 +696,18 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
     for (const auto& joint : joints)
     {
         if (!valid(joint.bodyA) || !valid(joint.bodyB))
+        {
             continue;
+        }
         const Double3& a = bodies[joint.bodyA].restPos;
         const Double3& b = bodies[joint.bodyB].restPos;
         const double link = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
                                       (a.z - b.z) * (a.z - b.z));
         // A joint whose bodies coincide says nothing about the model's scale.
         if (link > 1e-4)
+        {
             links.push_back(link);
+        }
     }
     return mmd::core::joint_display::hubRadiusForLinks(std::move(links));
 }
@@ -668,7 +732,9 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
                                               const MTime& now)
 {
     if (in.bodies.empty())
+    {
         return std::nullopt;
+    }
 
     // Note: use default-construct + emplace() rather than
     // std::optional<World>(std::in_place): clang-cl's MSVC-STL handling of
@@ -698,7 +764,9 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
     definition.bodies = world.bodies; // wired — the engine consumes the reset anchors
     definition.joints = in.joints;
     if (!world.sim.initialize(definition))
+    {
         return std::nullopt;
+    }
 
     // The scrub-back reset's "rest" reference: each kinematic anchor's REST
     // world (the joint's composed rest world — a model constant from the
@@ -714,7 +782,9 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
         {
             const RigidBodySimulation::BodyDefinition& b = world.bodies[body];
             if (!b.isKinematic() || !b.enabled)
+            {
                 continue;
+            }
             if (b.relatedBoneIndex >= 0 && body < jointPaths.size() && jointPaths[body].isValid())
             {
                 originalAnchors.push_back(jointRestWorldMatrix(jointPaths[body], restWorldCache));
@@ -786,7 +856,9 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
 [[nodiscard]] bool needsRebuild(const World& world, const Inputs& in, const MTime& now)
 {
     if (configChanged(world, in))
+    {
         return true;
+    }
     const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
     return dt < 0.0 || dt > RigidBodySimulation::maxStepSpan();
 }
@@ -931,7 +1003,9 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
         {
             const RigidBodySimulation::BodyDefinition& bd = world->bodies[i];
             if (!bd.enabled)
+            {
                 continue; // disabled bodies have no slot in lastAnchorWorld
+            }
             if (bd.isKinematic())
             {
                 // Every ENABLED kinematic body occupies a slot in
@@ -952,11 +1026,17 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
                 continue;
             }
             if (bd.relatedBoneIndex < 0)
+            {
                 continue; // no bone to write back to
+            }
             if (solvedBoneWorld.find(bd.relatedBoneIndex) != solvedBoneWorld.end())
+            {
                 continue; // first body on the bone wins
+            }
             if (i >= world->k.size())
+            {
                 continue; // defensive — K is derived for every body at build
+            }
             const btTransform kb = mayaMatrixToBtTransform(world->k[i]);
             const RigidBodySimulation::Pose wp = world->sim.bodyPose(i);
             solvedBoneWorld.emplace(bd.relatedBoneIndex, poseToTransform(wp.pos, wp.quat) * kb);
@@ -968,7 +1048,9 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
         {
             const RigidBodySimulation::BodyDefinition& bd = world->bodies[i];
             if (bd.isKinematic() || !bd.enabled)
+            {
                 continue;
+            }
 
             const RigidBodySimulation::Pose wp = world->sim.bodyPose(i);
             btTransform boneLocal = poseToTransform(wp.pos, wp.quat);
@@ -1035,7 +1117,9 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
                             MFnTransform tf(p);
                             locals.push_back(mayaMatrixToBtTransform(tf.transformationMatrix()));
                             if (p.pop() != MS::kSuccess)
+                            {
                                 break;
+                            }
                         }
                         if (foundBase)
                         {
@@ -1157,21 +1241,31 @@ RigidBodyNode::RigidBodyNode() = default;
 void RigidBodyNode::BodyShapes::add(const MObject& shape)
 {
     if (!shape.isNull())
+    {
         byHash.emplace(MObjectHandle(shape).hashCode(), static_cast<long>(nodes.size()));
+    }
     nodes.emplace_back(shape);
 }
 
 long RigidBodyNode::BodyShapes::indexOf(const MObject& shape) const
 {
     if (shape.isNull())
+    {
         return -1;
+    }
     // Hash codes can collide: confirm the hit, and scan when it is not ours.
     const auto it = byHash.find(MObjectHandle(shape).hashCode());
     if (it != byHash.end() && nodes[static_cast<size_t>(it->second)].object() == shape)
+    {
         return it->second;
+    }
     for (size_t i = 0; i < nodes.size(); ++i)
+    {
         if (nodes[i].object() == shape)
+        {
             return static_cast<long>(i);
+        }
+    }
     return -1;
 }
 
@@ -1180,7 +1274,9 @@ MMatrix RigidBodyNode::groupWorldMatrix(const MObject& solver)
     MDagPath solverPath;
     if (MDagPath::getAPathTo(solver, solverPath) != MS::kSuccess ||
         solverPath.pop() != MS::kSuccess)
+    {
         return MMatrix::identity;
+    }
     // inclusiveMatrix() lives on MDagPath (not the function set).
     return solverPath.inclusiveMatrix();
 }
@@ -1190,11 +1286,15 @@ bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefiniti
                                         MMatrix& attachmentB) const
 {
     if (!mWorld || def.bodyA < 0 || def.bodyB < 0)
+    {
         return false;
+    }
     RigidBodySimulation::Pose a, b;
     if (!mWorld->sim.attachmentPose(def.bodyA, def.frameT, def.frameR, a) ||
         !mWorld->sim.attachmentPose(def.bodyB, def.frameT, def.frameR, b))
+    {
         return false;
+    }
     const auto poseMatrix = [](const RigidBodySimulation::Pose& pose)
     {
         MTransformationMatrix tm;
@@ -1500,7 +1600,9 @@ void RigidBodyNode::getCacheSetup(const MEvaluationNode& evalNode,
 MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
 {
     if (!isOutputPlug(plug))
+    {
         return MS::kUnknownParameter;
+    }
 
     const MTime now = dataBlock.inputValue(aTime).asTime();
 

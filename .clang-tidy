@@ -27,10 +27,10 @@
 #                                          helpers moved into anonymous namespaces.
 #
 # The remaining relaxations serve the Catch2 unit tests
-# (tests/unit_tests/core), which are full of frame-count loops, epsilon
-# margins and brace-less one-liners that would otherwise be flagged as
-# magic numbers / style nags.  Keeping a single profile means the engine and
-# its tests are checked with the exact same rules.
+# (tests/unit_tests/core), which are full of frame-count loops and epsilon
+# margins that would otherwise be flagged as magic numbers / style nags.
+# Keeping a single profile means the engine and its tests are checked with the
+# exact same rules.
 Checks: >-
   -*,
   bugprone-*,
@@ -38,6 +38,7 @@ Checks: >-
   clang-diagnostic-*,
   cppcoreguidelines-*,
   misc-*,
+  modernize-*,
   performance-*,
   portability-*,
   readability-*,
@@ -51,7 +52,7 @@ Checks: >-
   -bugprone-throwing-static-initialization,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-avoid-non-const-global-variables,
-  -readability-braces-around-statements,
+  -modernize-use-trailing-return-type,
   -readability-function-cognitive-complexity,
   -readability-magic-numbers
 HeaderFilterRegex: 'mmd/core/.*'

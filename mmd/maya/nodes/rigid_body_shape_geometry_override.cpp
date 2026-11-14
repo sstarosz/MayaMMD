@@ -241,7 +241,9 @@ RigidBodyShapeGeometryOverride::~RigidBodyShapeGeometryOverride()
         {
             const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
             if (shaderMgr != nullptr)
+            {
                 shaderMgr->releaseShader(fSolidShader);
+            }
         }
         fSolidShader = nullptr;
     }
@@ -282,7 +284,9 @@ void RigidBodyShapeGeometryOverride::updateDG()
     const MPlug enabledPlug = fn.findPlug(RigidBodyShape::aBodyEnabled, true, &stat);
 
     if (sizePlug.isNull() || modePlug.isNull())
+    {
         return;
+    }
 
     fState.drawMode = static_cast<short>(modePlug.asShort());
     fState.colliderType = static_cast<short>(typePlug.asShort());
@@ -349,7 +353,9 @@ void RigidBodyShapeGeometryOverride::updateRenderItems(const MDagPath& /*dagPath
     }
 
     if (fSolidItem == nullptr)
+    {
         return;
+    }
 
     if (fSolidShader == nullptr)
     {
@@ -358,19 +364,25 @@ void RigidBodyShapeGeometryOverride::updateRenderItems(const MDagPath& /*dagPath
         {
             const MHWRender::MShaderManager* shaderMgr = renderer->getShaderManager();
             if (shaderMgr != nullptr)
+            {
                 fSolidShader = mmd::maya::createSurfaceShader(*shaderMgr);
+            }
         }
     }
     // VP2 may replace a render item while this override retains its shader.
     // Bind to the current item even when no new shader had to be allocated.
     if (fSolidShader != nullptr)
+    {
         fSolidItem->setShader(fSolidShader);
+    }
 
     float cr = 1.0f, cg = 0.25f, cb = 0.25f;
     groupColor(cr, cg, cb); // solid keeps its group colour even when selected
     fSolidItem->enable(drawSolid);
     if (drawSolid && fSolidShader != nullptr)
+    {
         mmd::maya::setSurfaceColor(*fSolidShader, MColor(cr, cg, cb));
+    }
 }
 
 void RigidBodyShapeGeometryOverride::addUIDrawables(
@@ -386,7 +398,9 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
                           (fState.drawMode == RigidBodyShape::kDrawWire ||
                            fState.drawMode == RigidBodyShape::kDrawWireSolid);
     if (!drawWire)
+    {
         return;
+    }
 
     drawMgr.beginDrawable();
     if (related && !selected)
@@ -407,7 +421,9 @@ void RigidBodyShapeGeometryOverride::addUIDrawables(
             cb = sel.b;
         }
         else
+        {
             groupColor(cr, cg, cb);
+        }
         drawMgr.setLineWidth(selected ? 1.75f : 1.25f);
         drawMgr.setColor(MColor(cr, cg, cb));
         mmd::maya::drawColliderWire(drawMgr, fState.size, fState.colliderType);
@@ -423,7 +439,9 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     ColliderMesh mesh;
     buildCollider(fState.colliderType, fState.size, mesh);
     if (mesh.positions.empty() || mesh.indices.empty())
+    {
         return;
+    }
 
     mmd::maya::rigid_body_display::fillMeshBuffers(requirements, mesh.positions, mesh.normals,
                                                    data);
@@ -435,13 +453,19 @@ void RigidBodyShapeGeometryOverride::populateGeometry(const MGeometryRequirement
     {
         const MRenderItem* item = renderItems.itemAt(i);
         if (item == nullptr || item->name() != kSolidItemName)
+        {
             continue;
+        }
         MIndexBuffer* indexBuf = data.createIndexBuffer(MGeometry::kUnsignedInt32);
         if (indexBuf == nullptr)
+        {
             continue;
+        }
         void* idxPtr = indexBuf->acquire(numIndices, /*writeOnly=*/true);
         if (idxPtr == nullptr)
+        {
             continue;
+        }
         std::memcpy(idxPtr, mesh.indices.data(), idxBytes);
         indexBuf->commit(idxPtr);
         item->associateWithIndexBuffer(indexBuf);
@@ -464,7 +488,9 @@ bool RigidBodyShapeGeometryOverride::refineSelectionPath(const MSelectionInfo& /
 {
     MDagPath shapePath;
     if (!MDagPath::getAPathTo(fShape, shapePath))
+    {
         return false;
+    }
     dagPath = shapePath;
     return true;
 }

@@ -60,7 +60,9 @@ void readDouble3(const MPlug& plug, Double3& out)
     // first) keeps the JointDefinition default: readPlugDouble3 would call
     // asMDataHandle() on a null plug.
     if (plug.isNull())
+    {
         return;
+    }
     out = mmd::maya::readPlugDouble3(plug);
 }
 
@@ -275,7 +277,9 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
                                        PostEvaluationType evalType)
 {
     if (context.isNormal())
+    {
         MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
+    }
     return MPxLocatorNode::postEvaluation(context, evaluationNode, evalType);
 }
 
@@ -296,21 +300,29 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
     {
         const MPlug solverStep(node, aSolverStep);
         if (!solverStep.isNull())
+        {
             solverStep.asDouble();
+        }
     }
 
     MPlugArray destinations;
     MPlug(node, aSolver).connectedTo(destinations, false, true);
     if (destinations.length() == 0)
+    {
         return view;
+    }
     view.solverObject = destinations[0].node();
     view.solver = dynamic_cast<RigidBodyNode*>(MFnDependencyNode(view.solverObject).userNode());
     if (view.solver == nullptr)
+    {
         return view;
+    }
 
     if (!readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
                              view.definition))
+    {
         return view; // no readable frame: keep the display's "inactive" defaults
+    }
     view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
     view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
     view.active = view.solver->jointStatus(view.definition) ==
@@ -341,7 +353,9 @@ MBoundingBox RigidBodyJoint::boundingBox() const
     const MObject node = thisMObject();
     MDagPath path;
     if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
+    {
         return {};
+    }
     const MMatrix worldToLocal = path.inclusiveMatrixInverse();
 
     const SolverView view = resolveSolverView(node, /*evaluateSolver=*/false);
@@ -369,8 +383,12 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         box.expand(p * attachmentA * worldToLocal);
     }
     if (view.live)
+    {
         for (const MMatrix* m : {&view.attachmentB, &view.bodyAWorld, &view.bodyBWorld})
+        {
             box.expand(MPoint::origin * *m * worldToLocal);
+        }
+    }
     return box;
 }
 
@@ -381,10 +399,14 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
                                          RigidBodySimulation::JointDefinition& out)
 {
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
     MFnDependencyNode depFn(node);
     if (depFn.typeId() != kTypeId)
+    {
         return false;
+    }
 
     MStatus stat;
     const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
@@ -412,7 +434,9 @@ MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
     MPlugArray sources;
     MPlug(joint, end).connectedTo(sources, true, false);
     if (sources.length() == 0)
+    {
         return MObject::kNullObj;
+    }
     const MObject shape = sources[0].node();
     return MFnDependencyNode(shape).typeId() == RigidBodyShape::kTypeId ? shape : MObject::kNullObj;
 }
@@ -429,14 +453,18 @@ bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWor
                                     Double3& translate, Double3& rotate)
 {
     if (!node.hasFn(MFn::kDagNode))
+    {
         return false;
+    }
     MStatus stat;
     MFnDagNode dag(node, &stat);
     const MObject transform = dag.parent(0, &stat);
     MDagPath path;
     if (!stat || transform.isNull() || !transform.hasFn(MFn::kTransform) ||
         MDagPath::getAPathTo(transform, path) != MS::kSuccess)
+    {
         return false;
+    }
     const MTransformationMatrix tm(path.inclusiveMatrix() * groupWorldInverse);
     const MVector t = tm.getTranslation(MSpace::kTransform);
     const MEulerRotation e = tm.eulerRotation(); // radians, XYZ decomposition

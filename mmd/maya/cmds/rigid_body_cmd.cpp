@@ -89,20 +89,23 @@ bool flagArgumentDouble3(const MArgParser& parser, const char* flag, Double3& ou
 {
     MArgList args;
     if (parser.getFlagArgumentList(flag, 0, args) != MS::kSuccess)
+    {
         return false;
+    }
     unsigned int index = 0;
     const MVector v = args.asVector(index, 3);
     out = Double3(v.x, v.y, v.z);
     return true;
 }
 
-
 // Resolve the -bone argument to a joint dag path (or leave it empty).
 MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
 {
     MDagPath out;
     if (bone.length() == 0)
+    {
         return out;
+    }
 
     // Numeric string ⇒ PMX bone index: scan the model root's joints.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
@@ -117,7 +120,9 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
         char* end = nullptr;
         const int idx = static_cast<int>(std::strtol(boneStr, &end, 10));
         if (end == boneStr)
+        {
             return out;
+        }
         MDagPath rootPath = groupPath;
         rootPath.pop(); // |modelRoot
         MItDag it;
@@ -127,7 +132,9 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
             MDagPath jp;
             it.getPath(jp);
             if (mmd::maya::jointPmxBoneIndex(jp) == idx)
+            {
                 return jp;
+            }
         }
         return out;
     }
@@ -138,7 +145,9 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
     {
         MDagPath p;
         if (sel.getDagPath(0, p) == MS::kSuccess)
+        {
             return p;
+        }
     }
     return out;
 }
@@ -152,7 +161,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Parse flags (safe defaults) ──
     int index = -1;
     if (parser.isFlagSet(kIndexFlag))
+    {
         index = parser.flagArgumentInt(kIndexFlag, 0);
+    }
 
     MString nameLocal;
     MString nameUniversal;
@@ -160,18 +171,30 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     MString shape("sphere");
     MString physicsMode("physics");
     if (parser.isFlagSet(kNameFlag))
+    {
         nameLocal = parser.flagArgumentString(kNameFlag, 0);
+    }
     if (parser.isFlagSet(kNameUniversalFlag))
+    {
         nameUniversal = parser.flagArgumentString(kNameUniversalFlag, 0);
+    }
     MString nodeName;
     if (parser.isFlagSet(kNodeNameFlag))
+    {
         nodeName = parser.flagArgumentString(kNodeNameFlag, 0);
+    }
     if (parser.isFlagSet(kBoneFlag))
+    {
         bone = parser.flagArgumentString(kBoneFlag, 0);
+    }
     if (parser.isFlagSet(kShapeFlag))
+    {
         shape = parser.flagArgumentString(kShapeFlag, 0);
+    }
     if (parser.isFlagSet(kPhysicsModeFlag))
+    {
         physicsMode = parser.flagArgumentString(kPhysicsModeFlag, 0);
+    }
 
     Double3 size(0.5, 0.5, 0.5);
     Double3 pos;
@@ -204,28 +227,46 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     double friction = 0.5;
     double restitution = 0.0;
     if (parser.isFlagSet(kMassFlag))
+    {
         mass = parser.flagArgumentDouble(kMassFlag, 0);
+    }
     if (parser.isFlagSet(kLinearDampingFlag))
+    {
         linearDamping = parser.flagArgumentDouble(kLinearDampingFlag, 0);
+    }
     if (parser.isFlagSet(kAngularDampingFlag))
+    {
         angularDamping = parser.flagArgumentDouble(kAngularDampingFlag, 0);
+    }
     if (parser.isFlagSet(kFrictionFlag))
+    {
         friction = parser.flagArgumentDouble(kFrictionFlag, 0);
+    }
     if (parser.isFlagSet(kRestitutionFlag))
+    {
         restitution = parser.flagArgumentDouble(kRestitutionFlag, 0);
+    }
 
     int group = 0;
     int mask = 0xFFFF; // default: collide with every group
     if (parser.isFlagSet(kGroupFlag))
+    {
         group = parser.flagArgumentInt(kGroupFlag, 0);
+    }
     if (parser.isFlagSet(kMaskFlag))
+    {
         mask = parser.flagArgumentInt(kMaskFlag, 0) & 0xFFFF;
+    }
     // PMX collision groups are 0..15 (the bodyGroupId attribute is a 16-field
     // enum) — clamp so an out-of-range flag cannot write a broken enum value.
     if (group < 0)
+    {
         group = 0;
+    }
     else if (group > 15)
+    {
         group = 15;
+    }
 
     // PMX attenuation coefficients are 0..1 — clamp so the node's Bullet
     // damping/friction match the import path exactly.
@@ -337,11 +378,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // solver discovers it via solver.bodyShapes[n].
     // Named `{model}_{body}` (PMXNamingManager.get_rigid_body_name, passed
     // through -nodeName by the importer; the same policy otherwise).
-    const MString shapeName =
-        nodeName.length() > 0
-            ? nodeName
-            : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
-                                     "RigidBody_" + std::to_string(n));
+    const MString shapeName = nodeName.length() > 0
+                                  ? nodeName
+                                  : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
+                                                           "RigidBody_" + std::to_string(n));
     MObject guideParent = groupPath.node(); // non-const ref param on MFnTransform::create
     MFnTransform guideTf;
     MObject guideObj = guideTf.create(guideParent, &plugStat);
@@ -391,7 +431,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     mmd::maya::setPlugDouble3(shapePlug(RigidBodyShape::aBodyRestRotate), worldR);
     shapePlug(RigidBodyShape::aBodyGroupId).setShort(static_cast<short>(group));
     for (int g = 0; g < 16; ++g)
+    {
         shapePlug(RigidBodyShape::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
+    }
     shapePlug(RigidBodyShape::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     shapePlug(RigidBodyShape::aBodyNameLocal).setString(nameLocal);
     shapePlug(RigidBodyShape::aBodyNameUniversal).setString(nameUniversal);
@@ -603,6 +645,8 @@ MStatus RigidBodyCmd::doIt(const MArgList& args)
     int newIndex = -1;
     stat = doCreate(parser, solverNode, newIndex);
     if (stat)
+    {
         setResult(newIndex);
+    }
     return stat;
 }

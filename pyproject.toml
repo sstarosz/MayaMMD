@@ -11,7 +11,7 @@ version = "0.2.0" # Release version is managed by git tags + CMake GitVersion.cm
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0.0",
-  "ruff>=0.15.0",
+  "ruff==0.16.1",
   "mypy>=1.0.0",
   "PySide6>=6.5.0",
 ]
@@ -23,6 +23,23 @@ Source = "https://github.com/sstarosz/MayaMMD"
 
 [tool.setuptools.packages.find]
 include = ["mmd*"]
+
+# Python linting/formatting. The rule set is ruff's built-in default set for the
+# pinned version (see the `dev` extra): pinning the version means a ruff upgrade
+# that changes the defaults shows up as one reviewable diff instead of silently
+# changing what CI enforces. There is no `select` list on purpose — add one here
+# when the rules need to be frozen or extended for the codebase.
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint.isort]
+known-first-party = ["mmd"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
 
 [tool.mypy]
 exclude = "MayaMMD/"

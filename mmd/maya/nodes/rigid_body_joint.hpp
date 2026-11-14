@@ -174,8 +174,8 @@ class RigidBodyJoint : public MPxLocatorNode
     // rigid_body_index_a / _b, linked by node so it survives body edits).
     static MObject aJointBodyA;
     static MObject aJointBodyB;
-    static MObject aJointLinearMin;     // float3 — linear limit min (joint-frame offsets)
-    static MObject aJointLinearMax;     // float3 — linear limit max (joint-frame offsets)
+    static MObject aJointLinearMin; // float3 — linear limit min (joint-frame offsets)
+    static MObject aJointLinearMax; // float3 — linear limit max (joint-frame offsets)
     static MObject
         aJointAngularMin; // angle3 — angular limit min (radians internally, UI-unit in scripts/AE)
     static MObject aJointAngularMax; // angle3 — angular limit max

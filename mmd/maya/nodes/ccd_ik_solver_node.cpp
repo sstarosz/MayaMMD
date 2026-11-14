@@ -102,13 +102,17 @@ MStatus CCDIKSolverNode::doSolve()
     // ── Get handle group ─────────────────────────────────────────────
     MIkHandleGroup* handleGroup = this->handleGroup();
     if (handleGroup == nullptr)
+    {
         return MS::kSuccess;
+    }
 
     MObject handle = handleGroup->handle(0);
     MDagPath handlePath;
     MStatus handlePathStat = MDagPath::getAPathTo(handle, handlePath);
     if (!handlePathStat)
+    {
         return handlePathStat;
+    }
     MFnIkHandle fnHandle(handlePath);
 
     MDagPath endEffector;
@@ -135,7 +139,9 @@ MStatus CCDIKSolverNode::doSolve()
         {
             jointPaths.push_back(MDagPath(temp));
             if (temp.fullPathName() == startJointName)
+            {
                 break;
+            }
             temp.pop();
         }
     }
@@ -166,7 +172,9 @@ MStatus CCDIKSolverNode::doSolve()
         int bi = -1;
         auto itBI = boneIdxCache.find(jp.partialPathName().asChar());
         if (itBI != boneIdxCache.end())
+        {
             bi = itBI->second;
+        }
         auto limitsIt = limitsMap.find(bi);
         const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
         int const limitAxis = getSingleAxisIndex(limits);
@@ -188,7 +196,9 @@ MStatus CCDIKSolverNode::doSolve()
         MVector toTarget = handlePos - effectorPos;
         double const currDist = toTarget.length();
         if (currDist < tolerance)
+        {
             break;
+        }
 
         for (auto& jointPath : jointPaths)
         {
@@ -201,20 +211,26 @@ MStatus CCDIKSolverNode::doSolve()
             double const lenEff = toEff.length();
             double const lenTgt = toTgt.length();
             if (lenEff < eps || lenTgt < eps)
+            {
                 continue;
+            }
 
             MVector dEff = toEff / lenEff;
             MVector dTgt = toTgt / lenTgt;
 
             double const dotEffTgt = dEff * dTgt;
             if (dotEffTgt > 1.0 - eps)
+            {
                 continue;
+            }
 
             // ── Per-joint axis constraint ────────────────────────────
             int bi = -1;
             auto itBI = boneIdxCache.find(jointPath.partialPathName().asChar());
             if (itBI != boneIdxCache.end())
+            {
                 bi = itBI->second;
+            }
 
             auto limitsIt = limitsMap.find(bi);
             const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
@@ -235,16 +251,24 @@ MStatus CCDIKSolverNode::doSolve()
                 double angle = acos(dotLocal);
                 angle = std::min(angle, maxAngleRad);
                 if (angle < 1.0e-6)
+                {
                     continue;
+                }
 
                 // Constraint axis in local space
                 MVector laLocal;
                 if (limitAxis == 0)
+                {
                     laLocal = MVector(1.0, 0.0, 0.0);
+                }
                 else if (limitAxis == 1)
+                {
                     laLocal = MVector(0.0, 1.0, 0.0);
+                }
                 else
+                {
                     laLocal = MVector(0.0, 0.0, 1.0);
+                }
 
                 // Test +angle and -angle
                 MQuaternion quatPos(angle, laLocal);
@@ -263,7 +287,9 @@ MStatus CCDIKSolverNode::doSolve()
                     double const hiMaya = -loMmd;
                     double const half = (loMaya + hiMaya) * 0.5;
                     if (fabs(half - signedAngle) > fabs(half + signedAngle))
+                    {
                         signedAngle = -signedAngle;
+                    }
                 }
 
                 // ── Fold boost (near "straight leg" singularity) ─────
@@ -312,7 +338,9 @@ MStatus CCDIKSolverNode::doSolve()
                         {
                             double const half = (loMaya + hiMaya) * 0.5;
                             if (fabs(half - newAngle) > fabs(half + newAngle))
+                            {
                                 newAngle = -newAngle;
+                            }
                         }
                     }
                 }
@@ -331,7 +359,9 @@ MStatus CCDIKSolverNode::doSolve()
                 planeAngleState[jpName] = newAngle;
 
                 if (fabs(deltaAngle) < 1.0e-8)
+                {
                     continue;
+                }
 
                 // Apply delta in LOCAL space via rotateBy(kTransform)
                 MQuaternion qDeltaLocal(deltaAngle, laLocal);
@@ -346,9 +376,13 @@ MStatus CCDIKSolverNode::doSolve()
                 {
                     // Antiparallel case
                     if (fabs(dEff.x) < 0.9)
+                    {
                         axis = MVector(1.0, 0.0, 0.0) ^ dEff;
+                    }
                     else
+                    {
                         axis = MVector(0.0, 1.0, 0.0) ^ dEff;
+                    }
                     axis.normalize();
                 }
                 else
@@ -373,13 +407,17 @@ MStatus CCDIKSolverNode::doSolve()
             bestDistance = postDist;
             stallCount = 0;
             if (postDist <= tolerance)
+            {
                 break;
+            }
         }
         else
         {
             stallCount++;
             if (stallCount >= 2)
+            {
                 break;
+            }
         }
     }
     return MS::kSuccess;
@@ -404,7 +442,9 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
                 int const boneIdx = elem.child(0).asInt();
                 bool const enabled = elem.child(1).asBool();
                 if (!enabled)
+                {
                     continue;
+                }
 
                 MPlug minPlug = elem.child(2);
                 MPlug maxPlug = elem.child(3);
@@ -436,7 +476,9 @@ CCDIKSolverNode::readLinkLimitsMap(MFnDependencyNode& fnDep)
 int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
 {
     if (limits == nullptr)
+    {
         return -1;
+    }
 
     int singleAxis = -1;
     int nzCount = 0;
@@ -458,7 +500,9 @@ int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
             if (j != ax)
             {
                 if (limits->lo[j] != 0.0 || limits->hi[j] != 0.0)
+                {
                     return -1;
+                }
             }
         }
         return ax;
@@ -488,18 +532,28 @@ double CCDIKSolverNode::getCurrentAxisAngle(MFnIkJoint& jfn, int axis)
 
         MVector axisDir;
         if (axis == 0)
+        {
             axisDir = MVector(1.0, 0.0, 0.0);
+        }
         else if (axis == 1)
+        {
             axisDir = MVector(0.0, 1.0, 0.0);
+        }
         else
+        {
             axisDir = MVector(0.0, 0.0, 1.0);
+        }
 
         double ang = (quatAxis * axisDir >= 0.0) ? quatAngle : -quatAngle;
         // Normalise to [-pi, pi] so the state stays bounded.
         while (ang > M_PI)
+        {
             ang -= 2.0 * M_PI;
+        }
         while (ang < -M_PI)
+        {
             ang += 2.0 * M_PI;
+        }
         return ang;
     }
     catch (...)
@@ -522,7 +576,9 @@ double CCDIKSolverNode::computeFoldAngle(const MPoint& root, const MPoint& joint
     double const lf = vJoint.length();
     double const ls = vShin.length();
     if (lf < eps || ls < eps)
+    {
         return 0.0;
+    }
     MVector vTarget = target - root;
     double const dt = vTarget.length();
     double c = ((dt * dt) - (lf * lf) - (ls * ls)) / (2.0 * lf * ls);

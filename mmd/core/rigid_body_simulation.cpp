@@ -31,7 +31,7 @@ using namespace mmd::core::physics_math;
 namespace
 {
 // RigidBodySimulation stepping constants (see initialize()/step()).
-constexpr int kSolverIterations = 10;         // Bullet's default, as MMD uses
+constexpr int kSolverIterations = 10; // Bullet's default, as MMD uses
 // Sub-steps one step() may take.  Sized so a whole kMaxStepTime span is
 // simulated exactly (0.5 s / (1/60 s) = 30), which is what makes the adapter's
 // rebuild threshold (maxStepSpan) mean "the step would truncate here": a
@@ -703,7 +703,9 @@ bool RigidBodySimulation::attachmentPose(size_t bodyIndex, const Double3& frameT
 {
     if (!mImpl->mWorld || bodyIndex >= mImpl->mRigidBodies.size() ||
         !mImpl->mRigidBodies[bodyIndex])
+    {
         return false;
+    }
     const auto& body = mImpl->mBodies[bodyIndex].def;
     const btTransform local =
         transformFromRest(body.restPos, body.restRot).inverse() * transformFromRest(frameT, frameR);
@@ -719,15 +721,23 @@ RigidBodySimulation::jointStatus(const JointDefinition& joint,
     const auto valid = [&](long index)
     { return index >= 0 && index < static_cast<long>(bodies.size()); };
     if (!valid(joint.bodyA) || !valid(joint.bodyB))
+    {
         return JointStatus::eMissingBody;
+    }
     if (joint.bodyA == joint.bodyB)
+    {
         return JointStatus::eSameBody;
+    }
     const BodyDefinition& a = bodies[joint.bodyA];
     const BodyDefinition& b = bodies[joint.bodyB];
     if (!a.enabled || !b.enabled)
+    {
         return JointStatus::eDisabledBody;
+    }
     if (a.isKinematic() && b.isKinematic())
+    {
         return JointStatus::eBothKinematic;
+    }
     return JointStatus::eActive;
 }
 

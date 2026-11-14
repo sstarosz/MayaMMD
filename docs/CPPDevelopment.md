@@ -15,7 +15,7 @@ and adding new C++ commands or nodes.
 | **Maya SDK**           | 2024–2027           | Headers + libs for your Maya version      |
 | **vcpkg**              | ≥ 2023-03-29        | Dependency manager                        |
 | **Python dev tools**   | —                   | Install via `pip install ".[dev]"`        |
-| **clang-format**       | ≥ 15                | C++ code formatting (optional)            |
+| **clang-format**       | 23.1.4 (CI pin)     | C++ code formatting (optional)            |
 | **clang-tidy**         | ≥ 15                | C++ static analysis (optional)            |
 
 ### Maya SDK Setup
@@ -134,12 +134,12 @@ ctest --preset default --output-on-failure
 
 ### Development Scripts
 
-| Command                                                | Description                       |
-| ------------------------------------------------------ | --------------------------------- |
-| `cmake --preset maya2026-release && cmake --build ...` | Build .mll for Maya 2026          |
-| `python scripts/ci/strip_maya_sdk.py ensure`           | Download + cache Maya SDK         |
-| `clang-format -i mmd/...`                              | Format C++ code with clang-format |
-| `clang-tidy mmd/...`                                   | Lint C++ code with clang-tidy     |
+| Command                                                 | Description                   |
+| ------------------------------------------------------- | ----------------------------- |
+| `cmake --preset maya2026-release && cmake --build ...`  | Build .mll for Maya 2026      |
+| `python scripts/ci/strip_maya_sdk.py ensure`            | Download + cache Maya SDK     |
+| `clang-format -i $(git ls-files '*.cpp' '*.h' '*.hpp')` | Format all C++ code           |
+| `clang-tidy mmd/...`                                    | Lint C++ code with clang-tidy |
 
 See `.vscode/tasks.json` for pre-configured VS Code tasks for all of the above.
 
@@ -255,6 +255,27 @@ ctest --preset default --output-on-failure
 Add new test files in `tests/unit_tests/core/` and add them to the
 `mmd_core_tests` target in `tests/unit_tests/core/CMakeLists.txt`.
 
+### Sanitizers (ASan + UBSan)
+
+The core tests are Maya-free, so they also run under AddressSanitizer and
+UndefinedBehaviorSanitizer — that suite covers the Bullet math, manual indexing
+and pose round-trips where undefined behaviour hides. CI runs this as the
+`C++ Sanitizers (ASan+UBSan)` job; locally (Linux/macOS):
+
+```bash
+cmake --preset maya2026-release -DBUILD_TESTS=ON \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build out/build/maya2026-release --target mmd_core_tests
+ctest --preset default -E "maya-integration" --output-on-failure
+```
+
+Memory errors abort the test binary (so ctest fails); UBSan diagnostics are
+reported with a stack trace and counted into a warning until the existing ones
+are fixed. Use a separate build directory if you also need a normal build — the
+sanitizer flags stick to the CMake cache. Bullet itself comes from vcpkg
+prebuilt, so only project code is instrumented.
+
 ### Maya Integration Tests
 
 C++ plugin tests run in Maya standalone (requires `mayapy`):
@@ -265,17 +286,77 @@ ctest --preset default -L maya
 ## Formatting & Linting
 
 ```bash
-# Format C++ code
-clang-format -i mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h
+# Format C++ code (whole repository)
+clang-format -i $(git ls-files '*.cpp' '*.h' '*.hpp')
 
-# Check formatting (CI)
-clang-format --dry-run --Werror mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h
+# Check formatting (this is exactly what CI runs)
+clang-format --dry-run --Werror $(git ls-files '*.cpp' '*.h' '*.hpp')
 
 # Static analysis
 clang-tidy mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp -- -std=c++17
 ```
 
+`clang-tidy` uses the profile in `.clang-tidy` (which includes `modernize-*`) and
+runs in CI as the `C++ Tidy` job over every tracked `.cpp`. That whole-tree run is
+**informational** — it reports findings as a warning instead of failing the build —
+while the lines a PR actually touches are a **hard gate**: the same job pipes the
+PR diff into `clang-tidy-diff.py`, so only findings on changed lines fail. That
+way the existing backlog never blocks a PR, and no new one can be added.
+
+```bash
+# Same gate locally (needs the pip package: pip install clang-tidy==23.1.4)
+git diff -U0 origin/main...HEAD -- '*.cpp' |
+  clang-tidy-diff.py -p1 -path out/build/maya2026-release -quiet \
+    -warnings-as-errors='*,-clang-diagnostic-*'
+```
+
+`-warnings-as-errors` is what makes the script's exit code non-zero (plain
+clang-tidy exits 0 even with findings); `clang-diagnostic-*` is excluded because
+compiler diagnostics belong to the build job. Header-only changes are covered by
+the whole-tree run, not the diff gate — `clang-tidy-diff.py` needs a compilation
+database entry per file.
+
+Every configure preset sets `CMAKE_EXPORT_COMPILE_COMMANDS`, so the
+Makefile/Ninja generators (Linux/macOS, and therefore CI) write
+`out/build/<preset>/compile_commands.json` right after configure — clangd and the
+IDE pick it up too. The Visual Studio generator does not emit that file, so on
+Windows run clang-tidy from a Ninja/Makefile configure. Running it locally:
+
+```bash
+cmake --preset maya2026-release -DBUILD_TESTS=ON
+clang-tidy -p out/build/maya2026-release $(git ls-files '*.cpp')
+```
+
+Python linting is configured in `pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`);
+CI runs `ruff format --check` as a gate and `ruff check` / `mypy` as warnings
+until their existing findings are triaged.
 The project uses LLVM-style formatting with 4-space indentation (see `.clang-format`).
+
+**Braces are mandatory on control statements.** `InsertBraces: true` adds the
+missing `{ }` around `if` / `else` / `for` / `while` / `do` bodies, and
+`AllowShortIfStatementsOnASingleLine: Never`, `AllowShortLoopsOnASingleLine: false`
+and `AllowShortBlocksOnASingleLine: Never` stop a one-line body from being
+collapsed back onto the statement line. `clang-tidy` enforces the same rule via
+`readability-braces-around-statements`.
+
+## CI checks (pull requests)
+
+| Job | Command | Blocking |
+| --- | --- | --- |
+| `Python` | `ruff format --check`, `ruff check`, `mypy`, pytest | format + tests |
+| `C++ Format` | `clang-format --dry-run --Werror` (all tracked C++ files) | yes |
+| `C++ Tidy` | `clang-tidy -p out/build/maya2026-release` (all tracked `.cpp`) | no — warnings until triaged |
+| `C++ Tidy` (changed lines) | `clang-tidy-diff.py` over the PR diff | **yes** |
+| `C++ Build` | builds the `.mll`, runs the Catch2 suite | yes |
+| `C++ Sanitizers (ASan+UBSan)` | core tests under `-fsanitize=address,undefined` | ASan yes, UBSan warns |
+
+clang-format and clang-tidy are pinned to 23.1.4 in CI. Superseded pushes on a
+PR cancel their in-flight run, and workflows run with `contents: read`.
+
+Formatting is checked in CI (`.github/workflows/pr-checks.yml`, job `C++ Format`)
+with clang-format pinned to **23.1.4**; use the same version locally
+(`pip install clang-format==23.1.4`) since line wrapping differs between
+clang-format releases.
 
 ## Troubleshooting
 

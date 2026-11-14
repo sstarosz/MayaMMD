@@ -31,14 +31,20 @@ namespace mmd::maya
 inline int jointPmxBoneIndex(const MDagPath& jointPath)
 {
     if (!jointPath.isValid())
+    {
         return -1;
+    }
     MStatus stat;
     MFnDependencyNode fn(jointPath.node(), &stat);
     if (stat != MS::kSuccess)
+    {
         return -1;
+    }
     MPlug plug = fn.findPlug("pmxBoneIndex", true, &stat);
     if (plug.isNull())
+    {
         return -1;
+    }
     return plug.asInt();
 }
 
@@ -131,13 +137,19 @@ inline MStatus connectOrReplace(const MPlug& src, const MPlug& dst)
     for (unsigned int i = 0; i < sources.length(); ++i)
     {
         if (sources[i].name() == src.name())
+        {
             return MS::kSuccess; // already connected to the requested source
+        }
     }
     MDGModifier mod;
     for (unsigned int i = 0; i < sources.length(); ++i)
+    {
         mod.disconnect(sources[i], dst);
+    }
     if (mod.connect(src, dst) != MS::kSuccess)
+    {
         return MS::kFailure;
+    }
     return mod.doIt();
 }
 

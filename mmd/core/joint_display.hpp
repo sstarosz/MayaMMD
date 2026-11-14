@@ -145,23 +145,35 @@ inline Double3 currentAngles(const Double4& a, const Double4& b)
                                    {xy + wz, 1 - (xx + zz), yz - wx},
                                    {xz - wy, yz + wx, 1 - (xx + yy)}};
         for (int i = 0; i < 3; ++i)
+        {
             for (int j = 0; j < 3; ++j)
+            {
                 m[i][j] = rows[i][j];
+            }
+        }
     };
     double ma[3][3], mb[3][3], r[3][3];
     matrix(a, ma);
     matrix(b, mb);
     for (int i = 0; i < 3; ++i) // r = A^T * B
+    {
         for (int j = 0; j < 3; ++j)
+        {
             r[i][j] = ma[0][i] * mb[0][j] + ma[1][i] * mb[1][j] + ma[2][i] * mb[2][j];
+        }
+    }
     // matrixToEulerXYZ with btGetMatrixElem(m, k) = m[k % 3][k / 3],
     // including its gimbal-lock branches.
     const auto elem = [&](int k) { return r[k % 3][k / 3]; };
     const double sy = elem(2);
     if (sy >= 1.0)
+    {
         return {std::atan2(elem(3), elem(4)), kMaxAngleY, 0.0};
+    }
     if (sy <= -1.0)
+    {
         return {-std::atan2(elem(3), elem(4)), -kMaxAngleY, 0.0};
+    }
     return {std::atan2(-elem(5), elem(8)), std::asin(sy), std::atan2(-elem(1), elem(0))};
 }
 
@@ -212,7 +224,9 @@ constexpr double kHubMaxRadius = 0.5;
 inline double hubRadiusForLinks(std::vector<double> links)
 {
     if (links.empty())
+    {
         return kFallbackHubRadius;
+    }
     const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
     std::nth_element(links.begin(), middle, links.end());
     return std::clamp(*middle * kHubLinkFraction, kHubMinRadius, kHubMaxRadius) * kHubSizeFactor;
@@ -317,7 +331,9 @@ struct Hits
 inline Hits limitHits(const Range& range, double value, double floor)
 {
     if (range.kind() != RangeKind::Limited)
+    {
         return {};
+    }
     const double width = range.upper - range.lower;
     const double tolerance = std::min(std::max(width * 0.02, floor), width * 0.45);
     return {value <= range.lower + tolerance, value >= range.upper - tolerance};
@@ -350,7 +366,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     const auto cross = [&](const V& p, double size)
     {
         for (const auto& axis : axes)
+        {
             line(p - axis * size, p + axis * size);
+        }
     };
     // Axis-aligned wire cube: reads as a target from any view.
     const auto cube = [&](const V& p, double size)
@@ -359,9 +377,13 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         {
             const V u = axes[(a + 1) % 3] * size, v = axes[(a + 2) % 3] * size;
             for (double su : {-1.0, 1.0})
+            {
                 for (double sv : {-1.0, 1.0})
+                {
                     line(p + u * su + v * sv - axes[a] * size,
                          p + u * su + v * sv + axes[a] * size);
+                }
+            }
         }
     };
 
@@ -390,7 +412,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     // The ends of the limited axes B presses on.
     Hits linearHits[3];
     for (int a = 0; a < 3; ++a)
+    {
         linearHits[a] = limitHits(ranges.linear[a], currentB[a], tick * 0.25);
+    }
     if (region && dimensions == 1)
     {
         // Offset the ruler sideways; witness lines keep its physical endpoints
@@ -423,9 +447,12 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         for (int a = 0; a < 3; ++a)
         {
             if (lo[a] == hi[a])
+            {
                 continue;
+            }
             const int u = (a + 1) % 3, v = (a + 2) % 3;
             for (int iu = 0; iu < (lo[u] == hi[u] ? 1 : 2); ++iu)
+            {
                 for (int iv = 0; iv < (lo[v] == hi[v] ? 1 : 2); ++iv)
                 {
                     V p = lo;
@@ -439,6 +466,7 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
                     line(p, q);
                     edges = true;
                 }
+            }
         }
         color = GuideColor::Neutral;
         width = 2.0f;
@@ -503,7 +531,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     const auto dialFrame = [&](int a, const V& v)
     {
         if (!in.hasCurrentAngles || a == 2)
+        {
             return v;
+        }
         const V turned = a == 0 ? rotated(v, 1, kPhysicalSign * in.currentAngles.y) : v;
         return rotated(turned, 2, kPhysicalSign * in.currentAngles.z);
     };
@@ -511,7 +541,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     {
         const auto& range = ranges.angular[a];
         if (range.kind() == RangeKind::Fixed && range.lower == 0)
+        {
             continue;
+        }
         color = axisColor[a];
         const double r = radius * (1.0 + a * .22);
         const V dialU = dialFrame(a, axes[(a + 1) % 3]);
@@ -539,7 +571,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         // The real stops B presses on (the +-90 degree cut is not a stop).
         Hits hits;
         if (in.hasCurrentAngles)
+        {
             hits = limitHits(range, in.currentAngles[a], kAngleHitFloor);
+        }
         hits.lower = hits.lower && reachLower == lower;
         hits.upper = hits.upper && reachUpper == upper;
 
@@ -574,7 +608,9 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             const double arcLength = (reachUpper - reachLower) * r;
             int teeth = std::max(2, static_cast<int>(std::lround(arcLength / (1.2 * tick))));
             if (ring && teeth % 2)
+            {
                 ++teeth;
+            }
             const auto tooth = [&](int k)
             {
                 const bool end = !ring && (k == 0 || k == teeth);
@@ -582,15 +618,23 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
                 return at(reachLower + (reachUpper - reachLower) * k / teeth, r + offset);
             };
             for (int k = 0; k < teeth; ++k)
+            {
                 line(tooth(k), tooth(k + 1));
+            }
         }
         else
+        {
             arc(reachLower, reachUpper);
+        }
         dashed = true;
         if (lower < reachLower)
+        {
             arc(lower, std::min(reachLower, upper));
+        }
         if (upper > reachUpper)
+        {
             arc(std::max(reachUpper, lower), upper);
+        }
         dashed = false;
         if (fixed)
         {
@@ -617,9 +661,13 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
                 width = 2.0f;
             };
             if (reachLower == lower)
+            {
                 stop(reachLower, hits.lower);
+            }
             if (reachUpper == upper)
+            {
                 stop(reachUpper, hits.upper);
+            }
         }
         if (in.hasCurrentAngles)
         {

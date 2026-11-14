@@ -49,8 +49,7 @@ TEST_CASE("Hub radius follows the model's median link, clamped and scaled", "[jo
     // hub of the model.
     REQUIRE(hubRadiusForLinks({0.5, 0.5, 500.0}) == Catch::Approx(hubRadiusForLinks({0.5, 0.5})));
     // Clamped at both ends, then scaled by the one taste knob.
-    REQUIRE(hubRadiusForLinks({5.0, 5.0}) ==
-            Catch::Approx(kHubMaxRadius * kHubSizeFactor));
+    REQUIRE(hubRadiusForLinks({5.0, 5.0}) == Catch::Approx(kHubMaxRadius * kHubSizeFactor));
     REQUIRE(hubRadiusForLinks({0.001, 0.001}) == Catch::Approx(kHubMinRadius * kHubSizeFactor));
     REQUIRE(hubRadiusForLinks({1.0}) == Catch::Approx(kHubLinkFraction * kHubSizeFactor));
     // Monotonic in the median while inside the clamp.
@@ -255,6 +254,7 @@ TEST_CASE("Motion guides: angular arcs follow the limits; fixed angles are dashe
     const double dial = 0.56 * 1.44;
     size_t onDial = 0;
     for (const auto& s : segments)
+    {
         if (s.color == GuideColor::AxisZ && s.width == 2.0f &&
             std::abs(distanceFromOrigin(s.a) - dial) < 1e-9 &&
             std::abs(distanceFromOrigin(s.b) - dial) < 1e-9)
@@ -264,6 +264,7 @@ TEST_CASE("Motion guides: angular arcs follow the limits; fixed angles are dashe
             REQUIRE(std::atan2(s.a.y, s.a.x) <= 0.5 + 1e-9);
             ++onDial;
         }
+    }
     REQUIRE(onDial >= 9); // ceil(0.75 * 12)
 
     j.angularMin.z = j.angularMax.z = 0.4;
@@ -282,6 +283,7 @@ TEST_CASE("Motion guides: a sprung rotation arc zigzags across its limits", "[jo
         // The X arc: X-coloured, solid, width 2, in the YZ plane, near the dial.
         std::vector<Double3> points;
         for (const auto& s : segments)
+        {
             if (s.color == GuideColor::AxisX && !s.dashed && s.width == 2.0f &&
                 std::abs(s.a.x) < 1e-12 && std::abs(s.b.x) < 1e-12 &&
                 std::abs(distanceFromOrigin(s.a) - dial) < 0.1 &&
@@ -291,13 +293,16 @@ TEST_CASE("Motion guides: a sprung rotation arc zigzags across its limits", "[jo
                 points.push_back(s.a);
                 points.push_back(s.b);
             }
+        }
         return points;
     };
 
     const auto smooth = arcPoints(guidesFor(j));
     REQUIRE_FALSE(smooth.empty());
     for (const auto& p : smooth)
+    {
         REQUIRE(distanceFromOrigin(p) == Catch::Approx(dial));
+    }
 
     j.angularStiffness.x = 10.0;
     const auto sprung = guidesFor(j);
@@ -424,7 +429,9 @@ TEST_CASE("Joint current angles match Bullet's own measurement", "[joint-display
         const Double3 ours = mmd::core::joint_display::currentAngles(qa, qb);
         const Double3 bullet = bulletJointAngles(qa, qb);
         for (int i = 0; i < 3; ++i)
+        {
             REQUIRE(ours[i] == Catch::Approx(bullet[i]).margin(1e-4));
+        }
     }
 }
 
@@ -457,7 +464,9 @@ TEST_CASE("A settled joint sits inside its drawn arc, under its needle", "[joint
     RigidBodySimulation sim;
     REQUIRE(sim.initialize(def));
     for (int i = 0; i < 120; ++i)
+    {
         sim.step(RigidBodySimulation::kFixedDt);
+    }
     RigidBodySimulation::Pose a, b;
     const auto& joint = def.joints[0];
     REQUIRE(sim.attachmentPose(0, joint.frameT, joint.frameR, a));
@@ -486,12 +495,14 @@ TEST_CASE("A settled joint sits inside its drawn arc, under its needle", "[joint
     REQUIRE(distanceFromOrigin(needle->b) > kTestSizes.radius);
     REQUIRE(distanceFromOrigin(needle->a) < kTestSizes.radius);
     for (const auto& s : segments)
+    {
         if (s.color == GuideColor::AxisX && s.width == 2.0f && !s.dashed &&
             std::abs(distanceFromOrigin(s.a) - kTestSizes.radius) < 1e-9)
         {
             REQUIRE(std::atan2(s.a.z, s.a.y) >= -0.5 - 1e-6);
             REQUIRE(std::atan2(s.a.z, s.a.y) <= -0.3 + 1e-6);
         }
+    }
 }
 
 namespace
@@ -513,8 +524,8 @@ Double4 quatMul(const Double4& a, const Double4& b)
 // `v` rotated by the unit quaternion `q`.
 Double3 quatRotate(const Double4& q, const Double3& v)
 {
-    const Double4 p = quatMul(quatMul(q, Double4(v.x, v.y, v.z, 0.0)),
-                              Double4(-q.x, -q.y, -q.z, q.w));
+    const Double4 p =
+        quatMul(quatMul(q, Double4(v.x, v.y, v.z, 0.0)), Double4(-q.x, -q.y, -q.z, q.w));
     return {p.x, p.y, p.z};
 }
 double dot(const Double3& a, const Double3& b)
@@ -528,8 +539,7 @@ Double3 unit(const Double3& v)
 }
 } // namespace
 
-TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B",
-          "[joint-display]")
+TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B", "[joint-display]")
 {
     using namespace mmd::core::joint_display;
     // B turns about A's Z, then about the turned Y, then about its own X:
@@ -560,12 +570,14 @@ TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B",
     const Double3 bX = quatRotate(b, Double3(1, 0, 0));
     size_t onXDial = 0;
     for (const auto& s : segments)
+    {
         if (s.color == GuideColor::AxisX && s.width == 2.0f && !s.dashed &&
             std::abs(distanceFromOrigin(s.a) - kTestSizes.radius) < 1e-9)
         {
             REQUIRE(dot(s.a, bX) == Catch::Approx(0.0).margin(1e-9));
             ++onXDial;
         }
+    }
     REQUIRE(onXDial > 0);
     // Y turns with Z only; Z stays in A's frame.
     const Double4 zTurn = axisQuat(2, z);
@@ -597,8 +609,12 @@ TEST_CASE("Motion guides: a limit B presses on is drawn bold", "[joint-display]"
     auto segments = motionGuides(in);
     REQUIRE(pressed(segments, GuideColor::AxisZ) == 2);
     for (const auto& s : segments)
+    {
         if (s.width >= kPressedWidth)
+        {
             REQUIRE(s.width > 3.5f);
+        }
+    }
     in.currentAngles = Double3(0, 0, -0.1);
     REQUIRE(pressed(motionGuides(in), GuideColor::AxisZ) == 0);
     // The +-90 degree cut of a wider Y range is not a stop, even when the
@@ -1101,7 +1117,9 @@ template <typename Configure> double sagUnderGravity(Configure configure)
     RigidBodySimulation sim;
     REQUIRE(sim.initialize(def));
     for (int i = 0; i < 60; ++i)
+    {
         sim.step(RigidBodySimulation::kFixedDt);
+    }
     return sim.bodyPose(1).pos.y - 1.0;
 }
 } // namespace

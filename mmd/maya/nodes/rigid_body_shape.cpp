@@ -322,10 +322,14 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
                                         RigidBodySimulation::BodyDefinition& out)
 {
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
     MFnDependencyNode depFn(node);
     if (depFn.typeName() != kNodeName)
+    {
         return false;
+    }
 
     // The body's REST pose lives in the shape's bodyRestTranslate/Rotate
     // attributes (world space, PMX-verbatim after the MMD→Maya flip).  The
@@ -357,8 +361,12 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
     applyShapeSize(out, shapeSize); // PMX shape_size -> engine radius/extents/length
     out.mask = 0;
     for (int g = 0; g < 16; ++g)
+    {
         if (plug(aBodyMaskGroup.at(g)).asBool())
+        {
             out.mask |= 1L << g;
+        }
+    }
     out.groupId = plug(aBodyGroupId).asShort();
     // Keep the full PMX physics mode (0/1/2) — kinematic is a derived
     // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
@@ -395,9 +403,13 @@ MBoundingBox RigidBodyShape::boundingBox() const
     if (!typePlug.isNull())
     {
         if (typePlug.asShort() == kColliderCapsule)
+        {
             r = half[0] + half[1] * 0.5; // radius + half length
+        }
         else if (typePlug.asShort() == kColliderBox)
+        {
             r = std::max({half[0], half[1], half[2]});
+        }
         // sphere: radius = half[0]
     }
     return MBoundingBox(MPoint(-r, -r, -r), MPoint(r, r, r));

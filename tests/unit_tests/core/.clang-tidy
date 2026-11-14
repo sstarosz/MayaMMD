@@ -1,0 +1,8 @@
+---
+# Catch2 assertions are macros: REQUIRE/CHECK/REQUIRE_FALSE expand to
+# `do { ... } while (false)` and to unparenthesised statement sequences, so the
+# checks below fire on every assertion rather than on project code.
+InheritParentConfig: true
+Checks: >-
+  -cppcoreguidelines-avoid-do-while,
+  -bugprone-macro-parentheses
