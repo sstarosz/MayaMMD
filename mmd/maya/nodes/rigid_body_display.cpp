@@ -30,8 +30,8 @@
 #include "rigid_body_joint.hpp"
 #include "rigid_body_shape.hpp"
 
-#include <maya/MEventMessage.h>
 #include <maya/M3dView.h>
+#include <maya/MEventMessage.h>
 #include <maya/MFn.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>

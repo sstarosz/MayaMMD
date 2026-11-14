@@ -494,10 +494,10 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
             renderItems.append(item);
         }
         // Must match the viewport's display modes or the item never draws.
-        item->setDrawMode(!spec.wire  ? shadedModes
-                          : inactive ? static_cast<MGeometry::DrawMode>(shadedModes |
-                                                                        MGeometry::kWireframe)
-                                     : MGeometry::kWireframe);
+        item->setDrawMode(
+            !spec.wire ? shadedModes
+            : inactive ? static_cast<MGeometry::DrawMode>(shadedModes | MGeometry::kWireframe)
+                       : MGeometry::kWireframe);
         // Vertices are joint-local: populateGeometry bakes the attachment-to-
         // local transform in, so VP2 applies only the joint's DAG transform
         // (including its animated parents).  Supplying a world matrix here
@@ -574,8 +574,8 @@ RigidBodyJointGeometryOverride::OverlayGeom RigidBodyJointGeometryOverride::buil
     // Cached in updateRenderItems(): the draw phase reads no DAG state.
     OverlayGeom geom;
     const double separation = ((fAttachmentA - fAttachmentB) * fLocalToWorld).length();
-    geom.separate = separation > std::max(kSeparateMinDistance,
-                                          fState.hubRadius * kSeparateHubFraction);
+    geom.separate =
+        separation > std::max(kSeparateMinDistance, fState.hubRadius * kSeparateHubFraction);
     if (fState.active && fState.hasAttachments && fState.drawMode != RigidBodyJoint::kDrawHub)
         geom.guides = mmd::core::joint_display::motionGuides(motionGuideInput());
     return geom;
@@ -643,8 +643,8 @@ void RigidBodyJointGeometryOverride::drawOverlay(MHWRender::MUIDrawManager& draw
 
     // One stroke per body link: a second, wider black stroke at the same depth
     // can obscure the coloured one depending on VP2 draw ordering.
-    const auto endpoint = [&](const MPoint& body, const MPoint& attachment, MColor color,
-                              bool showAttachment)
+    const auto endpoint =
+        [&](const MPoint& body, const MPoint& attachment, MColor color, bool showAttachment)
     {
         color.a *= alpha;
         drawManager.setColor(color);
@@ -714,8 +714,7 @@ void RigidBodyJointGeometryOverride::drawRings(MHWRender::MUIDrawManager& drawMa
         MPointArray strip;
         strip.setLength(static_cast<unsigned int>(ring.size()));
         for (std::size_t i = 0; i < ring.size(); ++i)
-            strip[static_cast<unsigned int>(i)] =
-                local + (u * ring[i].x + v * ring[i].y) * radius;
+            strip[static_cast<unsigned int>(i)] = local + (u * ring[i].x + v * ring[i].y) * radius;
         drawManager.mesh(MHWRender::MUIDrawManager::kLineStrip, strip);
     }
 }

@@ -139,8 +139,13 @@ class ScalarControl(QtWidgets.QWidget):
     """Numeric entry and slider; a drag commits once, on release."""
 
     def __init__(
-        self, value: float, maximum: float, commit: Callable, parent: QtWidgets.QWidget,
-        *, minimum: float | None = None,
+        self,
+        value: float,
+        maximum: float,
+        commit: Callable,
+        parent: QtWidgets.QWidget,
+        *,
+        minimum: float | None = None,
     ) -> None:
         super().__init__(parent)
         layout = QtWidgets.QHBoxLayout(self)
@@ -260,9 +265,12 @@ def _body_control(
     commit: Callable,
 ) -> QtWidgets.QWidget | None:
     if name == "Mode":
-        return _readonly_enum(body.physics_mode, PHYSICS_MODE_LABELS, parent,
+        return _readonly_enum(
+            body.physics_mode,
+            PHYSICS_MODE_LABELS,
+            parent,
             "Physics mode determines bone and solver connections at import. "
-            "Read-only: change the mode in the PMX file and re-import the model."
+            "Read-only: change the mode in the PMX file and re-import the model.",
         )
     if name == "Enabled":
         check = QtWidgets.QCheckBox(parent)
@@ -274,7 +282,10 @@ def _body_control(
     if name in BODY_SCALARS:
         member, attr, maximum = BODY_SCALARS[name]
         control = ScalarControl(
-            getattr(body, member), maximum, lambda value: commit(attr, value), parent,
+            getattr(body, member),
+            maximum,
+            lambda value: commit(attr, value),
+            parent,
             minimum=0.0 if attr == "bodyRestitution" else None,
         )
         if attr == "bodyRestitution":
@@ -306,8 +317,10 @@ def _joint_control(
 ) -> QtWidgets.QWidget | None:
     if name == "Status":
         return _readonly_enum(
-            joint.status.value, {status.value: status.value for status in JointStatus},
-            parent, "Read-only: status is derived from the connected bodies, "
+            joint.status.value,
+            {status.value: status.value for status in JointStatus},
+            parent,
+            "Read-only: status is derived from the connected bodies, "
             "their enabled states, and their physics modes.",
         )
     # "Freedom" describes the limits the joint resolves to; "Limits" and
@@ -356,7 +369,10 @@ def _vector_control(
 
 
 def _readonly_enum(
-    value: int | str, choices: dict, parent: QtWidgets.QWidget, explanation: str,
+    value: int | str,
+    choices: dict,
+    parent: QtWidgets.QWidget,
+    explanation: str,
 ) -> QtWidgets.QComboBox:
     combo = QtWidgets.QComboBox(parent)
     for key, label in choices.items():
@@ -367,7 +383,9 @@ def _readonly_enum(
     combo.setEnabled(False)
     combo.setProperty("readOnlyEnum", True)
     combo.setMinimumWidth(0)
-    combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed)
+    combo.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed
+    )
     combo.setToolTip(explanation + "\nStates: " + ", ".join(choices.values()))
     return combo
 

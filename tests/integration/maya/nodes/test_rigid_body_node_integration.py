@@ -1449,7 +1449,7 @@ def test_restitution_limits_and_legacy_scene_values():
     with tempfile.TemporaryDirectory() as directory:
         scene = Path(directory) / "legacy.ma"
         scene.write_text(
-            '//Maya ASCII scene\n'
+            "//Maya ASCII scene\n"
             'createNode transform -n "legacyGuide";\n'
             'createNode pmxRigidBodyShape -n "legacyShape" -p "legacyGuide";\n'
             'setAttr ".bre" -0.25;\n',
@@ -1461,7 +1461,10 @@ def test_restitution_limits_and_legacy_scene_values():
 
 
 _TESTS = [
-    ("Restitution Bounds Preserve Legacy Data", test_restitution_limits_and_legacy_scene_values),
+    (
+        "Restitution Bounds Preserve Legacy Data",
+        test_restitution_limits_and_legacy_scene_values,
+    ),
     (
         "Deletion Preserves Output Slots and Undo",
         test_body_deletion_preserves_output_slots_and_undo,

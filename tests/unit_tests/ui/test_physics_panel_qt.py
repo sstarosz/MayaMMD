@@ -289,7 +289,8 @@ class TestListContent(_PanelTestBase):
         self.panel.tabs.setCurrentIndex(1)
         joint = self.panel._items[0]
         self.assertEqual(
-            [joint.text(column) for column in range(3)], ["0", "knee_joint", "hip → knee"]
+            [joint.text(column) for column in range(3)],
+            ["0", "knee_joint", "hip → knee"],
         )
         self.assertIn("Body A: 0: hip", joint.toolTip(2))
         self.assertIn("Body B: 1: knee", joint.toolTip(2))
@@ -755,14 +756,20 @@ class TestInspectorStyle(_PanelTestBase):
     def test_status_is_a_derived_read_only_enum(self) -> None:
         for status in JointStatus:
             self.panel.inspector.showJoint(replace(self.joint, status=status))
-            combo = self.panel.inspector._sections[0].body.findChild(QtWidgets.QComboBox, "Status")
+            combo = self.panel.inspector._sections[0].body.findChild(
+                QtWidgets.QComboBox, "Status"
+            )
             self.assertFalse(combo.isEnabled())
             self.assertEqual(combo.count(), len(JointStatus))
             self.assertEqual(combo.currentData(), status.value)
 
     def test_collision_mask_uses_the_shared_label_column(self) -> None:
         self.panel.syncSelection([self.body.node])
-        section = next(s for s in self.panel.inspector._sections if s.header.text() == "Collision Mask")
+        section = next(
+            s
+            for s in self.panel.inspector._sections
+            if s.header.text() == "Collision Mask"
+        )
         layout = section.body.layout()
         label = layout.itemAtPosition(0, 0).widget()
         control = layout.itemAtPosition(0, 1).widget()

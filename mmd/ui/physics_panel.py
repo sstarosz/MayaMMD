@@ -546,7 +546,10 @@ class _InspectorSection(QtWidgets.QWidget):
                 key.setToolTip(
                     "Checked groups collide with this body; unchecked groups are ignored."
                 )
-                key.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignTop)
+                key.setAlignment(
+                    QtCore.Qt.AlignmentFlag.AlignRight
+                    | QtCore.Qt.AlignmentFlag.AlignTop
+                )
             content.addWidget(control, row, 1)
         layout.addWidget(self.body)
         self.header.toggled.connect(self.body.setVisible)
