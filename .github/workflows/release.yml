@@ -337,7 +337,7 @@ jobs:
 
       - name: Create Release
         if: steps.check.outputs.found == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: MayaMMD v${{ steps.version.outputs.version }}
           body_path: release_notes.md
