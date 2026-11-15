@@ -116,8 +116,8 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # C++ — clang-tidy static analysis (profile: .clang-tidy, includes modernize-*)
-  # Two runs: the whole tree reports as a warning (existing backlog), and the
-  # lines touched by the PR are a hard gate via clang-tidy-diff.py.
+  # The whole tree is clean, so it is a hard gate: any new finding fails the
+  # job.  A second, focused run reports the lines the PR touches.
   # ---------------------------------------------------------------------------
   tidy-cpp:
     name: C++ Tidy
@@ -174,19 +174,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         shell: bash
 
-      - name: Lint C++ (whole tree, informational)
-        continue-on-error: true
+      - name: Lint C++ (whole tree, blocking)
         run: |
           clang-tidy --version
-          clang-tidy -p out/build/maya2026-release --quiet $(git ls-files '*.cpp') 2>&1 | tee clang-tidy.log
-          findings=$(grep -c 'warning:' clang-tidy.log || true)
-          echo "::warning::clang-tidy reported ${findings} finding(s) — see the log above"
+          clang-tidy -p out/build/maya2026-release --quiet \
+            -warnings-as-errors='*,-clang-diagnostic-*' \
+            $(git ls-files '*.cpp')
         shell: bash
 
-      # The gate: only lines this PR touches must be clean, so the backlog above
-      # does not block anyone. -warnings-as-errors is what makes the exit code
-      # non-zero for findings; clang-diagnostic-* is left out because compiler
-      # diagnostics are the C++ Build job's business.
+      # Focused view of the same rules: only lines this PR touches, so a
+      # reviewer sees the findings this change introduced.  clang-diagnostic-*
+      # is left out because compiler diagnostics are the C++ Build job's
+      # business.
       - name: Lint changed lines (blocking)
         if: github.event_name == 'pull_request'
         run: |

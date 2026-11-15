@@ -48,6 +48,7 @@
 #include <maya/MPlugArray.h>
 
 #include <algorithm>
+#include <array>
 
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
@@ -88,18 +89,20 @@ void readDouble3(const MPlug& plug, Double3& out)
 {
     MStatus stat;
     MFnUnitAttribute uAttr;
-    MObject axes[3];
-    const char* suffix[3] = {"X", "Y", "Z"};
-    const char* shortSuffix[3] = {"x", "y", "z"};
+    std::array<MObject, 3> axes{};
+    const std::array<const char*, 3> suffix{"X", "Y", "Z"};
+    const std::array<const char*, 3> shortSuffix{"x", "y", "z"};
     for (int i = 0; i < 3; ++i)
     {
-        axes[i] = uAttr.create(longName + suffix[i], shortName + shortSuffix[i],
-                               MFnUnitAttribute::kAngle, 0.0, &stat);
+        const auto index = static_cast<std::size_t>(i);
+        axes.at(index) =
+            uAttr.create(longName + suffix.at(index), shortName + shortSuffix.at(index),
+                         MFnUnitAttribute::kAngle, 0.0, &stat);
         MMD_CHECK_MSTATUS(stat);
         uAttr.setStorable(true);
         uAttr.setKeyable(false);
     }
-    MObject a = fn.create(longName, shortName, axes[0], axes[1], axes[2], &stat);
+    MObject a = fn.create(longName, shortName, axes.at(0), axes.at(1), axes.at(2), &stat);
     MMD_CHECK_MSTATUS(stat);
     fn.setStorable(true);
     fn.setKeyable(false);
@@ -113,7 +116,7 @@ void readDouble3(const MPlug& plug, Double3& out)
                                  const MString& shortName)
 {
     MStatus stat;
-    MObject a = fn.create(longName, shortName, MFnData::kString, &stat);
+    MObject a = fn.create(longName, shortName, MFnData::kString, MObject::kNullObj, &stat);
     MMD_CHECK_MSTATUS(stat);
     fn.setStorable(true);
     fn.setKeyable(false);
@@ -248,9 +251,17 @@ MStatus RigidBodyJoint::initialize()
     // frame (through frameMatrix — the inherited worldMatrix is dirtied by
     // the DAG, not through attributeAffects), dirties the solver message ->
     // pmxRigidBodyNode.jointShapes[i] -> its outputs.
-    for (const MObject& input :
-         {aJointBodyA, aJointBodyB, aJointLinearMin, aJointLinearMax, aJointAngularMin,
-          aJointAngularMax, aJointLinearStiffness, aJointAngularStiffness, aFrameMatrix})
+    for (const MObject& input : {
+             aJointBodyA,
+             aJointBodyB,
+             aJointLinearMin,
+             aJointLinearMax,
+             aJointAngularMin,
+             aJointAngularMax,
+             aJointLinearStiffness,
+             aJointAngularStiffness,
+             aFrameMatrix,
+         })
     {
         stat = attributeAffects(input, aSolver);
         MMD_CHECK_MSTATUS(stat);
@@ -374,11 +385,18 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         MPoint p;
         for (unsigned int axis = 0; axis < 3; ++axis)
         {
-            const Range& range = ranges.linear[axis];
+            const Range& range = ranges.linear.at(axis);
             const bool free = range.kind() == RangeKind::Free;
-            p[axis] = ((corner >> axis) & 1U) != 0
-                          ? (free ? 0.0 : std::max(range.upper, 0.0)) + pad
-                          : (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
+            double coordinate = 0.0;
+            if (((corner >> axis) & 1U) != 0U)
+            {
+                coordinate = (free ? 0.0 : std::max(range.upper, 0.0)) + pad;
+            }
+            else
+            {
+                coordinate = (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
+            }
+            p[axis] = coordinate;
         }
         box.expand(p * attachmentA * worldToLocal);
     }

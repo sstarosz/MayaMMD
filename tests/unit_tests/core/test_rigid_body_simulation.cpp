@@ -18,6 +18,7 @@
 #include <btBulletDynamicsCommon.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -30,7 +31,7 @@ using namespace mmd::core::physics_math;
 TEST_CASE("Joint guides scale with the hub and clear it", "[joint-display]")
 {
     using mmd::core::joint_display::guideSizes;
-    for (double hub : {.005, .13, 2.0})
+    for (double const hub : {.005, .13, 2.0})
     {
         const auto size = guideSizes(hub);
         REQUIRE(size.radius - size.tick > hub);
@@ -186,7 +187,7 @@ size_t countGuides(const std::vector<GuideSegment>& segments, GuideColor color, 
 
 double distanceFromOrigin(const Double3& p)
 {
-    return std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+    return std::sqrt((p.x * p.x) + (p.y * p.y) + (p.z * p.z));
 }
 } // namespace
 
@@ -207,7 +208,7 @@ TEST_CASE("Motion guides: one linear axis is an offset ruler at physical length"
     const auto segments = guidesFor(j);
     // The bold bar spans the real limits along X, offset along Y.
     const auto bar = std::find_if(segments.begin(), segments.end(), [](const GuideSegment& s)
-                                  { return s.width == 3.0f && std::abs(s.a.x - s.b.x) > 1.0; });
+                                  { return s.width == 3.0F && std::abs(s.a.x - s.b.x) > 1.0; });
     REQUIRE(bar != segments.end());
     REQUIRE(std::min(bar->a.x, bar->b.x) == Catch::Approx(-1.0));
     REQUIRE(std::max(bar->a.x, bar->b.x) == Catch::Approx(1.5));
@@ -255,7 +256,7 @@ TEST_CASE("Motion guides: angular arcs follow the limits; fixed angles are dashe
     size_t onDial = 0;
     for (const auto& s : segments)
     {
-        if (s.color == GuideColor::AxisZ && s.width == 2.0f &&
+        if (s.color == GuideColor::AxisZ && s.width == 2.0F &&
             std::abs(distanceFromOrigin(s.a) - dial) < 1e-9 &&
             std::abs(distanceFromOrigin(s.b) - dial) < 1e-9)
         {
@@ -284,7 +285,7 @@ TEST_CASE("Motion guides: a sprung rotation arc zigzags across its limits", "[jo
         std::vector<Double3> points;
         for (const auto& s : segments)
         {
-            if (s.color == GuideColor::AxisX && !s.dashed && s.width == 2.0f &&
+            if (s.color == GuideColor::AxisX && !s.dashed && s.width == 2.0F &&
                 std::abs(s.a.x) < 1e-12 && std::abs(s.b.x) < 1e-12 &&
                 std::abs(distanceFromOrigin(s.a) - dial) < 0.1 &&
                 std::abs(distanceFromOrigin(s.b) - dial) < 0.1 &&
@@ -308,8 +309,10 @@ TEST_CASE("Motion guides: a sprung rotation arc zigzags across its limits", "[jo
     const auto sprung = guidesFor(j);
     const auto zigzag = arcPoints(sprung);
     REQUIRE_FALSE(zigzag.empty());
-    bool inside = false, outside = false;
-    double first = 10, last = -10;
+    bool inside = false;
+    bool outside = false;
+    double first = 10;
+    double last = -10;
     for (const auto& p : zigzag)
     {
         const double d = distanceFromOrigin(p);
@@ -330,7 +333,8 @@ TEST_CASE("Motion guides: a sprung rotation arc zigzags across its limits", "[jo
     REQUIRE(zigzag.size() / 2 >= 10);
     j.angularMin.x = -1.2;
     j.angularMax.x = 1.2;
-    const double ratio = static_cast<double>(arcPoints(guidesFor(j)).size()) / zigzag.size();
+    const double ratio =
+        static_cast<double>(arcPoints(guidesFor(j)).size()) / static_cast<double>(zigzag.size());
     REQUIRE(ratio == Catch::Approx(2.0).margin(0.15));
     j.angularMin.x = -0.6;
     j.angularMax.x = 0.6;
@@ -418,14 +422,21 @@ Double3 bulletJointAngles(const Double4& qa, const Double4& qb)
 TEST_CASE("Joint current angles match Bullet's own measurement", "[joint-display][sim]")
 {
     // Euler-degree pairs (attachment A, attachment B), incl. near gimbal lock.
-    const double pairs[][6] = {{0, 0, 0, 30, 0, 0},          {0, 0, 0, 0, 30, 0},
-                               {0, 0, 0, 0, 0, 30},          {10, 20, 30, -40, 15, 70},
-                               {5, -60, 170, -20, 10, -150}, {-35, 40, -20, 60, -25, 95},
-                               {0, 0, 0, 12, 85, -7}};
+    const std::array<std::array<double, 6>, 7> pairs{
+        {
+            {0, 0, 0, 30, 0, 0},
+            {0, 0, 0, 0, 30, 0},
+            {0, 0, 0, 0, 0, 30},
+            {10, 20, 30, -40, 15, 70},
+            {5, -60, 170, -20, 10, -150},
+            {-35, 40, -20, 60, -25, 95},
+            {0, 0, 0, 12, 85, -7},
+        },
+    };
     for (const auto& p : pairs)
     {
-        const Double4 qa = eulerDegreesToQuat(p[0], p[1], p[2]);
-        const Double4 qb = eulerDegreesToQuat(p[3], p[4], p[5]);
+        const Double4 qa = eulerDegreesToQuat(p.at(0), p.at(1), p.at(2));
+        const Double4 qb = eulerDegreesToQuat(p.at(3), p.at(4), p.at(5));
         const Double3 ours = mmd::core::joint_display::currentAngles(qa, qb);
         const Double3 bullet = bulletJointAngles(qa, qb);
         for (int i = 0; i < 3; ++i)
@@ -467,7 +478,8 @@ TEST_CASE("A settled joint sits inside its drawn arc, under its needle", "[joint
     {
         sim.step(RigidBodySimulation::kFixedDt);
     }
-    RigidBodySimulation::Pose a, b;
+    RigidBodySimulation::Pose a;
+    RigidBodySimulation::Pose b;
     const auto& joint = def.joints[0];
     REQUIRE(sim.attachmentPose(0, joint.frameT, joint.frameR, a));
     REQUIRE(sim.attachmentPose(1, joint.frameT, joint.frameR, b));
@@ -489,14 +501,14 @@ TEST_CASE("A settled joint sits inside its drawn arc, under its needle", "[joint
     in.currentAngles = angles;
     const auto segments = motionGuides(in);
     const auto needle = std::find_if(segments.begin(), segments.end(), [](const GuideSegment& s)
-                                     { return s.color == GuideColor::AxisX && s.width >= 3.5f; });
+                                     { return s.color == GuideColor::AxisX && s.width >= 3.5F; });
     REQUIRE(needle != segments.end());
     REQUIRE(std::atan2(needle->b.z, needle->b.y) == Catch::Approx(turned).margin(1e-4));
     REQUIRE(distanceFromOrigin(needle->b) > kTestSizes.radius);
     REQUIRE(distanceFromOrigin(needle->a) < kTestSizes.radius);
     for (const auto& s : segments)
     {
-        if (s.color == GuideColor::AxisX && s.width == 2.0f && !s.dashed &&
+        if (s.color == GuideColor::AxisX && s.width == 2.0F && !s.dashed &&
             std::abs(distanceFromOrigin(s.a) - kTestSizes.radius) < 1e-9)
         {
             REQUIRE(std::atan2(s.a.z, s.a.y) >= -0.5 - 1e-6);
@@ -516,10 +528,10 @@ Double4 axisQuat(int axis, double angle)
 }
 Double4 quatMul(const Double4& a, const Double4& b)
 {
-    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+    return {(a.w * b.x) + (a.x * b.w) + (a.y * b.z) - (a.z * b.y),
+            (a.w * b.y) - (a.x * b.z) + (a.y * b.w) + (a.z * b.x),
+            (a.w * b.z) + (a.x * b.y) - (a.y * b.x) + (a.z * b.w),
+            (a.w * b.w) - (a.x * b.x) - (a.y * b.y) - (a.z * b.z)};
 }
 // `v` rotated by the unit quaternion `q`.
 Double3 quatRotate(const Double4& q, const Double3& v)
@@ -530,7 +542,7 @@ Double3 quatRotate(const Double4& q, const Double3& v)
 }
 double dot(const Double3& a, const Double3& b)
 {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
+    return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
 }
 Double3 unit(const Double3& v)
 {
@@ -544,7 +556,9 @@ TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B", 
     using namespace mmd::core::joint_display;
     // B turns about A's Z, then about the turned Y, then about its own X:
     // the order the constraint measures its angles in.
-    const double z = 0.4, y = 0.3, x = 0.5;
+    const double z = 0.4;
+    const double y = 0.3;
+    const double x = 0.5;
     const Double4 b = quatMul(quatMul(axisQuat(2, z), axisQuat(1, y)), axisQuat(0, x));
     GuideInput in;
     RigidBodySimulation::JointDefinition j;
@@ -559,7 +573,7 @@ TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B", 
     const auto needle = [&](GuideColor color)
     {
         const auto it = std::find_if(segments.begin(), segments.end(), [&](const GuideSegment& s)
-                                     { return s.color == color && s.width >= 3.5f; });
+                                     { return s.color == color && s.width >= 3.5F; });
         REQUIRE(it != segments.end());
         return unit(it->b);
     };
@@ -571,7 +585,7 @@ TEST_CASE("Motion guides: the dials nest like a gimbal, so needles point at B", 
     size_t onXDial = 0;
     for (const auto& s : segments)
     {
-        if (s.color == GuideColor::AxisX && s.width == 2.0f && !s.dashed &&
+        if (s.color == GuideColor::AxisX && s.width == 2.0F && !s.dashed &&
             std::abs(distanceFromOrigin(s.a) - kTestSizes.radius) < 1e-9)
         {
             REQUIRE(dot(s.a, bX) == Catch::Approx(0.0).margin(1e-9));
@@ -612,7 +626,7 @@ TEST_CASE("Motion guides: a limit B presses on is drawn bold", "[joint-display]"
     {
         if (s.width >= kPressedWidth)
         {
-            REQUIRE(s.width > 3.5f);
+            REQUIRE(s.width > 3.5F);
         }
     }
     in.currentAngles = Double3(0, 0, -0.1);
@@ -676,7 +690,8 @@ TEST_CASE("Attachment frames follow body rotation about an offset pivot", "[sim]
     def.joints[0].frameR = Double3(0, 0, 90);
     RigidBodySimulation sim;
     REQUIRE(sim.initialize(def));
-    RigidBodySimulation::Pose a, b;
+    RigidBodySimulation::Pose a;
+    RigidBodySimulation::Pose b;
     const auto& joint = def.joints[0];
     REQUIRE(sim.attachmentPose(0, joint.frameT, joint.frameR, a));
     REQUIRE(sim.attachmentPose(1, joint.frameT, joint.frameR, b));
@@ -707,7 +722,7 @@ TEST_CASE("RigidBodySimulation initializes and returns rest pose", "[sim]")
     REQUIRE(sim.initialized());
 
     // Before stepping, the solved pose is the rest pose.
-    RigidBodySimulation::Pose p0 = sim.bodyPose(0);
+    RigidBodySimulation::Pose const p0 = sim.bodyPose(0);
     REQUIRE(p0.pos.x == Catch::Approx(0.0));
     REQUIRE(p0.pos.y == Catch::Approx(0.0));
     REQUIRE(p0.pos.z == Catch::Approx(0.0));
@@ -724,7 +739,7 @@ TEST_CASE("Gravity pulls a dynamic body down", "[sim]")
         sim.step(RigidBodySimulation::kFixedDt);
     }
 
-    RigidBodySimulation::Pose p = sim.bodyPose(0);
+    RigidBodySimulation::Pose const p = sim.bodyPose(0);
     REQUIRE(p.pos.y < -1.0);
 }
 
@@ -748,7 +763,7 @@ TEST_CASE("Kinematic anchor drives a welded dynamic body", "[sim]")
         sim.step(RigidBodySimulation::kFixedDt);
     }
 
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y > 1.2); // rest offset +1 kept, so it tracks ~y=2
 }
 
@@ -768,7 +783,7 @@ TEST_CASE("resetDynamicBodies places bodies at the current skeleton pose", "[sim
     // Reset teleports the dynamic body to anchorCurrent * (anchorRest^-1 * bodyRest)
     // = (0,1,0) * (0,1,0) = (0,2,0) exactly, zeroing velocities.
     sim.resetDynamicBodies();
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
 }
 
@@ -811,7 +826,7 @@ TEST_CASE("reset captures an anchor registered later in body order", "[sim]")
     rawCurrent[0].pos = Double3(0.0, 1.0, 0.0);
     sim.resetDynamicBodies(rawRest, rawCurrent);
 
-    RigidBodySimulation::Pose p = sim.bodyPose(0);
+    RigidBodySimulation::Pose const p = sim.bodyPose(0);
     REQUIRE(p.pos.y == Catch::Approx(2.0).margin(1e-3));
 }
 
@@ -825,7 +840,7 @@ TEST_CASE("Disabled bodies are skipped and bodyPose returns rest", "[sim]")
 
     // The disabled body is not simulated (still rest pose), and the joint
     // referencing it is skipped without error.
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y == Catch::Approx(1.0));
     sim.step(RigidBodySimulation::kFixedDt); // must not crash
 }
@@ -838,7 +853,7 @@ TEST_CASE("clear() tears the world down and resets state", "[sim]")
     REQUIRE_FALSE(sim.initialized());
 
     // bodyPose falls back to the default rest pose (no bodies).
-    RigidBodySimulation::Pose p = sim.bodyPose(0);
+    RigidBodySimulation::Pose const p = sim.bodyPose(0);
     REQUIRE(p.pos.y == Catch::Approx(0.0));
 }
 
@@ -857,7 +872,7 @@ TEST_CASE("rideDynamicBodiesAlong moves dynamic bodies by a rigid world move wit
     REQUIRE(sim.setKinematicPose(0, anchor));
 
     // The dynamic body is still at rest (y=1) until a step happens.
-    RigidBodySimulation::Pose before = sim.bodyPose(1);
+    RigidBodySimulation::Pose const before = sim.bodyPose(1);
     REQUIRE(before.pos.y == Catch::Approx(1.0).margin(1e-3));
 
     // Whole-skeleton ride-along: translate everything by +3 on Y.
@@ -866,7 +881,7 @@ TEST_CASE("rideDynamicBodiesAlong moves dynamic bodies by a rigid world move wit
     sim.rideDynamicBodiesAlong(move);
 
     // The dynamic body rode along to y=4 (1 + 3), WITHOUT a physics step.
-    RigidBodySimulation::Pose after = sim.bodyPose(1);
+    RigidBodySimulation::Pose const after = sim.bodyPose(1);
     REQUIRE(after.pos.y == Catch::Approx(4.0).margin(1e-3));
     REQUIRE(after.pos.x == Catch::Approx(0.0).margin(1e-3));
     REQUIRE(after.pos.z == Catch::Approx(0.0).margin(1e-3));
@@ -883,7 +898,7 @@ TEST_CASE("rideDynamicBodiesAlong also carries rotation", "[sim]")
     move.quat = eulerDegreesToQuat(0.0, 0.0, 90.0);
     sim.rideDynamicBodiesAlong(move);
 
-    RigidBodySimulation::Pose after = sim.bodyPose(1);
+    RigidBodySimulation::Pose const after = sim.bodyPose(1);
     REQUIRE(after.pos.x == Catch::Approx(-1.0).margin(1e-2));
     REQUIRE(after.pos.y == Catch::Approx(0.0).margin(1e-2));
 }
@@ -909,10 +924,12 @@ TEST_CASE("rideDynamicBodiesAlong leaves velocities at zero for a clean resume",
     {
         sim.step(RigidBodySimulation::kFixedDt);
     }
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y == Catch::Approx(4.0).margin(0.25));
 }
 
+namespace
+{
 // A static (mass 0) ground sphere at the origin + a dynamic ball dropped from
 // above.  The ground is in group 0 (bit 0), the ball in group 1 (bit 1); the
 // masks decide whether the pair is allowed to collide.
@@ -942,6 +959,7 @@ RigidBodySimulation::Definition ballDropDefinition(long groundMask, long ballMas
 
     return def;
 }
+} // namespace
 
 TEST_CASE("Collision filtering allows bodies whose filter masks overlap", "[sim]")
 {
@@ -954,7 +972,7 @@ TEST_CASE("Collision filtering allows bodies whose filter masks overlap", "[sim]
     }
 
     // Resting ball center = sum of radii = 2.0 (definitely not fallen through).
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y > 1.5);
     REQUIRE(p.pos.y < 2.5);
 }
@@ -970,7 +988,7 @@ TEST_CASE("Collision filtering lets disjoint-mask bodies pass through", "[sim]")
         sim.step(RigidBodySimulation::kFixedDt);
     }
 
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.pos.y < -5.0); // fell through
 }
 
@@ -980,7 +998,7 @@ TEST_CASE("Kinematic anchor rotation is detected and drives a welded body", "[si
     REQUIRE(sim.initialize(weldDefinition()));
 
     // Identity pose == stored rest -> no movement.
-    RigidBodySimulation::Pose identity;
+    RigidBodySimulation::Pose const identity;
     REQUIRE_FALSE(sim.setKinematicPose(0, identity));
 
     // A pure rotation must also be reported as movement (column-dot check).
@@ -1000,7 +1018,7 @@ TEST_CASE("Kinematic anchor rotation is detected and drives a welded body", "[si
     }
 
     // The rigid weld carries the anchor's 30 deg X rotation onto the body.
-    RigidBodySimulation::Pose p = sim.bodyPose(1);
+    RigidBodySimulation::Pose const p = sim.bodyPose(1);
     REQUIRE(p.quat.x == Catch::Approx(std::sin(deg2rad(15.0))).margin(1e-3));
     REQUIRE(p.quat.w == Catch::Approx(std::cos(deg2rad(15.0))).margin(1e-3));
     REQUIRE(std::fabs(p.quat.y) < 1e-3);
@@ -1064,7 +1082,7 @@ TEST_CASE("Disabled kinematic bodies are excluded from the anchor order", "[sim]
     }
 
     // The welded body follows body 2 (the enabled anchor), not the disabled one.
-    RigidBodySimulation::Pose p = sim.bodyPose(3);
+    RigidBodySimulation::Pose const p = sim.bodyPose(3);
     REQUIRE(p.pos.y > 1.2); // rest offset +1 kept -> tracks ~y=2
 }
 
@@ -1098,8 +1116,8 @@ TEST_CASE("Box and capsule bodies simulate under gravity", "[sim]")
 
     // Both shapes get valid inertia and fall freely (mask 0 -> no inter-body
     // collision, so they do not push each other around).
-    RigidBodySimulation::Pose pb = sim.bodyPose(0);
-    RigidBodySimulation::Pose pc = sim.bodyPose(1);
+    RigidBodySimulation::Pose const pb = sim.bodyPose(0);
+    RigidBodySimulation::Pose const pc = sim.bodyPose(1);
     REQUIRE(pb.pos.y < -1.0);
     REQUIRE(pc.pos.y < -1.0);
 }
@@ -1181,7 +1199,7 @@ TEST_CASE("Spring6Dof freedom matches the joint display model", "[sim][joint-dis
 TEST_CASE("initialize returns false for an empty body list", "[sim]")
 {
     RigidBodySimulation sim;
-    RigidBodySimulation::Definition def;
+    RigidBodySimulation::Definition const def;
     REQUIRE_FALSE(sim.initialize(def));
     REQUIRE_FALSE(sim.initialized());
 }
@@ -1224,7 +1242,7 @@ TEST_CASE("Spring6Dof with finite limits builds and steps without error", "[sim]
         }
 
         // No crash, and the solved pose stays finite.
-        RigidBodySimulation::Pose p = sim.bodyPose(1);
+        RigidBodySimulation::Pose const p = sim.bodyPose(1);
         REQUIRE(std::isfinite(p.pos.x));
         REQUIRE(std::isfinite(p.pos.y));
         REQUIRE(std::isfinite(p.pos.z));

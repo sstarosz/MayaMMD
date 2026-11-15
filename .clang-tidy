@@ -15,6 +15,14 @@
 #   - misc-non-private-member-variables-in-classes: Double3/Double4/Matrix4 are plain
 #                                          value types — public members are the point.
 #   - readability-identifier-length:         x/y/z/w/i are idiomatic for math + indexing.
+#   - clang-analyzer-optin.core.EnumCastOutOfRange:
+#                                          the flag enums it inspects are declared by
+#                                          Maya (MGeometry::DrawMode, DrawAPI) and
+#                                          Catch2 (Flags): casting a valid `a | b`
+#                                          combination to the enum reports as out of
+#                                          range, and the diagnostic also fires inside
+#                                          those third-party headers, which we cannot
+#                                          change.
 #
 # Re-enabled checks whose findings were fixed in the code (2026-08):
 #   - cppcoreguidelines-avoid-c-arrays:     raw C arrays replaced with
@@ -52,6 +60,7 @@ Checks: >-
   -bugprone-throwing-static-initialization,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-avoid-non-const-global-variables,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
   -modernize-use-trailing-return-type,
   -readability-function-cognitive-complexity,
   -readability-magic-numbers

@@ -24,6 +24,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <iterator>
 #include <vector>
 
 namespace mmd::core::joint_display
@@ -34,22 +36,24 @@ namespace mmd::core::joint_display
 // The single freedom model behind every joint display (state colour, motion
 // guides, tests).  It follows btGeneric6DofSpringConstraint exactly: there
 // are no display thresholds, so what is drawn is what the solver does.
-enum class RangeKind
+enum class RangeKind : std::uint8_t
 {
     Fixed,
     Limited,
-    Free
+    Free,
 };
 struct Range
 {
     double lower = 0.0;
     double upper = 0.0;
-    RangeKind kind() const
+    [[nodiscard]] RangeKind kind() const
     {
         // Match Bullet: only equal endpoints are locked; even tiny ranges count.
-        return lower > upper    ? RangeKind::Free
-               : lower == upper ? RangeKind::Fixed
-                                : RangeKind::Limited;
+        if (lower > upper)
+        {
+            return RangeKind::Free;
+        }
+        return lower == upper ? RangeKind::Fixed : RangeKind::Limited;
     }
 };
 struct Ranges
@@ -61,6 +65,18 @@ struct Ranges
     std::array<bool, 3> linearSpring{};
     std::array<bool, 3> angularSpring{};
 };
+
+// Bounds-checked access to the small fixed per-axis tables below: the display
+// code addresses them by integer axis number.
+template <typename T, std::size_t N> [[nodiscard]] inline T& tableAt(std::array<T, N>& table, int i)
+{
+    return table.at(static_cast<std::size_t>(i));
+}
+template <typename T, std::size_t N>
+[[nodiscard]] inline const T& tableAt(const std::array<T, N>& table, int i)
+{
+    return table.at(static_cast<std::size_t>(i));
+}
 
 // The constraint measures rotation as XYZ Euler angles, so the middle (Y)
 // angle never leaves [-pi/2, pi/2]: wider Y limits, or a free Y axis, cannot
@@ -79,10 +95,14 @@ inline double scalar(double v)
 // btNormalizeAngle, in float like Bullet (setAngularLower/UpperLimit).
 inline double normalizeAngle(double radians)
 {
-    constexpr float kPi = 3.1415926535897932384626433832795029f;
-    constexpr float kTwoPi = 2.0f * kPi;
+    constexpr float kPi = 3.1415926535897932384626433832795029F;
+    constexpr float kTwoPi = 2.0F * kPi;
     const float a = std::fmod(static_cast<float>(radians), kTwoPi);
-    return static_cast<double>(a < -kPi ? a + kTwoPi : a > kPi ? a - kTwoPi : a);
+    if (a < -kPi)
+    {
+        return static_cast<double>(a + kTwoPi);
+    }
+    return static_cast<double>(a > kPi ? a - kTwoPi : a);
 }
 } // namespace range_detail
 
@@ -94,13 +114,16 @@ inline Ranges describe(const RigidBodySimulation::JointDefinition& j)
     Ranges out;
     for (int i = 0; i < 3; ++i)
     {
-        out.linear[i] = {scalar(j.linearMin[i]), scalar(j.linearMax[i])};
-        out.angular[i] = {normalizeAngle(j.angularMin[i]), normalizeAngle(j.angularMax[i])};
+        tableAt(out.linear, i) = {scalar(j.linearMin[i]), scalar(j.linearMax[i])};
+        tableAt(out.angular, i) = {
+            normalizeAngle(j.angularMin[i]),
+            normalizeAngle(j.angularMax[i]),
+        };
         // The solver enables a spring for any non-zero stiffness.
-        out.linearSpring[i] =
-            j.linearStiffness[i] != 0.0 && out.linear[i].kind() != RangeKind::Fixed;
-        out.angularSpring[i] =
-            j.angularStiffness[i] != 0.0 && out.angular[i].kind() != RangeKind::Fixed;
+        tableAt(out.linearSpring, i) =
+            j.linearStiffness[i] != 0.0 && tableAt(out.linear, i).kind() != RangeKind::Fixed;
+        tableAt(out.angularSpring, i) =
+            j.angularStiffness[i] != 0.0 && tableAt(out.angular, i).kind() != RangeKind::Fixed;
     }
     return out;
 }
@@ -118,8 +141,8 @@ inline Freedom summarize(const Ranges& ranges)
     Freedom out;
     for (int i = 0; i < 3; ++i)
     {
-        out.translates = out.translates || ranges.linear[i].kind() != RangeKind::Fixed;
-        out.rotates = out.rotates || ranges.angular[i].kind() != RangeKind::Fixed;
+        out.translates = out.translates || tableAt(ranges.linear, i).kind() != RangeKind::Fixed;
+        out.rotates = out.rotates || tableAt(ranges.angular, i).kind() != RangeKind::Fixed;
     }
     return out;
 }
@@ -135,36 +158,42 @@ inline Freedom summarize(const Ranges& ranges)
 // -t, and a limit [lo, hi] lets B turn through [-hi, -lo] (kPhysicalSign).
 inline Double3 currentAngles(const Double4& a, const Double4& b)
 {
+    using Matrix3 = std::array<std::array<double, 3>, 3>;
     // Row-major rotation matrix of a unit quaternion (btMatrix3x3::setRotation).
-    const auto matrix = [](const Double4& q, double m[3][3])
+    const auto matrix = [](const Double4& q)
     {
-        const double xx = q.x * q.x * 2, yy = q.y * q.y * 2, zz = q.z * q.z * 2;
-        const double xy = q.x * q.y * 2, xz = q.x * q.z * 2, yz = q.y * q.z * 2;
-        const double wx = q.w * q.x * 2, wy = q.w * q.y * 2, wz = q.w * q.z * 2;
-        const double rows[3][3] = {{1 - (yy + zz), xy - wz, xz + wy},
-                                   {xy + wz, 1 - (xx + zz), yz - wx},
-                                   {xz - wy, yz + wx, 1 - (xx + yy)}};
-        for (int i = 0; i < 3; ++i)
-        {
-            for (int j = 0; j < 3; ++j)
+        const double xx = q.x * q.x * 2;
+        const double yy = q.y * q.y * 2;
+        const double zz = q.z * q.z * 2;
+        const double xy = q.x * q.y * 2;
+        const double xz = q.x * q.z * 2;
+        const double yz = q.y * q.z * 2;
+        const double wx = q.w * q.x * 2;
+        const double wy = q.w * q.y * 2;
+        const double wz = q.w * q.z * 2;
+        const Matrix3 rows{
             {
-                m[i][j] = rows[i][j];
-            }
-        }
+                {1 - (yy + zz), xy - wz, xz + wy},
+                {xy + wz, 1 - (xx + zz), yz - wx},
+                {xz - wy, yz + wx, 1 - (xx + yy)},
+            },
+        };
+        return rows;
     };
-    double ma[3][3], mb[3][3], r[3][3];
-    matrix(a, ma);
-    matrix(b, mb);
+    const Matrix3 ma = matrix(a);
+    const Matrix3 mb = matrix(b);
+    Matrix3 r{};
     for (int i = 0; i < 3; ++i) // r = A^T * B
     {
         for (int j = 0; j < 3; ++j)
         {
-            r[i][j] = ma[0][i] * mb[0][j] + ma[1][i] * mb[1][j] + ma[2][i] * mb[2][j];
+            r.at(i).at(j) = (ma.at(0).at(i) * mb.at(0).at(j)) + (ma.at(1).at(i) * mb.at(1).at(j)) +
+                            (ma.at(2).at(i) * mb.at(2).at(j));
         }
     }
     // matrixToEulerXYZ with btGetMatrixElem(m, k) = m[k % 3][k / 3],
     // including its gimbal-lock branches.
-    const auto elem = [&](int k) { return r[k % 3][k / 3]; };
+    const auto elem = [&](int k) { return r.at(k % 3).at(k / 3); };
     const double sy = elem(2);
     if (sy >= 1.0)
     {
@@ -227,13 +256,13 @@ inline double hubRadiusForLinks(std::vector<double> links)
     {
         return kFallbackHubRadius;
     }
-    const auto middle = links.begin() + static_cast<std::ptrdiff_t>(links.size() / 2);
+    const auto middle = std::next(links.begin(), static_cast<std::ptrdiff_t>(links.size() / 2));
     std::nth_element(links.begin(), middle, links.end());
     return std::clamp(*middle * kHubLinkFraction, kHubMinRadius, kHubMaxRadius) * kHubSizeFactor;
 }
 // Line width of a limit B presses on.  Every other guide is at most 3.5 wide,
 // so this (and anything bolder) reads as "bold" in the viewport and in tests.
-constexpr float kPressedWidth = 4.5f;
+constexpr float kPressedWidth = 4.5F;
 
 // ===========================================================================
 // Motion-range guides
@@ -264,12 +293,12 @@ constexpr float kPressedWidth = 4.5f;
 //
 // Dashed always means "not reachable": a reference, never an allowed range.
 
-enum class GuideColor
+enum class GuideColor : std::uint8_t
 {
     Neutral,
     AxisX,
     AxisY,
-    AxisZ
+    AxisZ,
 };
 
 struct GuideSegment
@@ -277,7 +306,7 @@ struct GuideSegment
     Double3 a;
     Double3 b;
     GuideColor color = GuideColor::Neutral;
-    float width = 2.0f; // a limit B presses on is drawn bolder (kPressedWidth)
+    float width = 2.0F; // a limit B presses on is drawn bolder (kPressedWidth)
     bool dashed = false;
 };
 
@@ -300,9 +329,31 @@ struct V
     V() = default;
     V(double x_, double y_, double z_) : x(x_), y(y_), z(z_) {}
     explicit V(const Double3& d) : x(d.x), y(d.y), z(d.z) {}
-    Double3 d3() const { return {x, y, z}; }
-    double& operator[](int i) { return i == 0 ? x : i == 1 ? y : z; }
-    double operator[](int i) const { return i == 0 ? x : i == 1 ? y : z; }
+    [[nodiscard]] Double3 d3() const { return {x, y, z}; }
+    double& operator[](int i)
+    {
+        switch (i)
+        {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        default:
+            return z;
+        }
+    }
+    double operator[](int i) const
+    {
+        switch (i)
+        {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        default:
+            return z;
+        }
+    }
     V operator+(const V& o) const { return {x + o.x, y + o.y, z + o.z}; }
     V operator-(const V& o) const { return {x - o.x, y - o.y, z - o.z}; }
     V operator*(double s) const { return {x * s, y * s, z * s}; }
@@ -311,11 +362,13 @@ struct V
 // `v` turned right-handed by `angle` about coordinate axis `axis`.
 inline V rotated(const V& v, int axis, double angle)
 {
-    const double c = std::cos(angle), s = std::sin(angle);
-    const int i = (axis + 1) % 3, j = (axis + 2) % 3;
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const int i = (axis + 1) % 3;
+    const int j = (axis + 2) % 3;
     V out = v;
-    out[i] = v[i] * c - v[j] * s;
-    out[j] = v[i] * s + v[j] * c;
+    out[i] = (v[i] * c) - (v[j] * s);
+    out[j] = (v[i] * s) + (v[j] * c);
     return out;
 }
 
@@ -353,13 +406,17 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     const double radius = in.sizes.radius;
     const double tick = in.sizes.tick;
     const V origin;
-    const V axes[3] = {V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)};
-    const GuideColor axisColor[3] = {GuideColor::AxisX, GuideColor::AxisY, GuideColor::AxisZ};
+    const std::array<V, 3> axes{V(1, 0, 0), V(0, 1, 0), V(0, 0, 1)};
+    const std::array<GuideColor, 3> axisColor{
+        GuideColor::AxisX,
+        GuideColor::AxisY,
+        GuideColor::AxisZ,
+    };
     const V currentB(in.currentB);
 
     std::vector<GuideSegment> out;
     GuideColor color = GuideColor::Neutral;
-    float width = 2.0f;
+    float width = 2.0F;
     bool dashed = false;
     const auto line = [&](const V& a, const V& b)
     { out.push_back({a.d3(), b.d3(), color, width, dashed}); };
@@ -375,30 +432,33 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     {
         for (int a = 0; a < 3; ++a)
         {
-            const V u = axes[(a + 1) % 3] * size, v = axes[(a + 2) % 3] * size;
-            for (double su : {-1.0, 1.0})
+            const V u = tableAt(axes, (a + 1) % 3) * size;
+            const V v = tableAt(axes, (a + 2) % 3) * size;
+            for (double const su : {-1.0, 1.0})
             {
-                for (double sv : {-1.0, 1.0})
+                for (double const sv : {-1.0, 1.0})
                 {
-                    line(p + u * su + v * sv - axes[a] * size,
-                         p + u * su + v * sv + axes[a] * size);
+                    line(p + u * su + v * sv - tableAt(axes, a) * size,
+                         p + u * su + v * sv + tableAt(axes, a) * size);
                 }
             }
         }
     };
 
     // --- translation region ------------------------------------------------
-    V lo, hi;
+    V lo;
+    V hi;
     bool region = false;
     for (int a = 0; a < 3; ++a)
     {
-        const Range& range = ranges.linear[a];
+        const Range& range = tableAt(ranges.linear, a);
         // Unbounded axes are shown separately as open arrows, not finite box faces.
         lo[a] = range.kind() == RangeKind::Free ? 0.0 : range.lower;
         hi[a] = range.kind() == RangeKind::Free ? 0.0 : range.upper;
         region = region || lo[a] != 0.0 || hi[a] != 0.0;
     }
-    int dimensions = 0, varyingAxis = 0;
+    int dimensions = 0;
+    int varyingAxis = 0;
     bool anyFree = false;
     for (int a = 0; a < 3; ++a)
     {
@@ -407,41 +467,42 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             ++dimensions;
             varyingAxis = a;
         }
-        anyFree = anyFree || ranges.linear[a].kind() == RangeKind::Free;
+        anyFree = anyFree || tableAt(ranges.linear, a).kind() == RangeKind::Free;
     }
     // The ends of the limited axes B presses on.
-    Hits linearHits[3];
+    std::array<Hits, 3> linearHits{};
     for (int a = 0; a < 3; ++a)
     {
-        linearHits[a] = limitHits(ranges.linear[a], currentB[a], tick * 0.25);
+        tableAt(linearHits, a) = limitHits(tableAt(ranges.linear, a), currentB[a], tick * 0.25);
     }
     if (region && dimensions == 1)
     {
         // Offset the ruler sideways; witness lines keep its physical endpoints
         // unambiguous even when the A/B links lie on this axis.
-        const V offset = axes[(varyingAxis + 1) % 3] * in.sizes.rulerOffset;
-        width = 3.0f;
+        const V offset = tableAt(axes, (varyingAxis + 1) % 3) * in.sizes.rulerOffset;
+        width = 3.0F;
         line(lo + offset, hi + offset);
         // An end B presses on turns bold, in its axis colour.
         const auto end = [&](const V& p, bool pressed)
         {
-            color = pressed ? axisColor[varyingAxis] : GuideColor::Neutral;
-            width = pressed ? kPressedWidth : 1.0f;
+            color = pressed ? tableAt(axisColor, varyingAxis) : GuideColor::Neutral;
+            width = pressed ? kPressedWidth : 1.0F;
             line(p, p + offset * 1.25);
-            width = pressed ? kPressedWidth : 3.0f;
+            width = pressed ? kPressedWidth : 3.0F;
             line(p + offset * .8, p + offset * 1.2);
         };
-        end(lo, linearHits[varyingAxis].lower);
-        end(hi, linearHits[varyingAxis].upper);
+        end(lo, tableAt(linearHits, varyingAxis).lower);
+        end(hi, tableAt(linearHits, varyingAxis).upper);
         color = GuideColor::Neutral;
-        width = 2.0f;
+        width = 2.0F;
     }
     else if (region)
     {
         // A face B presses on: its edges turn bold, in that axis's colour.
         const auto pressed = [&](int axis, int side)
         {
-            return lo[axis] != hi[axis] && (side ? linearHits[axis].upper : linearHits[axis].lower);
+            return lo[axis] != hi[axis] &&
+                   (side ? tableAt(linearHits, axis).upper : tableAt(linearHits, axis).lower);
         };
         bool edges = false;
         for (int a = 0; a < 3; ++a)
@@ -450,36 +511,45 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             {
                 continue;
             }
-            const int u = (a + 1) % 3, v = (a + 2) % 3;
+            const int u = (a + 1) % 3;
+            const int v = (a + 2) % 3;
             for (int iu = 0; iu < (lo[u] == hi[u] ? 1 : 2); ++iu)
             {
                 for (int iv = 0; iv < (lo[v] == hi[v] ? 1 : 2); ++iv)
                 {
                     V p = lo;
-                    p[u] = iu ? hi[u] : lo[u];
-                    p[v] = iv ? hi[v] : lo[v];
+                    p[u] = (iu != 0) ? hi[u] : lo[u];
+                    p[v] = (iv != 0) ? hi[v] : lo[v];
                     V q = p;
                     q[a] = hi[a];
-                    const int face = pressed(u, iu) ? u : pressed(v, iv) ? v : -1;
-                    color = face < 0 ? GuideColor::Neutral : axisColor[face];
-                    width = face < 0 ? 2.0f : kPressedWidth;
+                    int face = -1;
+                    if (pressed(u, iu))
+                    {
+                        face = u;
+                    }
+                    else if (pressed(v, iv))
+                    {
+                        face = v;
+                    }
+                    color = face < 0 ? GuideColor::Neutral : tableAt(axisColor, face);
+                    width = face < 0 ? 2.0F : kPressedWidth;
                     line(p, q);
                     edges = true;
                 }
             }
         }
         color = GuideColor::Neutral;
-        width = 2.0f;
+        width = 2.0F;
         if (!edges && !anyFree)
         {
             // Required position (cube), distinct from B's current diamond.
-            width = 3.0f;
+            width = 3.0F;
             cube(lo, tick * 2);
-            width = 1.5f;
+            width = 1.5F;
             dashed = true;
             line(currentB, lo);
             dashed = false;
-            width = 2.0f;
+            width = 2.0F;
         }
     }
 
@@ -487,27 +557,38 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     bool linearSpring = false;
     for (int a = 0; a < 3; ++a)
     {
-        color = axisColor[a];
-        if (ranges.linear[a].kind() == RangeKind::Free)
+        color = tableAt(axisColor, a);
+        if (tableAt(ranges.linear, a).kind() == RangeKind::Free)
         {
             V center = lo;
             center[a] = 0;
-            for (double sign : {-1.0, 1.0})
+            for (double const sign : {-1.0, 1.0})
             {
-                const V tip = center + axes[a] * (radius * 1.25 * sign);
+                const V tip = center + tableAt(axes, a) * (radius * 1.25 * sign);
                 line(center, tip);
-                line(tip, tip - axes[a] * (tick * 2 * sign) + axes[(a + 1) % 3] * tick);
-                line(tip, tip - axes[a] * (tick * 2 * sign) - axes[(a + 1) % 3] * tick);
+                line(tip, tip - tableAt(axes, a) * (tick * 2 * sign) +
+                              tableAt(axes, (a + 1) % 3) * tick);
+                line(tip, tip - tableAt(axes, a) * (tick * 2 * sign) -
+                              tableAt(axes, (a + 1) % 3) * tick);
             }
         }
-        if (ranges.linearSpring[a])
+        if (tableAt(ranges.linearSpring, a))
         {
             // Zigzag axis badge, not a motion boundary or a stiffness-scaled length.
-            V prev = origin + axes[a] * (radius * 1.5);
+            V prev = origin + tableAt(axes, a) * (radius * 1.5);
             for (int k = 1; k <= 8; ++k)
             {
-                const V p = origin + axes[a] * (radius * 1.5 + k * tick) +
-                            axes[(a + 1) % 3] * (k == 8 ? 0.0 : (k % 2 ? tick : -tick));
+                double offset = -tick;
+                if ((k % 2) != 0)
+                {
+                    offset = tick;
+                }
+                if (k == 8)
+                {
+                    offset = 0.0;
+                }
+                const V p = origin + tableAt(axes, a) * ((radius * 1.5) + (k * tick)) +
+                            tableAt(axes, (a + 1) % 3) * offset;
                 line(prev, p);
                 prev = p;
             }
@@ -539,15 +620,15 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
     };
     for (int a = 0; a < 3; ++a)
     {
-        const auto& range = ranges.angular[a];
+        const auto& range = tableAt(ranges.angular, a);
         if (range.kind() == RangeKind::Fixed && range.lower == 0)
         {
             continue;
         }
-        color = axisColor[a];
-        const double r = radius * (1.0 + a * .22);
-        const V dialU = dialFrame(a, axes[(a + 1) % 3]);
-        const V dialV = dialFrame(a, axes[(a + 2) % 3]);
+        color = tableAt(axisColor, a);
+        const double r = radius * (1.0 + (a * .22));
+        const V dialU = dialFrame(a, tableAt(axes, (a + 1) % 3));
+        const V dialV = dialFrame(a, tableAt(axes, (a + 2) % 3));
         // Angles are the constraint's; the dial shows where B really turns
         // (kPhysicalSign), so a limit [lo, hi] is drawn at [-hi, -lo].
         const auto at = [&](double angle, double distance)
@@ -557,13 +638,23 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         };
         const bool fixed = range.kind() == RangeKind::Fixed;
         const bool unlimited = range.kind() == RangeKind::Free;
-        const double lower = unlimited ? -kPi : fixed ? std::min(0.0, range.lower) : range.lower;
-        const double upper = unlimited ? kPi : fixed ? std::max(0.0, range.upper) : range.upper;
+        double lower = range.lower;
+        double upper = range.upper;
+        if (fixed)
+        {
+            lower = std::min(0.0, range.lower);
+            upper = std::max(0.0, range.upper);
+        }
+        else if (unlimited)
+        {
+            lower = -kPi;
+            upper = kPi;
+        }
         // The part of the range the solver can actually reach.  The measured
         // Y angle cannot pass +-90 degrees (kMaxAngleY), but with X and Z
         // free too a free Y still turns all the way round, so it is a ring.
-        const bool flips = ranges.angular[0].kind() == RangeKind::Free &&
-                           ranges.angular[2].kind() == RangeKind::Free;
+        const bool flips = tableAt(ranges.angular, 0).kind() == RangeKind::Free &&
+                           tableAt(ranges.angular, 2).kind() == RangeKind::Free;
         const bool capped = a == 1 && !fixed && !(unlimited && flips);
         const double reachLower = capped ? std::max(lower, -kMaxAngleY) : lower;
         const double reachUpper = capped ? std::min(upper, kMaxAngleY) : upper;
@@ -583,7 +674,7 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             V prev = at(from, r);
             for (int k = 1; k <= segments; ++k)
             {
-                const V next = at(from + (to - from) * k / segments, r);
+                const V next = at(from + ((to - from) * k / segments), r);
                 line(prev, next);
                 prev = next;
             }
@@ -596,7 +687,7 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         {
             // Nothing of a capped range is reachable; only the dashed part remains.
         }
-        else if (ranges.angularSpring[a])
+        else if (tableAt(ranges.angularSpring, a))
         {
             // An effective spring turns the arc itself into a zigzag over the
             // whole allowed span (one element: limits + spring).  Its ends stay
@@ -607,15 +698,23 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             // the same shape and the count grows with the angle.
             const double arcLength = (reachUpper - reachLower) * r;
             int teeth = std::max(2, static_cast<int>(std::lround(arcLength / (1.2 * tick))));
-            if (ring && teeth % 2)
+            if (ring && ((teeth % 2) != 0))
             {
                 ++teeth;
             }
             const auto tooth = [&](int k)
             {
                 const bool end = !ring && (k == 0 || k == teeth);
-                const double offset = end ? 0.0 : (k % 2 ? tick : -tick);
-                return at(reachLower + (reachUpper - reachLower) * k / teeth, r + offset);
+                double offset = -tick;
+                if ((k % 2) != 0)
+                {
+                    offset = tick;
+                }
+                if (end)
+                {
+                    offset = 0.0;
+                }
+                return at(reachLower + ((reachUpper - reachLower) * k / teeth), r + offset);
             };
             for (int k = 0; k < teeth; ++k)
             {
@@ -640,7 +739,8 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
         {
             // Target spoke and a square in the dial's plane, plus its stop.
             const V p = at(range.lower, r);
-            const V u = dialU * tick, v = dialV * tick;
+            const V u = dialU * tick;
+            const V v = dialV * tick;
             line(origin, p);
             line(p - u - v, p + u - v);
             line(p + u - v, p + u + v);
@@ -655,10 +755,10 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             // presses on is bold and longer.
             const auto stop = [&](double angle, bool pressed)
             {
-                width = pressed ? kPressedWidth : 2.0f;
+                width = pressed ? kPressedWidth : 2.0F;
                 const double reach = pressed ? tick * 1.5 : tick;
                 line(at(angle, r - reach), at(angle, r + reach));
-                width = 2.0f;
+                width = 2.0F;
             };
             if (reachLower == lower)
             {
@@ -675,14 +775,14 @@ inline std::vector<GuideSegment> motionGuides(const GuideInput& in)
             // stops, crossing the dial.  Pressing on a stop makes it bolder
             // still, so a joint held at its limit reads at once.
             const bool pressed = hits.lower || hits.upper;
-            width = pressed ? 6.0f : 3.5f;
+            width = pressed ? 6.0F : 3.5F;
             line(at(in.currentAngles[a], r * 0.6),
-                 at(in.currentAngles[a], r + tick * (pressed ? 2.5 : 1.5)));
-            width = 2.0f;
+                 at(in.currentAngles[a], r + (tick * (pressed ? 2.5 : 1.5))));
+            width = 2.0F;
         }
         // A notch outside the dial cannot disappear inside a radial body link.
         color = GuideColor::Neutral;
-        const V zero = at(0, r + tick * 2);
+        const V zero = at(0, r + (tick * 2));
         const V tangent = dialV * tick;
         line(zero - tangent, at(0, r));
         line(at(0, r), zero + tangent);

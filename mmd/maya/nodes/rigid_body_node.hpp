@@ -32,7 +32,7 @@
 
 #include <cstddef>
 #include <optional>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // The engine header is Bullet-free (the engine itself is a PIMPL), so pulling
@@ -187,7 +187,12 @@ class RigidBodyNode : public MPxLocatorNode
     struct BodyShapes
     {
         std::vector<MObjectHandle> nodes;
-        std::unordered_map<unsigned int, long> byHash; // MObjectHandle::hashCode -> index
+        // hashCode -> body index, kept sorted (a flat map).  A vector's move
+        // is a pointer swap, whereas every associative container allocates a
+        // sentinel node in its move constructor on MSVC — which would
+        // terminate when the implicitly noexcept move of the record holding
+        // this one (Inputs, World) runs.
+        std::vector<std::pair<unsigned int, long>> byHash;
         void add(const MObject& shape);
         [[nodiscard]] long indexOf(const MObject& shape) const;
     };

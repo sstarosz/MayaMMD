@@ -72,15 +72,15 @@ constexpr double kFoldBoostFraction = 0.25;
 // ===========================================================================
 // Constructor / Destructor
 // ===========================================================================
-CCDIKSolverNode::CCDIKSolverNode() {}
-CCDIKSolverNode::~CCDIKSolverNode() {}
+CCDIKSolverNode::CCDIKSolverNode() = default;
+CCDIKSolverNode::~CCDIKSolverNode() = default;
 
 // ===========================================================================
 // MPxIkSolverNode overrides
 // ===========================================================================
 MString CCDIKSolverNode::solverTypeName() const
 {
-    return MString(kNodeName);
+    return {kNodeName};
 }
 
 MStatus CCDIKSolverNode::doSolve()
@@ -137,7 +137,7 @@ MStatus CCDIKSolverNode::doSolve()
         temp.pop(); // go from effector node to its parent joint
         while (true)
         {
-            jointPaths.push_back(MDagPath(temp));
+            jointPaths.emplace_back(temp);
             if (temp.fullPathName() == startJointName)
             {
                 break;
@@ -151,7 +151,7 @@ MStatus CCDIKSolverNode::doSolve()
 
     // ── Cache bone indices ───────────────────────────────────────────
     std::unordered_map<std::string, int> boneIdxCache;
-    for (auto& jp : jointPaths)
+    for (auto const& jp : jointPaths)
     {
         int const bi = mmd::maya::jointPmxBoneIndex(jp);
         boneIdxCache[jp.partialPathName().asChar()] = bi;
@@ -167,15 +167,15 @@ MStatus CCDIKSolverNode::doSolve()
     // rotation drift apart after the first solve — causing the effector to
     // overshoot the target and, as the drift grows, the hinge to flip and
     // bend in the wrong direction.
-    for (auto& jp : jointPaths)
+    for (auto const& jp : jointPaths)
     {
         int bi = -1;
-        auto itBI = boneIdxCache.find(jp.partialPathName().asChar());
+        auto const itBI = boneIdxCache.find(jp.partialPathName().asChar());
         if (itBI != boneIdxCache.end())
         {
             bi = itBI->second;
         }
-        auto limitsIt = limitsMap.find(bi);
+        auto const limitsIt = limitsMap.find(bi);
         const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
         int const limitAxis = getSingleAxisIndex(limits);
         if (limitAxis >= 0)
@@ -200,7 +200,7 @@ MStatus CCDIKSolverNode::doSolve()
             break;
         }
 
-        for (auto& jointPath : jointPaths)
+        for (auto const& jointPath : jointPaths)
         {
             MFnIkJoint jfn(jointPath);
             MPoint jpos = jfn.rotatePivot(MSpace::kWorld);
@@ -226,13 +226,13 @@ MStatus CCDIKSolverNode::doSolve()
 
             // ── Per-joint axis constraint ────────────────────────────
             int bi = -1;
-            auto itBI = boneIdxCache.find(jointPath.partialPathName().asChar());
+            auto const itBI = boneIdxCache.find(jointPath.partialPathName().asChar());
             if (itBI != boneIdxCache.end())
             {
                 bi = itBI->second;
             }
 
-            auto limitsIt = limitsMap.find(bi);
+            auto const limitsIt = limitsMap.find(bi);
             const LinkLimit* limits = (limitsIt != limitsMap.end()) ? &limitsIt->second : nullptr;
             int const limitAxis = getSingleAxisIndex(limits);
 
@@ -497,12 +497,9 @@ int CCDIKSolverNode::getSingleAxisIndex(const LinkLimit* limits)
         // Verify other axes are zero
         for (int j = 0; j < 3; ++j)
         {
-            if (j != ax)
+            if ((j != ax) && (limits->lo[j] != 0.0 || limits->hi[j] != 0.0))
             {
-                if (limits->lo[j] != 0.0 || limits->hi[j] != 0.0)
-                {
-                    return -1;
-                }
+                return -1;
             }
         }
         return ax;

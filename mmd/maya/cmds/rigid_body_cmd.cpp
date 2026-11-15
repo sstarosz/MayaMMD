@@ -50,7 +50,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -255,7 +254,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     }
     if (parser.isFlagSet(kMaskFlag))
     {
-        mask = parser.flagArgumentInt(kMaskFlag, 0) & 0xFFFF;
+        mask = static_cast<int>(static_cast<unsigned int>(parser.flagArgumentInt(kMaskFlag, 0)) &
+                                0xFFFFU);
     }
     // PMX collision groups are 0..15 (the bodyGroupId attribute is a 16-field
     // enum) — clamp so an out-of-range flag cannot write a broken enum value.
@@ -432,7 +432,9 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     shapePlug(RigidBodyShape::aBodyGroupId).setShort(static_cast<short>(group));
     for (int g = 0; g < 16; ++g)
     {
-        shapePlug(RigidBodyShape::aBodyMaskGroup.at(g)).setBool(((mask >> g) & 1) != 0);
+        shapePlug(RigidBodyShape::aBodyMaskGroup.at(g))
+            .setBool(((static_cast<unsigned int>(mask) >> static_cast<unsigned int>(g)) & 1U) !=
+                     0U);
     }
     shapePlug(RigidBodyShape::aBodyPhysicsMode).setShort(static_cast<short>(physicsModeEnum));
     shapePlug(RigidBodyShape::aBodyNameLocal).setString(nameLocal);
@@ -515,13 +517,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         // A later body on the same bone replaces the source (last wins; all
         // bodies on a bone produce the same bone-world pose, so the joint's
         // value is unaffected).
-        if (physicsModeEnum != RigidBodySimulation::PhysicsMode::ePhysicsBone)
+        if ((physicsModeEnum != RigidBodySimulation::PhysicsMode::ePhysicsBone) &&
+            (mmd::maya::connectOrReplace(outT, jointFn.findPlug("translate", true, &plugStat)) !=
+             MS::kSuccess))
         {
-            if (mmd::maya::connectOrReplace(outT, jointFn.findPlug("translate", true, &plugStat)) !=
-                MS::kSuccess)
-            {
-                MGlobal::displayWarning("pmxRigidBody: could not connect translate output");
-            }
+            MGlobal::displayWarning("pmxRigidBody: could not connect translate output");
         }
         if (mmd::maya::connectOrReplace(outR, jointFn.findPlug("rotate", true, &plugStat)) !=
             MS::kSuccess)

@@ -333,7 +333,7 @@ readBodyData(const MObject& node, RigidBodyNode::BodyShapes& shapes)
         shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
         RigidBodySimulation::BodyDefinition b;
         MObject shape = MObject::kNullObj;
-        if (sources.length() && RigidBodyShape::readBodyDefinition(sources[0].node(), b))
+        if ((sources.length() != 0U) && RigidBodyShape::readBodyDefinition(sources[0].node(), b))
         {
             shape = sources[0].node();
         }
@@ -505,7 +505,7 @@ deriveWriteBackOffsets(const std::vector<RigidBodySimulation::BodyDefinition>& b
     MPlug(node, RigidBodyNode::aBodyShapes)
         .elementByLogicalIndex(index)
         .connectedTo(sources, true, false);
-    return sources.length() ? sources[0].node() : MObject::kNullObj;
+    return (sources.length() != 0U) ? sources[0].node() : MObject::kNullObj;
 }
 
 // Refresh each kinematic anchor from its INPUT (bodies[i].bodyAnchorWorld =
@@ -534,7 +534,7 @@ bool updateKinematicAnchors(World& world, const MObject& node)
         {
             continue;
         }
-        const MObject shape = bodyShapeNode(node, (unsigned int) i);
+        const MObject shape = bodyShapeNode(node, static_cast<unsigned int>(i));
         if (shape.isNull())
         {
             continue;
@@ -579,7 +579,7 @@ bool updateKinematicAnchors(World& world, const MObject& node)
         {
             continue;
         }
-        const MObject shape = bodyShapeNode(node, (unsigned int) i);
+        const MObject shape = bodyShapeNode(node, static_cast<unsigned int>(i));
         if (shape.isNull())
         {
             continue;
@@ -644,9 +644,8 @@ anchorsToPoses(const std::vector<MMatrix>& anchors)
     }
     std::optional<btTransform> common;
     size_t anchor = 0;
-    for (size_t i = 0; i < world.bodies.size(); ++i)
+    for (const auto& b : world.bodies)
     {
-        const RigidBodySimulation::BodyDefinition& b = world.bodies[i];
         if (!b.isKinematic() || !b.enabled)
         {
             continue;
@@ -701,8 +700,8 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
         }
         const Double3& a = bodies[joint.bodyA].restPos;
         const Double3& b = bodies[joint.bodyB].restPos;
-        const double link = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
-                                      (a.z - b.z) * (a.z - b.z));
+        const double link = std::sqrt(((a.x - b.x) * (a.x - b.x)) + ((a.y - b.y) * (a.y - b.y)) +
+                                      ((a.z - b.z) * (a.z - b.z)));
         // A joint whose bodies coincide says nothing about the model's scale.
         if (link > 1e-4)
         {
@@ -1155,13 +1154,13 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
             // PHYSICS writes translate+rotate; PHYSICS_BONE is rotation-only.
             if (bd.physicsMode != RigidBodySimulation::PhysicsMode::ePhysicsBone)
             {
-                MDataHandle tEl = tBuilder.addElement((unsigned int) i);
+                MDataHandle tEl = tBuilder.addElement(static_cast<unsigned int>(i));
                 tEl.child(RigidBodyNode::aOutTranslateX).setMDistance(MDistance(o.x()));
                 tEl.child(RigidBodyNode::aOutTranslateY).setMDistance(MDistance(o.y()));
                 tEl.child(RigidBodyNode::aOutTranslateZ).setMDistance(MDistance(o.z()));
             }
 
-            MDataHandle rEl = rBuilder.addElement((unsigned int) i);
+            MDataHandle rEl = rBuilder.addElement(static_cast<unsigned int>(i));
             // Written in DEGREES (quatToEulerXYZDegrees output; MAngle's
             // default unit is radians, so the unit must be explicit).
             rEl.child(RigidBodyNode::aOutRotateX).setMAngle(MAngle(rot.x, MAngle::kDegrees));
@@ -1242,7 +1241,12 @@ void RigidBodyNode::BodyShapes::add(const MObject& shape)
 {
     if (!shape.isNull())
     {
-        byHash.emplace(MObjectHandle(shape).hashCode(), static_cast<long>(nodes.size()));
+        const auto hash = MObjectHandle(shape).hashCode();
+        const auto index = static_cast<long>(nodes.size());
+        const auto at =
+            std::lower_bound(byHash.begin(), byHash.end(), hash,
+                             [](const auto& entry, unsigned int key) { return entry.first < key; });
+        byHash.insert(at, {hash, index});
     }
     nodes.emplace_back(shape);
 }
@@ -1254,14 +1258,18 @@ long RigidBodyNode::BodyShapes::indexOf(const MObject& shape) const
         return -1;
     }
     // Hash codes can collide: confirm the hit, and scan when it is not ours.
-    const auto it = byHash.find(MObjectHandle(shape).hashCode());
-    if (it != byHash.end() && nodes[static_cast<size_t>(it->second)].object() == shape)
+    const auto hash = MObjectHandle(shape).hashCode();
+    const auto at =
+        std::lower_bound(byHash.begin(), byHash.end(), hash,
+                         [](const auto& entry, unsigned int key) { return entry.first < key; });
+    if (at != byHash.end() && at->first == hash &&
+        nodes.at(static_cast<size_t>(at->second)).object() == shape)
     {
-        return it->second;
+        return at->second;
     }
     for (size_t i = 0; i < nodes.size(); ++i)
     {
-        if (nodes[i].object() == shape)
+        if (nodes.at(i).object() == shape)
         {
             return static_cast<long>(i);
         }
@@ -1281,17 +1289,18 @@ MMatrix RigidBodyNode::groupWorldMatrix(const MObject& solver)
     return solverPath.inclusiveMatrix();
 }
 
-bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefinition& def,
+bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefinition& joint,
                                         MMatrix& bodyA, MMatrix& bodyB, MMatrix& attachmentA,
                                         MMatrix& attachmentB) const
 {
-    if (!mWorld || def.bodyA < 0 || def.bodyB < 0)
+    if (!mWorld || joint.bodyA < 0 || joint.bodyB < 0)
     {
         return false;
     }
-    RigidBodySimulation::Pose a, b;
-    if (!mWorld->sim.attachmentPose(def.bodyA, def.frameT, def.frameR, a) ||
-        !mWorld->sim.attachmentPose(def.bodyB, def.frameT, def.frameR, b))
+    RigidBodySimulation::Pose a;
+    RigidBodySimulation::Pose b;
+    if (!mWorld->sim.attachmentPose(joint.bodyA, joint.frameT, joint.frameR, a) ||
+        !mWorld->sim.attachmentPose(joint.bodyB, joint.frameT, joint.frameR, b))
     {
         return false;
     }
@@ -1302,8 +1311,8 @@ bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefiniti
         tm.setTranslation(MVector(pose.pos.x, pose.pos.y, pose.pos.z), MSpace::kTransform);
         return tm.asMatrix();
     };
-    bodyA = poseMatrix(mWorld->sim.bodyPose(def.bodyA));
-    bodyB = poseMatrix(mWorld->sim.bodyPose(def.bodyB));
+    bodyA = poseMatrix(mWorld->sim.bodyPose(joint.bodyA));
+    bodyB = poseMatrix(mWorld->sim.bodyPose(joint.bodyB));
     attachmentA = poseMatrix(a);
     attachmentB = poseMatrix(b);
     return true;
@@ -1332,17 +1341,6 @@ MObject makeNumeric(MFnNumericAttribute& fn, const MString& longName, const MStr
 {
     MStatus stat;
     MObject attr = fn.create(longName, shortName, type, def, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    fn.setStorable(true);
-    fn.setKeyable(false);
-    return attr;
-}
-
-// Same, for a PMX-name string attribute.
-MObject makeString(MFnTypedAttribute& fn, const MString& longName, const MString& shortName)
-{
-    MStatus stat;
-    MObject attr = fn.create(longName, shortName, MFnData::kString, MObject::kNullObj, &stat);
     MMD_CHECK_MSTATUS(stat);
     fn.setStorable(true);
     fn.setKeyable(false);

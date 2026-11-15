@@ -313,7 +313,7 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             ? nodeName
             : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
                                      "Joint_" + std::to_string(n), kJointNodeSuffix);
-    MObject guideParent = groupObj;
+    const MObject& guideParent = groupObj;
     MFnTransform jointTf;
     MObject jointTransform = jointTf.create(guideParent, &plugStat);
     if (jointTransform.isNull())

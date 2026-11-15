@@ -297,24 +297,25 @@ clang-tidy mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp -- -std=c++17
 ```
 
 `clang-tidy` uses the profile in `.clang-tidy` (which includes `modernize-*`) and
-runs in CI as the `C++ Tidy` job over every tracked `.cpp`. That whole-tree run is
-**informational** — it reports findings as a warning instead of failing the build —
-while the lines a PR actually touches are a **hard gate**: the same job pipes the
-PR diff into `clang-tidy-diff.py`, so only findings on changed lines fail. That
-way the existing backlog never blocks a PR, and no new one can be added.
+runs in CI as the `C++ Tidy` job over every tracked `.cpp`. The tree is clean, so
+that whole-tree run is a **hard gate** — any finding fails the job. The same job
+also pipes the PR diff into `clang-tidy-diff.py`, which reports the findings this
+PR introduced on the lines it touched (handy when reviewing a change).
 
 ```bash
-# Same gate locally (needs the pip package: pip install clang-tidy==23.1.4)
+# Same checks locally (needs the pip package: pip install clang-tidy==23.1.4)
+clang-tidy -p out/build/maya2026-release -warnings-as-errors='*,-clang-diagnostic-*' \
+  $(git ls-files '*.cpp')
+
+# Or just the changed lines
 git diff -U0 origin/main...HEAD -- '*.cpp' |
   clang-tidy-diff.py -p1 -path out/build/maya2026-release -quiet \
     -warnings-as-errors='*,-clang-diagnostic-*'
 ```
 
-`-warnings-as-errors` is what makes the script's exit code non-zero (plain
+`-warnings-as-errors` is what makes clang-tidy's exit code non-zero (plain
 clang-tidy exits 0 even with findings); `clang-diagnostic-*` is excluded because
-compiler diagnostics belong to the build job. Header-only changes are covered by
-the whole-tree run, not the diff gate — `clang-tidy-diff.py` needs a compilation
-database entry per file.
+compiler diagnostics belong to the build job.
 
 Every configure preset sets `CMAKE_EXPORT_COMPILE_COMMANDS`, so the
 Makefile/Ninja generators (Linux/macOS, and therefore CI) write
@@ -345,8 +346,8 @@ collapsed back onto the statement line. `clang-tidy` enforces the same rule via
 | --- | --- | --- |
 | `Python` | `ruff format --check`, `ruff check`, `mypy`, pytest | format + tests |
 | `C++ Format` | `clang-format --dry-run --Werror` (all tracked C++ files) | yes |
-| `C++ Tidy` | `clang-tidy -p out/build/maya2026-release` (all tracked `.cpp`) | no — warnings until triaged |
-| `C++ Tidy` (changed lines) | `clang-tidy-diff.py` over the PR diff | **yes** |
+| `C++ Tidy` | `clang-tidy -p out/build/maya2026-release` (all tracked `.cpp`) | yes |
+| `C++ Tidy` (changed lines) | `clang-tidy-diff.py` over the PR diff | yes |
 | `C++ Build` | builds the `.mll`, runs the Catch2 suite | yes |
 | `C++ Sanitizers (ASan+UBSan)` | core tests under `-fsanitize=address,undefined` | ASan yes, UBSan warns |
 
