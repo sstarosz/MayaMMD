@@ -49,6 +49,7 @@
 #include <maya/MViewport2Renderer.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -93,7 +94,9 @@ void dirty(const MObject& node)
 {
     const MObjectHandle handle(node);
     if (alive(handle))
+    {
         MHWRender::MRenderer::setGeometryDrawDirty(node, false);
+    }
 }
 
 // The solver a joint is registered on: joint.solver -> solver.jointShapes[n].
@@ -114,31 +117,43 @@ void resolveSelection(State& s)
         const MObject node = path.node();
         if (MFnDependencyNode(node).typeId() != RigidBodyJoint::kTypeId ||
             MPlug(node, RigidBodyJoint::aDrawMode).asShort() == RigidBodyJoint::kDrawOff)
+        {
             return;
+        }
         if (std::any_of(s.selected.begin(), s.selected.end(),
                         [&](const SelectedJoint& j) { return j.joint.object() == node; }))
+        {
             return;
+        }
         const MObject solver = solverOf(node);
         if (solver.isNull())
+        {
             return;
+        }
         SelectedJoint joint;
         joint.path = path;
         joint.joint = MObjectHandle(node);
         joint.solver = MObjectHandle(solver);
-        const MObject shapes[2] = {RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyA),
-                                   RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyB)};
-        joint.bodyA = MObjectHandle(shapes[0]);
-        joint.bodyB = MObjectHandle(shapes[1]);
+        const std::array<MObject, 2> shapes{
+            RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyA),
+            RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyB),
+        };
+        joint.bodyA = MObjectHandle(shapes.at(0));
+        joint.bodyB = MObjectHandle(shapes.at(1));
         s.selected.push_back(joint);
         for (int end = 0; end < 2; ++end)
         {
-            const MObject& shape = shapes[end];
+            const MObject& shape = shapes.at(static_cast<std::size_t>(end));
             if (shape.isNull())
+            {
                 continue;
+            }
             auto it = std::find_if(s.roles.begin(), s.roles.end(),
                                    [&](const BodyRole& r) { return r.shape.object() == shape; });
             if (it == s.roles.end())
-                it = s.roles.insert(s.roles.end(), BodyRole{MObjectHandle(shape), 0u});
+            {
+                it = s.roles.insert(s.roles.end(), BodyRole{MObjectHandle(shape), 0U});
+            }
             it->roles |= (end == 0 ? palette::kRoleA : palette::kRoleB);
         }
     };
@@ -152,7 +167,9 @@ void resolveSelection(State& s)
     {
         MDagPath path;
         if (!selection.getDagPath(k - 1, path))
+        {
             continue;
+        }
         if (path.node().hasFn(MFn::kTransform))
         {
             MFnDagNode transform(path);
@@ -164,21 +181,29 @@ void resolveSelection(State& s)
             }
         }
         else
+        {
             add(path);
+        }
     }
 }
 
 void dirtySelectedJoints(const State& s)
 {
     for (const auto& joint : s.selected)
+    {
         if (alive(joint.joint))
+        {
             dirty(joint.joint.object());
+        }
+    }
 }
 
-void selectionChanged(void*)
+void selectionChanged(void* /*unused*/)
 {
-    if (!gState)
+    if (gState == nullptr)
+    {
         return;
+    }
     State& s = *gState;
     // Isolate-select membership follows the selection.
     s.viewFilters.clear();
@@ -188,23 +213,37 @@ void selectionChanged(void*)
 
     // Joints entering or leaving the selection change their guides/outlines.
     for (const auto& joint : oldSelected)
+    {
         if (alive(joint.joint))
+        {
             dirty(joint.joint.object());
+        }
+    }
     dirtySelectedJoints(s);
 
     // Bodies whose A/B role changed.
     const auto rolesOf = [](const std::vector<BodyRole>& roles, const MObject& shape)
     {
         for (const auto& r : roles)
+        {
             if (alive(r.shape) && r.shape.object() == shape)
+            {
                 return r.roles;
-        return 0u;
+            }
+        }
+        return 0U;
     };
     for (const auto& list : {std::cref(oldRoles), std::cref(s.roles)})
+    {
         for (const auto& r : list.get())
+        {
             if (alive(r.shape) &&
                 rolesOf(oldRoles, r.shape.object()) != rolesOf(s.roles, r.shape.object()))
+            {
                 dirty(r.shape.object());
+            }
+        }
+    }
 }
 
 // A model-editor change (isolate select on or off, among others) redraws
@@ -212,10 +251,12 @@ void selectionChanged(void*)
 // shapes that had been isolated out undrawn until something else refreshed
 // them, such as selecting them or a parent.  It also updates what the
 // selected joints draw (fallback outlines for isolated-out bodies).
-void editorChanged(void*)
+void editorChanged(void* /*unused*/)
 {
-    if (!gState)
+    if (gState == nullptr)
+    {
         return;
+    }
     // Isolate select on/off and "show children" belong to the editor state.
     gState->viewFilters.clear();
     for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next())
@@ -223,7 +264,9 @@ void editorChanged(void*)
         const MObject node = it.thisNode();
         const MTypeId type = MFnDependencyNode(node).typeId();
         if (type == RigidBodyShape::kTypeId || type == RigidBodyJoint::kTypeId)
+        {
             dirty(node);
+        }
     }
 }
 } // namespace
@@ -236,19 +279,27 @@ ViewFilter::ViewFilter(const MHWRender::MFrameContext& frameContext)
 #if MAYA_API_VERSION >= 20260000
     MString destination;
     if (frameContext.renderingDestination(destination) != MFrameContext::k3dViewport)
+    {
         return;
+    }
     M3dView view;
     if (!M3dView::getM3dViewFromModelPanel(destination, view) &&
         !M3dView::getM3dViewFromModelEditor(destination, view))
+    {
         return;
+    }
     fIsolated = view.viewSelected();
     fChildren = view.showViewSelectedChildren(nullptr);
     for (unsigned int i = 0; fIsolated && i < view.numViewSelectedObjects(); ++i)
     {
         MStringArray names;
         if (view.viewSelectedObject(i, names))
+        {
             for (unsigned int j = 0; j < names.length(); ++j)
+            {
                 fIncluded.add(names[j]);
+            }
+        }
     }
 #else
     (void) frameContext;
@@ -258,21 +309,29 @@ ViewFilter::ViewFilter(const MHWRender::MFrameContext& frameContext)
 bool ViewFilter::shows(const MDagPath& path) const
 {
     if (!fIsolated)
+    {
         return true;
+    }
     for (unsigned int i = 0; i < fIncluded.length(); ++i)
     {
         MDagPath member;
         if (!fIncluded.getDagPath(i, member))
+        {
             continue;
+        }
         MDagPath ancestor = path;
         while (ancestor.length() > 0)
         {
             // With "show children" off only the selected node itself is drawn,
             // so an ancestor selection must not count as shown.
             if (!fChildren && ancestor.length() < path.length())
+            {
                 break;
+            }
             if (ancestor == member)
+            {
                 return true;
+            }
             ancestor.pop();
         }
     }
@@ -283,23 +342,31 @@ const ViewFilter& viewFilter(const MHWRender::MFrameContext& frameContext)
 {
     // Nothing installed yet: every view counts as showing everything.
     static const ViewFilter kEverythingShown;
-    if (!gState)
+    if (gState == nullptr)
+    {
         return kEverythingShown;
+    }
 
     MString destination;
     if (frameContext.renderingDestination(destination) != MFrameContext::k3dViewport)
+    {
         return kEverythingShown;
+    }
 
     auto& slot = gState->viewFilters[destination.asChar()];
     if (!slot)
+    {
         slot = std::make_unique<ViewFilter>(frameContext);
+    }
     return *slot;
 }
 
 void install()
 {
-    if (gState)
+    if (gState != nullptr)
+    {
         return;
+    }
     gState = new State();
     gState->selectionCallback =
         MEventMessage::addEventCallback("SelectionChanged", selectionChanged);
@@ -309,18 +376,30 @@ void install()
 
 void uninstall()
 {
-    if (!gState)
+    if (gState == nullptr)
+    {
         return;
-    State& s = *gState;
-    for (MCallbackId id : {s.selectionCallback, s.editorCallback})
-        if (id)
+    }
+    State const& s = *gState;
+    for (MCallbackId const id : {s.selectionCallback, s.editorCallback})
+    {
+        if (id != 0U)
+        {
             MMessage::removeCallback(id);
+        }
+    }
     // Safe here (not at DLL exit): the overrides using these were destroyed
     // when their creators were deregistered.
     if (MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer())
+    {
         if (const MHWRender::MShaderManager* manager = renderer->getShaderManager())
+        {
             for (const auto& entry : s.shaders)
+            {
                 manager->releaseShader(entry.second);
+            }
+        }
+    }
     delete gState;
     gState = nullptr;
 }
@@ -328,7 +407,7 @@ void uninstall()
 const std::vector<SelectedJoint>& selectedJoints()
 {
     static const std::vector<SelectedJoint> kNone;
-    return gState ? gState->selected : kNone;
+    return (gState != nullptr) ? gState->selected : kNone;
 }
 
 bool isSelectedJoint(const MObject& joint)
@@ -340,11 +419,17 @@ bool isSelectedJoint(const MObject& joint)
 
 unsigned int bodyRoles(const MObject& bodyShape)
 {
-    if (!gState)
+    if (gState == nullptr)
+    {
         return 0;
+    }
     for (const auto& r : gState->roles)
+    {
         if (alive(r.shape) && r.shape.object() == bodyShape)
+        {
             return r.roles;
+        }
+    }
     return 0;
 }
 
@@ -358,12 +443,12 @@ MColor selectionColor(const MDagPath& path)
 {
     const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
     // Guard: a near-black selection colour would hide the wire.
-    return sel.r + sel.g + sel.b < 0.01f ? palette::kSelectionFallback : sel;
+    return sel.r + sel.g + sel.b < 0.01F ? palette::kSelectionFallback : sel;
 }
 
 namespace
 {
-enum class ShaderKind : std::uint32_t
+enum class ShaderKind : std::uint8_t
 {
     Wire,
     Lit,
@@ -373,19 +458,29 @@ enum class ShaderKind : std::uint32_t
 // colour (wireframe hubs) or dashed flat colour (inactive hubs).
 MHWRender::MShaderInstance* cachedShader(const MColor& color, ShaderKind kind)
 {
-    if (!gState)
+    if (gState == nullptr)
+    {
         return nullptr;
+    }
     const auto channel = [](float v)
-    { return static_cast<std::uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
-    const std::uint32_t key = static_cast<std::uint32_t>(kind) << 24 | channel(color.r) << 16 |
-                              channel(color.g) << 8 | channel(color.b);
+    { return static_cast<std::uint32_t>(std::lround(std::clamp(v, 0.0F, 1.0F) * 255.0F)); };
+    const std::uint32_t key = (static_cast<std::uint32_t>(kind) << 24U) |
+                              (channel(color.r) << 16U) | (channel(color.g) << 8U) |
+                              channel(color.b);
     for (const auto& entry : gState->shaders)
+    {
         if (entry.first == key)
+        {
             return entry.second;
+        }
+    }
     MHWRender::MRenderer* renderer = MHWRender::MRenderer::theRenderer();
-    const MHWRender::MShaderManager* manager = renderer ? renderer->getShaderManager() : nullptr;
+    const MHWRender::MShaderManager* manager =
+        (renderer != nullptr) ? renderer->getShaderManager() : nullptr;
     if (manager == nullptr)
+    {
         return nullptr;
+    }
     const bool lit = kind == ShaderKind::Lit;
     MHWRender::MShaderInstance* shader =
         lit ? mmd::maya::createSurfaceShader(*manager)
@@ -393,13 +488,17 @@ MHWRender::MShaderInstance* cachedShader(const MColor& color, ShaderKind kind)
                                           ? MHWRender::MShaderManager::k3dDashLineShader
                                           : MHWRender::MShaderManager::k3dSolidShader);
     if (shader == nullptr)
+    {
         return nullptr;
+    }
     if (lit)
+    {
         mmd::maya::setSurfaceColor(*shader, color);
+    }
     else
     {
-        const float solid[4] = {color.r, color.g, color.b, 1.0f};
-        shader->setParameter("solidColor", solid);
+        const std::array<float, 4> solid{color.r, color.g, color.b, 1.0F};
+        shader->setParameter("solidColor", solid.data());
     }
     gState->shaders.emplace_back(key, shader);
     return shader;
@@ -432,14 +531,23 @@ void fillVertexBuffer(MHWRender::MVertexBuffer* buffer, const std::vector<float>
                       unsigned int numVerts, int dimension,
                       const MHWRender::MVertexBufferDescriptor& desc)
 {
-    if (buffer == nullptr || numVerts == 0 || data.size() < numVerts * dimension)
+    if (buffer == nullptr || numVerts == 0 ||
+        data.size() < static_cast<std::size_t>(numVerts) * static_cast<std::size_t>(dimension))
+    {
         return;
+    }
     if (desc.dataType() != MHWRender::MGeometry::kFloat || desc.dimension() != dimension)
+    {
         return;
+    }
     void* ptr = buffer->acquire(numVerts, /*writeOnly=*/true);
     if (ptr == nullptr)
+    {
         return;
-    std::memcpy(ptr, data.data(), numVerts * dimension * sizeof(float));
+    }
+    std::memcpy(ptr, data.data(),
+                static_cast<std::size_t>(numVerts) * static_cast<std::size_t>(dimension) *
+                    sizeof(float));
     buffer->commit(ptr);
 }
 } // namespace
@@ -448,12 +556,14 @@ void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
                      const std::vector<float>& positions, const std::vector<float>& normals,
                      MHWRender::MGeometry& data)
 {
-    const unsigned int numVerts = static_cast<unsigned int>(positions.size() / 3);
+    const auto numVerts = static_cast<unsigned int>(positions.size() / 3);
     if (numVerts == 0)
+    {
         return;
+    }
     // A solid-colour item needs no real UVs — a zeroed float2 stream satisfies
     // any texture semantic the shader declares.
-    const std::vector<float> dummyUvs(static_cast<std::size_t>(numVerts) * 2, 0.0f);
+    const std::vector<float> dummyUvs(static_cast<std::size_t>(numVerts) * 2, 0.0F);
     const auto fill = [&](const MHWRender::MVertexBufferDescriptor& desc)
     {
         switch (desc.semantic())
@@ -480,8 +590,12 @@ void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
     {
         MHWRender::MVertexBufferDescriptor desc;
         for (int i = 0; i < descList.length(); ++i)
+        {
             if (descList.getDescriptor(i, desc))
+            {
                 fill(desc);
+            }
+        }
         return;
     }
     fill(MHWRender::MVertexBufferDescriptor("position", MHWRender::MGeometry::kPosition,
@@ -497,17 +611,24 @@ unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector
                               std::vector<unsigned int>* lines)
 {
     if (radius <= 0.0 || slices < 3 || stacks < 2)
+    {
         return static_cast<unsigned int>(positions.size() / 3);
+    }
 
-    const unsigned int base = static_cast<unsigned int>(positions.size() / 3);
+    const auto base = static_cast<unsigned int>(positions.size() / 3);
     // Append one vertex, returning its index.
     const auto vertex = [&](const MVector& dir)
     {
-        positions.insert(positions.end(),
-                         {static_cast<float>(dir.x * radius), static_cast<float>(dir.y * radius),
-                          static_cast<float>(dir.z * radius)});
-        normals.insert(normals.end(), {static_cast<float>(dir.x), static_cast<float>(dir.y),
-                                       static_cast<float>(dir.z)});
+        positions.insert(positions.end(), {
+                                              static_cast<float>(dir.x * radius),
+                                              static_cast<float>(dir.y * radius),
+                                              static_cast<float>(dir.z * radius),
+                                          });
+        normals.insert(normals.end(), {
+                                          static_cast<float>(dir.x),
+                                          static_cast<float>(dir.y),
+                                          static_cast<float>(dir.z),
+                                      });
         return static_cast<unsigned int>(positions.size() / 3) - 1;
     };
     const auto tri = [&](unsigned int a, unsigned int b, unsigned int c)
@@ -515,7 +636,9 @@ unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector
     const auto line = [&](unsigned int a, unsigned int b)
     {
         if (lines != nullptr)
+        {
             lines->insert(lines->end(), {a, b});
+        }
     };
 
     // Interior rings; the poles are single vertices, so the caps have no
@@ -537,7 +660,9 @@ unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector
         std::vector<unsigned int>& row = rows[static_cast<std::size_t>(i) - 1];
         row.reserve(static_cast<std::size_t>(slices) + 1);
         for (int j = 0; j <= slices; ++j)
+        {
             row.push_back(ringVertex(i, j));
+        }
     }
 
     for (int j = 0; j < slices; ++j)
@@ -573,7 +698,9 @@ unsigned int appendSphereMesh(double radius, int slices, int stacks, std::vector
         {
             line(rows[i][col], rows[i][col + 1]);
             if (i + 1 < rows.size())
+            {
                 line(rows[i][col], rows[i + 1][col]);
+            }
         }
         line(rows.back()[col], bottom);
     }

@@ -96,7 +96,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                    MPxNode::kIkSolverNode, &classification);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ CCD IK solver registration failed");
+    }
 
     // 1b. Register the native rigid-body physics node (embedded Bullet).
     //     An MPxLocatorNode that owns a Maya-free Bullet world and steps it on
@@ -110,7 +112,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                    MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyNode registration failed");
+    }
 
     // 1b2. Register the per-body guide node (pmxRigidBodyShape).  One selectable,
     //     movable locator per PMX rigid body: the guide transform is DRIVEN by
@@ -124,7 +128,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                    MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyShape registration failed");
+    }
 
     // 1b3. Register the per-joint node (pmxRigidBodyJoint).  One selectable,
     //     movable locator per PMX rigid-body JOINT (constraint): the node's
@@ -139,14 +145,20 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                    MPxNode::kLocatorNode, &classification);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint registration failed");
+    }
     // Outrank Maya joints so a hub drawn on a bone is still pickable.
     if (MSelectionMask::registerSelectionType(RigidBodyJoint::kSelectionType,
                                               RigidBodyJoint::kSelectionPriority))
+    {
         MGlobal::executeCommand(MString("selectType -byName ") + RigidBodyJoint::kSelectionType +
                                 " true");
+    }
     else
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint selection type registration failed");
+    }
 
     // 1b4. Register the viewport geometry override for the per-body guides —
     //     renders the collider's SOLID surface lit (stock OpenPBR) with the
@@ -155,14 +167,18 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
     stat = MHWRender::MDrawRegistry::registerGeometryOverrideCreator(
         RigidBodyShape::kNodeClassify, "MayaMMD", RigidBodyShapeGeometryOverride::creator);
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyShape geometry override registration failed");
+    }
 
     // 1b5. Register the viewport geometry override for the per-joint nodes
     //     (MDrawRegistry, not MFnPlugin — deregistered separately below).
     stat = MHWRender::MDrawRegistry::registerGeometryOverrideCreator(
         RigidBodyJoint::kNodeClassify, "MayaMMD", RigidBodyJointGeometryOverride::creator);
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyJoint geometry override registration failed");
+    }
     // Selection/solver/camera state shared by the joint and body overrides.
     mmd::maya::rigid_body_display::install();
 
@@ -176,7 +192,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                       RigidBodyCmd::syntaxCreator);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBody command registration failed");
+    }
 
     // 1d. Register the native rigid-body-constraint command (pmxRigidBodyConstraint).
     //     Same C++ rationale as pmxRigidBody.  Create mode only — writes the
@@ -188,7 +206,9 @@ PLUGIN_EXPORT MStatus initializePlugin(MObject mobject)
                                    RigidBodyConstraintCmd::syntaxCreator);
     }
     if (!stat)
+    {
         MGlobal::displayWarning("  ⚠ pmxRigidBodyConstraint command registration failed");
+    }
 
     // 2. Call Python to register Python nodes/commands and set up UI.
     //    PYTHONPATH is set by Maya's .mod file (or Maya.env) before

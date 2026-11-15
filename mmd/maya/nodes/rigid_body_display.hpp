@@ -42,6 +42,7 @@
 #include <maya/MUIDrawManager.h>
 #include <maya/MVector.h>
 
+#include <array>
 #include <vector>
 
 #include "rigid_body_shape.hpp"
@@ -83,8 +84,8 @@ constexpr unsigned int kRoleA = 1u;
 constexpr unsigned int kRoleB = 2u;
 
 // --- axes (selected joint's motion guides) ---
-inline const MColor kAxis[3] = {MColor(1.0f, 0.25f, 0.22f), MColor(0.35f, 1.0f, 0.25f),
-                                MColor(0.30f, 0.65f, 1.0f)};
+inline const std::array<MColor, 3> kAxis{MColor(1.0f, 0.25f, 0.22f), MColor(0.35f, 1.0f, 0.25f),
+                                         MColor(0.30f, 0.65f, 1.0f)};
 inline const MColor kGuide(0.95f, 0.95f, 0.95f);
 
 // Fallback when Maya's selection colour is near-black.

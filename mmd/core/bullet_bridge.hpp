@@ -51,19 +51,32 @@ inline btTransform transformFromRest(const Double3& pos, const Double3& rotDeg)
 // the TRANSPOSE of Maya's.  Copying the row matrix directly (as done
 // before) gave every rotated anchor a transposed — i.e. wrong — basis,
 // which yanked the attached rigid chains into a mess.
+// btVector3 converts implicitly to btScalar*, so a plain subscript reads as
+// pointer arithmetic to the guidelines checks; the named accessors do not.
+inline btScalar btComponent(const btVector3& v, int i)
+{
+    switch (i)
+    {
+    case 0:
+        return v.x();
+    case 1:
+        return v.y();
+    default:
+        return v.z();
+    }
+}
+
 inline btTransform doubleMatrixToBtTransform(const Matrix4& m)
 {
-    btTransform t;
     btMatrix3x3 bm;
-    for (int r = 0; r < 3; ++r)
-    {
-        for (int c = 0; c < 3; ++c)
-        {
-            // transpose: Bullet column matrix = Maya row^T; narrowing from
-            // the core's double Matrix4 to Bullet's float btScalar is intended.
-            bm[c][r] = static_cast<btScalar>(m(r, c));
-        }
-    }
+    // transpose: Bullet column matrix = Maya row^T; narrowing from
+    // the core's double Matrix4 to Bullet's float btScalar is intended.
+    bm.setValue(static_cast<btScalar>(m(0, 0)), static_cast<btScalar>(m(1, 0)),
+                static_cast<btScalar>(m(2, 0)), static_cast<btScalar>(m(0, 1)),
+                static_cast<btScalar>(m(1, 1)), static_cast<btScalar>(m(2, 1)),
+                static_cast<btScalar>(m(0, 2)), static_cast<btScalar>(m(1, 2)),
+                static_cast<btScalar>(m(2, 2)));
+    btTransform t;
     t.setBasis(bm);
     t.setOrigin(btVector3(static_cast<btScalar>(m(3, 0)), static_cast<btScalar>(m(3, 1)),
                           static_cast<btScalar>(m(3, 2))));
@@ -89,9 +102,10 @@ inline btTransform poseToTransform(const Double3& pos, const Double4& quat)
 {
     btTransform t;
     t.setIdentity();
-    t.setOrigin(btVector3(btScalar(pos.x), btScalar(pos.y), btScalar(pos.z)));
-    t.setRotation(
-        btQuaternion(btScalar(quat.x), btScalar(quat.y), btScalar(quat.z), btScalar(quat.w)));
+    t.setOrigin(btVector3(static_cast<btScalar>(pos.x), static_cast<btScalar>(pos.y),
+                          static_cast<btScalar>(pos.z)));
+    t.setRotation(btQuaternion(static_cast<btScalar>(quat.x), static_cast<btScalar>(quat.y),
+                               static_cast<btScalar>(quat.z), static_cast<btScalar>(quat.w)));
     return t;
 }
 
@@ -100,11 +114,12 @@ inline btTransform poseToTransform(const Double3& pos, const Double4& quat)
 // and the translation lands in the last row (m[3][0..2]) as Maya expects.
 inline void btTransformToRowMatrix(const btTransform& t, Matrix4& m)
 {
+    const btMatrix3x3& basis = t.getBasis();
     for (int r = 0; r < 3; ++r)
     {
         for (int c = 0; c < 3; ++c)
         {
-            m(r, c) = t.getBasis()[c][r]; // transpose back to row-vector
+            m(r, c) = btComponent(basis.getRow(c), r); // transpose back to row-vector
         }
     }
     m(0, 3) = m(1, 3) = m(2, 3) = 0.0;

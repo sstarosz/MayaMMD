@@ -60,10 +60,10 @@ inline Double4 eulerDegreesToQuat(double rx, double ry, double rz)
     //   y = cz*sy*cx + sz*cy*sx
     //   z = sz*cy*cx - cz*sy*sx
     Double4 q;
-    q.w = cz * cy * cx + sz * sy * sx;
-    q.x = cz * cy * sx - sz * sy * cx;
-    q.y = cz * sy * cx + sz * cy * sx;
-    q.z = sz * cy * cx - cz * sy * sx;
+    q.w = (cz * cy * cx) + (sz * sy * sx);
+    q.x = (cz * cy * sx) - (sz * sy * cx);
+    q.y = (cz * sy * cx) + (sz * cy * sx);
+    q.z = (sz * cy * cx) - (cz * sy * sx);
     return q;
 }
 
@@ -76,7 +76,7 @@ inline void quatToEulerXYZDegrees(const Double4& qIn, Double3& out)
 {
     // Normalize first — matches btMatrix3x3(q), which scales by 2/|q|^2.
     const double inv =
-        1.0 / std::sqrt(qIn.x * qIn.x + qIn.y * qIn.y + qIn.z * qIn.z + qIn.w * qIn.w);
+        1.0 / std::sqrt((qIn.x * qIn.x) + (qIn.y * qIn.y) + (qIn.z * qIn.z) + (qIn.w * qIn.w));
     const double x = qIn.x * inv;
     const double y = qIn.y * inv;
     const double z = qIn.z * inv;
@@ -86,7 +86,7 @@ inline void quatToEulerXYZDegrees(const Double4& qIn, Double3& out)
     //   m[2][0] = 2(xz - yw); m[2][1] = 2(yz + xw); m[2][2] = 1 - 2(x^2+y^2)
     //   m[1][0] = 2(xy + zw); m[1][1] = 1 - 2(x^2+z^2)
     //   m[0][0] = 1 - 2(y^2+z^2); m[0][1] = 2(xy - zw); m[0][2] = 2(xz + yw)
-    const double sinRy = -(2.0 * (x * z - y * w)); // -m[2][0]
+    const double sinRy = -(2.0 * ((x * z) - (y * w))); // -m[2][0]
     constexpr double kGimbalEps = 1e-6;
     if (sinRy < -1.0 + kGimbalEps || sinRy > 1.0 - kGimbalEps)
     {
@@ -96,26 +96,27 @@ inline void quatToEulerXYZDegrees(const Double4& qIn, Double3& out)
         //   ry=-90: m[0][1]=-sin(rx+rz), m[1][1]=cos(rx+rz) -> rz = atan2(-m[0][1], m[1][1])
         // (Earlier this extracted for M=Rx*Ry*Rz and flipped ry's sign, which
         // rotated every gimbal-locked body 180° and displaced the bones.)
-        double ry;
-        double rz;
+        // Both branches below assign ry and rz.
+        double ry = 0.0;
+        double rz = 0.0;
         if (sinRy > 0.0) // m[2][0] < 0 -> ry = +90
         {
             ry = kPi / 2.0;
-            rz = std::atan2(-2.0 * (x * y - z * w), 2.0 * (x * z + y * w));
+            rz = std::atan2(-2.0 * ((x * y) - (z * w)), 2.0 * ((x * z) + (y * w)));
         }
         else
         {
             ry = -kPi / 2.0;
-            rz = std::atan2(-2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z));
+            rz = std::atan2(-2.0 * ((x * y) - (z * w)), 1.0 - (2.0 * ((x * x) + (z * z))));
         }
         out.x = 0.0;
         out.y = rad2deg(ry);
         out.z = rad2deg(rz);
         return;
     }
-    const double rx = std::atan2(2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y));
+    const double rx = std::atan2(2.0 * ((y * z) + (x * w)), 1.0 - (2.0 * ((x * x) + (y * y))));
     const double ry = std::asin(sinRy);
-    const double rz = std::atan2(2.0 * (x * y + z * w), 1.0 - 2.0 * (y * y + z * z));
+    const double rz = std::atan2(2.0 * ((x * y) + (z * w)), 1.0 - (2.0 * ((y * y) + (z * z))));
     out.x = rad2deg(rx);
     out.y = rad2deg(ry);
     out.z = rad2deg(rz);

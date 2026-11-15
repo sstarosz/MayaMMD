@@ -368,7 +368,7 @@
         {
             "label": "Format: C++ (clang-format)",
             "type": "shell",
-            "command": "clang-format -i mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h",
+            "command": "clang-format -i mmd/*.cpp mmd/core/*.cpp mmd/core/*.hpp mmd/maya/*.hpp mmd/maya/cmds/*.cpp mmd/maya/cmds/*.hpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h mmd/maya/nodes/*.hpp tests/unit_tests/core/*.cpp",
             "group": "none",
             "presentation": {
                 "reveal": "always",
@@ -379,7 +379,7 @@
         {
             "label": "Format Check: C++ (clang-format)",
             "type": "shell",
-            "command": "clang-format --dry-run --Werror mmd/MayaMMD.cpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h",
+            "command": "clang-format --dry-run --Werror mmd/*.cpp mmd/core/*.cpp mmd/core/*.hpp mmd/maya/*.hpp mmd/maya/cmds/*.cpp mmd/maya/cmds/*.hpp mmd/maya/nodes/*.cpp mmd/maya/nodes/*.h mmd/maya/nodes/*.hpp tests/unit_tests/core/*.cpp",
             "group": "none",
             "presentation": {
                 "reveal": "always",

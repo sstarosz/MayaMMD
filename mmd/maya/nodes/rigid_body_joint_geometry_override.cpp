@@ -36,6 +36,7 @@
 #include <maya/MViewport2Renderer.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -58,26 +59,28 @@ struct HubItem
     bool primary; // even wedges (primary colour) or odd wedges
     bool wire;    // wireframe-mode lines or shaded-mode triangles
 };
-constexpr HubItem kHubItems[4] = {
-    {"mmd_rigid_body_joint_hub_even", true, false},
-    {"mmd_rigid_body_joint_hub_odd", false, false},
-    {"mmd_rigid_body_joint_hub_even_wire", true, true},
-    {"mmd_rigid_body_joint_hub_odd_wire", false, true},
+constexpr std::array<HubItem, 4> kHubItems = {
+    {
+        {"mmd_rigid_body_joint_hub_even", true, false},
+        {"mmd_rigid_body_joint_hub_odd", false, false},
+        {"mmd_rigid_body_joint_hub_even_wire", true, true},
+        {"mmd_rigid_body_joint_hub_odd_wire", false, true},
+    },
 };
 // Wedges around the hub sphere (its slices); half of them per colour.
 constexpr int kHubWedges = 8;
 // Opacity of the X-ray pass that keeps a selected joint's overlay readable
 // through the geometry in front of it (see addUIDrawables).
-constexpr float kGhostAlpha = 0.3f;
+constexpr float kGhostAlpha = 0.3F;
 
 // Overlay styling (line widths are in pixels; kPressedWidth for the guides'
 // pressed limits lives in joint_display.hpp).
-constexpr float kSelectionWireWidth = 1.75f; // hub wire in Maya's selection colour
-constexpr float kBodyLinkWidth = 3.0f;       // body centre -> its attachment
-constexpr float kInactiveLinkWidth = 2.5f;   // dashed link of an inactive joint
-constexpr float kMarkerWidth = 2.5f;         // body-centre / attachment markers
-constexpr float kOutlineWidth = 4.0f;        // fallback collider outline
-constexpr float kCoincidentPointSize = 5.0f; // the shared ring's centre dot
+constexpr float kSelectionWireWidth = 1.75F; // hub wire in Maya's selection colour
+constexpr float kBodyLinkWidth = 3.0F;       // body centre -> its attachment
+constexpr float kInactiveLinkWidth = 2.5F;   // dashed link of an inactive joint
+constexpr float kMarkerWidth = 2.5F;         // body-centre / attachment markers
+constexpr float kOutlineWidth = 4.0F;        // fallback collider outline
+constexpr float kCoincidentPointSize = 5.0F; // the shared ring's centre dot
 // Attachment frames closer than this (a fraction of the hub radius, but never
 // below the absolute floor) read as one point: they share one ring instead of
 // drawing two overlapping ones.
@@ -100,7 +103,7 @@ struct Mesh
 struct Hub
 {
     Mesh mesh;
-    std::vector<unsigned int> indices[4];
+    std::array<std::vector<unsigned int>, 4> indices;
 };
 const Hub& unitHub()
 {
@@ -121,25 +124,31 @@ const Hub& unitHub()
         const auto evenWedge =
             [&](const std::vector<unsigned int>& list, std::size_t first, std::size_t count)
         {
-            double x = 0.0, z = 0.0;
+            double x = 0.0;
+            double z = 0.0;
             for (std::size_t k = 0; k < count; ++k)
             {
-                x += out.mesh.positions[list[first + k] * 3];
-                z += out.mesh.positions[list[first + k] * 3 + 2];
+                const auto vertex = static_cast<std::size_t>(list[first + k]) * 3;
+                x += out.mesh.positions[vertex];
+                z += out.mesh.positions[vertex + 2];
             }
             const double azimuth = std::atan2(z, x) + (z < 0.0 ? 2.0 * M_PI : 0.0);
             return static_cast<int>(azimuth / (2.0 * M_PI / kHubWedges)) % 2 == 0;
         };
         for (std::size_t item = 0; item < 4; ++item)
         {
-            const HubItem& spec = kHubItems[item];
+            const HubItem& spec = kHubItems.at(item);
             const std::vector<unsigned int>& source = spec.wire ? out.mesh.lines : out.mesh.indices;
             const std::size_t stride = spec.wire ? 2 : 3;
             for (std::size_t i = 0; i + stride <= source.size(); i += stride)
+            {
                 if (evenWedge(source, i, stride) == spec.primary)
-                    out.indices[item].insert(
-                        out.indices[item].end(), source.begin() + static_cast<std::ptrdiff_t>(i),
+                {
+                    out.indices.at(item).insert(
+                        out.indices.at(item).end(), source.begin() + static_cast<std::ptrdiff_t>(i),
                         source.begin() + static_cast<std::ptrdiff_t>(i + stride));
+                }
+            }
         }
         return out;
     }();
@@ -154,7 +163,7 @@ const Hub& unitHub()
 
 [[nodiscard]] MPoint toPoint(const mmd::core::Double3& d)
 {
-    return MPoint(d.x, d.y, d.z);
+    return {d.x, d.y, d.z};
 }
 
 // The unit circle as (cos, sin) pairs, closed (segments + 1 points), built once
@@ -168,7 +177,9 @@ const std::vector<MVector>& unitRing(int segments)
     const int count = std::max(1, segments);
     const auto it = rings.find(count);
     if (it != rings.end())
+    {
         return it->second;
+    }
 
     std::vector<MVector> points;
     points.reserve(static_cast<std::size_t>(count) + 1);
@@ -210,8 +221,12 @@ RigidBodyJointGeometryOverride::RigidBodyJointGeometryOverride(const MObject& ob
 RigidBodyJointGeometryOverride::~RigidBodyJointGeometryOverride()
 {
     for (const auto& watch : fOutlineWatches)
-        if (watch.callback)
+    {
+        if (watch.callback != 0U)
+        {
             MMessage::removeCallback(watch.callback);
+        }
+    }
     // The shaders are shared and owned by rigid_body_display.
 }
 
@@ -224,10 +239,13 @@ void RigidBodyJointGeometryOverride::invalidateDrawables()
 {
     const MObjectHandle joint(fJoint);
     if (joint.isValid() && joint.isAlive())
+    {
         MHWRender::MRenderer::setGeometryDrawDirty(fJoint, false);
+    }
 }
 
-void RigidBodyJointGeometryOverride::dependencyDirty(MObject&, MPlug&, void* clientData)
+void RigidBodyJointGeometryOverride::dependencyDirty(MObject& /*unused*/, MPlug& /*unused*/,
+                                                     void* clientData)
 {
     static_cast<RigidBodyJointGeometryOverride*>(clientData)->invalidateDrawables();
 }
@@ -241,28 +259,38 @@ void RigidBodyJointGeometryOverride::updateOutlineWatches()
         {
             const MObject node = path.node();
             if (std::find(nodes.begin(), nodes.end(), node) == nodes.end())
+            {
                 nodes.push_back(node);
+            }
             path.pop();
         }
     };
     for (const auto& outline : fBodyOutlines)
+    {
         if (outline.valid && !outline.candidates.empty())
         {
             appendPath(outline.path);
             for (const auto& candidate : outline.candidates)
+            {
                 appendPath(candidate.path);
+            }
         }
+    }
     for (auto it = fOutlineWatches.begin(); it != fOutlineWatches.end();)
     {
         if (!it->node.isValid() || !it->node.isAlive() ||
             std::find(nodes.begin(), nodes.end(), it->node.object()) == nodes.end())
         {
-            if (it->callback)
+            if (it->callback != 0U)
+            {
                 MMessage::removeCallback(it->callback);
+            }
             it = fOutlineWatches.erase(it);
         }
         else
+        {
             ++it;
+        }
     }
     for (MObject node : nodes)
     {
@@ -270,8 +298,12 @@ void RigidBodyJointGeometryOverride::updateOutlineWatches()
             std::any_of(fOutlineWatches.begin(), fOutlineWatches.end(),
                         [&](const DependencyWatch& watch) { return watch.node.object() == node; });
         if (!watched)
-            fOutlineWatches.push_back({MObjectHandle(node), MNodeMessage::addNodeDirtyPlugCallback(
-                                                                node, dependencyDirty, this)});
+        {
+            fOutlineWatches.push_back({
+                MObjectHandle(node),
+                MNodeMessage::addNodeDirtyPlugCallback(node, dependencyDirty, this),
+            });
+        }
     }
 }
 
@@ -297,11 +329,15 @@ bool RigidBodyJointGeometryOverride::requiresUpdateRenderItems(const MDagPath& /
 void RigidBodyJointGeometryOverride::updateDG()
 {
     if (fPlugs.drawMode.isNull())
+    {
         return;
+    }
 
     // The bodies are connections; the solver turns them into its indices.
-    const MObject bodyShapes[2] = {RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
-                                   RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB)};
+    const std::array<MObject, 2> bodyShapes{
+        RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
+        RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB),
+    };
     readJointInputs();
     resolveSolver();
     cacheBodyOutlines(bodyShapes);
@@ -340,7 +376,9 @@ void RigidBodyJointGeometryOverride::resolveSolver()
     fState.picked = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
     const RigidBodyJoint::SolverView view = RigidBodyJoint::resolveSolverView(fJoint);
     if (view.solver == nullptr)
+    {
         return;
+    }
 
     fSolver = view.solverObject;
     def.bodyA = view.definition.bodyA;
@@ -360,7 +398,7 @@ void RigidBodyJointGeometryOverride::resolveSolver()
 // visibility) so a body hidden or isolated out of a view can still be outlined,
 // and decide with the other selected joints which one owns that fallback
 // outline.  Unselected joints draw no overlays at all.
-void RigidBodyJointGeometryOverride::cacheBodyOutlines(const MObject (&bodyShapes)[2])
+void RigidBodyJointGeometryOverride::cacheBodyOutlines(const std::array<MObject, 2>& bodyShapes)
 {
     for (auto& outline : fBodyOutlines)
     {
@@ -368,14 +406,19 @@ void RigidBodyJointGeometryOverride::cacheBodyOutlines(const MObject (&bodyShape
         outline.candidates.clear();
     }
     if (!fState.picked || fSolver.isNull())
+    {
         return;
+    }
 
     for (int end = 0; end < 2; ++end)
     {
-        const MObject& shape = bodyShapes[end];
-        auto& outline = fBodyOutlines[end];
+        const auto index = static_cast<std::size_t>(end);
+        const MObject& shape = bodyShapes.at(index);
+        auto& outline = fBodyOutlines.at(index);
         if (shape.isNull() || !MDagPath::getAPathTo(shape, outline.path))
+        {
             continue;
+        }
         outline.size = toPoint(readDouble3(MPlug(shape, RigidBodyShape::aBodyShapeSize)));
         const MPlug typePlug(shape, RigidBodyShape::aBodyColliderType);
         outline.type = typePlug.isNull() ? 0 : typePlug.asShort();
@@ -388,16 +431,22 @@ void RigidBodyJointGeometryOverride::cacheBodyOutlines(const MObject (&bodyShape
     for (const auto& joint : mmd::maya::rigid_body_display::selectedJoints())
     {
         if (joint.solver.object() != fSolver || !joint.path.isValid())
+        {
             continue;
+        }
         for (auto& outline : fBodyOutlines)
         {
             if (!outline.valid)
+            {
                 continue;
+            }
             const MObject shape = outline.path.node();
-            const unsigned int roles = (joint.bodyA.object() == shape ? palette::kRoleA : 0u) |
-                                       (joint.bodyB.object() == shape ? palette::kRoleB : 0u);
-            if (roles)
+            const unsigned int roles = (joint.bodyA.object() == shape ? palette::kRoleA : 0U) |
+                                       (joint.bodyB.object() == shape ? palette::kRoleB : 0U);
+            if (roles != 0U)
+            {
                 outline.candidates.push_back({joint.path, roles, joint.path.isVisible()});
+            }
         }
     }
 }
@@ -425,9 +474,15 @@ void RigidBodyJointGeometryOverride::stateColors(MColor& primary, MColor& second
         primary = secondary = palette::kInactive;
         return;
     }
-    primary = fState.freedom.rotates      ? palette::kRotates
-              : fState.freedom.translates ? palette::kTranslates
-                                          : palette::kWelded;
+    primary = palette::kWelded;
+    if (fState.freedom.rotates)
+    {
+        primary = palette::kRotates;
+    }
+    else if (fState.freedom.translates)
+    {
+        primary = palette::kTranslates;
+    }
     // Both hues only for a joint that does both; the wedges alternate them.
     secondary =
         fState.freedom.rotates && fState.freedom.translates ? palette::kTranslates : primary;
@@ -460,33 +515,42 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
     // (drawRings) are axis-aligned rings built in local space.  Computing them
     // here keeps the inverse out of the draw phase, where drawRings runs
     // several times per frame.
-    const MVector worldAxes[3] = {MVector::xAxis, MVector::yAxis, MVector::zAxis};
+    const std::array<MVector, 3> worldAxes{MVector::xAxis, MVector::yAxis, MVector::zAxis};
     for (int a = 0; a < 3; ++a)
-        fWorldAxisLocal[a] = (worldAxes[a] * worldToLocal).normal();
+    {
+        fWorldAxisLocal.at(static_cast<std::size_t>(a)) =
+            (worldAxes.at(static_cast<std::size_t>(a)) * worldToLocal).normal();
+    }
 
     // The SOLID keeps its STATE colour even when selected. The selection
     // highlight is a native-coloured wire drawn in addUIDrawables(), not a
     // tint of the whole hub — so the lead hub is outlined green and the rest
     // of a multiple selection white, instead of flooding the hubs.
-    MColor primary, secondary;
+    MColor primary;
+    MColor secondary;
     stateColors(primary, secondary);
     // An inactive hub is hollow: no solid, only its dashed wire, in every
     // display mode (so it stays visible and pickable while shaded).
     const bool inactive = !fState.active;
     const auto shadedModes =
-        static_cast<MGeometry::DrawMode>(MGeometry::kShaded | MGeometry::kTextured);
+        static_cast<MGeometry::DrawMode>(static_cast<unsigned int>(MGeometry::kShaded) |
+                                         static_cast<unsigned int>(MGeometry::kTextured));
     for (const HubItem& spec : kHubItems)
     {
         MRenderItem* item = nullptr;
         const int index = renderItems.indexOf(spec.name);
         if (index >= 0)
+        {
             item = renderItems.itemAt(index);
+        }
         else
         {
             item = MRenderItem::Create(spec.name, MRenderItem::NonMaterialSceneItem,
                                        spec.wire ? MGeometry::kLines : MGeometry::kTriangles);
             if (item == nullptr)
+            {
                 continue;
+            }
             // The hub respects scene depth.
             item->depthPriority(MRenderItem::sDormantWireDepthPriority);
             // Pick under the joint's own selection type (priority), not "locator".
@@ -494,10 +558,18 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
             renderItems.append(item);
         }
         // Must match the viewport's display modes or the item never draws.
-        item->setDrawMode(
-            !spec.wire ? shadedModes
-            : inactive ? static_cast<MGeometry::DrawMode>(shadedModes | MGeometry::kWireframe)
-                       : MGeometry::kWireframe);
+        MGeometry::DrawMode drawMode = MGeometry::kWireframe;
+        if (!spec.wire)
+        {
+            drawMode = shadedModes;
+        }
+        else if (inactive)
+        {
+            drawMode =
+                static_cast<MGeometry::DrawMode>(static_cast<unsigned int>(shadedModes) |
+                                                 static_cast<unsigned int>(MGeometry::kWireframe));
+        }
+        item->setDrawMode(drawMode);
         // Vertices are joint-local: populateGeometry bakes the attachment-to-
         // local transform in, so VP2 applies only the joint's DAG transform
         // (including its animated parents).  Supplying a world matrix here
@@ -507,11 +579,15 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
         // Shared shaders per colour (rigid_body_display).
         namespace display = mmd::maya::rigid_body_display;
         const MColor& color = spec.primary ? primary : secondary;
-        MHWRender::MShaderInstance* shader = !spec.wire ? display::solidShader(color)
-                                             : inactive ? display::dashedWireShader(color)
-                                                        : display::wireShader(color);
+        MHWRender::MShaderInstance* shader = display::solidShader(color);
+        if (spec.wire)
+        {
+            shader = inactive ? display::dashedWireShader(color) : display::wireShader(color);
+        }
         if (shader != nullptr)
+        {
             item->setShader(shader);
+        }
     }
 }
 
@@ -526,7 +602,9 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
 {
     if (fState.drawMode == RigidBodyJoint::kDrawOff ||
         !mmd::maya::rigid_body_display::isSelected(dagPath))
+    {
         return;
+    }
 
     // Native selection outline: the solid keeps its state colour and the pick
     // is marked with Maya's OWN selection colour drawn as a wire around the
@@ -547,7 +625,9 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
     // A joint drawn as selected only because a parent group is (the whole
     // {model}_Joints group, say) keeps the wire but draws no overlay.
     if (!fState.picked)
+    {
         return;
+    }
 
     // Built once and drawn twice (X-ray ghost + depth-tested pass), so the two
     // passes cannot disagree and the guides are not computed twice.
@@ -565,7 +645,7 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
     drawManager.beginDrawable(MHWRender::MUIDrawManager::kNonSelectable);
     drawManager.setLineStyle(MHWRender::MUIDrawManager::kSolid);
     drawIsolatedBodyOutlines(drawManager, frameContext);
-    drawOverlay(drawManager, 1.0f, geom);
+    drawOverlay(drawManager, 1.0F, geom);
     drawManager.endDrawable();
 }
 
@@ -577,7 +657,9 @@ RigidBodyJointGeometryOverride::OverlayGeom RigidBodyJointGeometryOverride::buil
     geom.separate =
         separation > std::max(kSeparateMinDistance, fState.hubRadius * kSeparateHubFraction);
     if (fState.active && fState.hasAttachments && fState.drawMode != RigidBodyJoint::kDrawHub)
+    {
         geom.guides = mmd::core::joint_display::motionGuides(motionGuideInput());
+    }
     return geom;
 }
 
@@ -625,9 +707,11 @@ void RigidBodyJointGeometryOverride::drawOverlay(MHWRender::MUIDrawManager& draw
     {
         for (int end = 0; end < 2; ++end)
         {
-            const BodyOutline& outline = fBodyOutlines[end];
+            const BodyOutline& outline = fBodyOutlines.at(static_cast<std::size_t>(end));
             if (!outline.valid)
+            {
                 continue;
+            }
             MColor color = end == 0 ? palette::kBodyA : palette::kBodyB;
             color.a *= alpha;
             drawManager.setColor(color);
@@ -653,7 +737,9 @@ void RigidBodyJointGeometryOverride::drawOverlay(MHWRender::MUIDrawManager& draw
         drawManager.setLineWidth(kMarkerWidth);
         bodyMark(body);
         if (showAttachment)
+        {
             attachmentMark(attachment);
+        }
     };
     endpoint(fLocalA, fAttachmentA, palette::kBodyA, true);
     endpoint(fLocalB, fAttachmentB, palette::kBodyB, geom.separate);
@@ -664,7 +750,9 @@ void RigidBodyJointGeometryOverride::drawOverlay(MHWRender::MUIDrawManager& draw
         drawManager.point(fAttachmentA);
     }
     if (!geom.guides.empty())
+    {
         drawGuideSegments(drawManager, geom.guides, alpha);
+    }
 }
 
 void RigidBodyJointGeometryOverride::drawIsolatedBodyOutlines(
@@ -672,26 +760,39 @@ void RigidBodyJointGeometryOverride::drawIsolatedBodyOutlines(
 {
     if (std::none_of(std::begin(fBodyOutlines), std::end(fBodyOutlines),
                      [](const BodyOutline& outline) { return outline.valid; }))
+    {
         return;
+    }
     // Resolved once per viewport and shared by every joint drawn in it.
     const mmd::maya::rigid_body_display::ViewFilter& view =
         mmd::maya::rigid_body_display::viewFilter(frameContext);
     for (const auto& outline : fBodyOutlines)
     {
         if (!outline.valid || !outline.path.isValid())
+        {
             continue;
+        }
         if (outline.visible && view.shows(outline.path))
+        {
             continue;
+        }
         std::vector<mmd::maya::rigid_body_display::HighlightCandidate> candidates;
         candidates.reserve(outline.candidates.size());
         for (const auto& candidate : outline.candidates)
-            candidates.push_back({candidate.roles, candidate.visible && view.shows(candidate.path),
-                                  candidate.path.node() == fJoint});
+        {
+            candidates.push_back({
+                candidate.roles,
+                candidate.visible && view.shows(candidate.path),
+                candidate.path.node() == fJoint,
+            });
+        }
         // Candidates were offered lead-first by the context, so a body shared by
         // the lead and an earlier-selected joint is owned by the lead here.
         const auto owner = mmd::maya::rigid_body_display::highlightOwner(candidates);
         if (!owner.self)
+        {
             continue;
+        }
         drawManager.setLineWidth(kOutlineWidth);
         mmd::maya::drawRoleColliderWire(drawManager, outline.size, outline.type, owner.roles,
                                         outline.world * fWorldToLocal);
@@ -709,12 +810,14 @@ void RigidBodyJointGeometryOverride::drawRings(MHWRender::MUIDrawManager& drawMa
     const std::vector<MVector>& ring = unitRing(segments);
     for (int a = 0; a < 3; ++a)
     {
-        const MVector& u = fWorldAxisLocal[(a + 1) % 3];
-        const MVector& v = fWorldAxisLocal[(a + 2) % 3];
+        const MVector& u = fWorldAxisLocal.at(static_cast<std::size_t>((a + 1) % 3));
+        const MVector& v = fWorldAxisLocal.at(static_cast<std::size_t>((a + 2) % 3));
         MPointArray strip;
         strip.setLength(static_cast<unsigned int>(ring.size()));
         for (std::size_t i = 0; i < ring.size(); ++i)
+        {
             strip[static_cast<unsigned int>(i)] = local + (u * ring[i].x + v * ring[i].y) * radius;
+        }
         drawManager.mesh(MHWRender::MUIDrawManager::kLineStrip, strip);
     }
 }
@@ -727,10 +830,19 @@ void RigidBodyJointGeometryOverride::drawGuideSegments(
     using namespace mmd::core::joint_display;
     const auto colorOf = [&](GuideColor guide)
     {
-        MColor color = guide == GuideColor::AxisX   ? palette::kAxis[0]
-                       : guide == GuideColor::AxisY ? palette::kAxis[1]
-                       : guide == GuideColor::AxisZ ? palette::kAxis[2]
-                                                    : palette::kGuide;
+        MColor color = palette::kGuide;
+        if (guide == GuideColor::AxisX)
+        {
+            color = palette::kAxis.at(0);
+        }
+        else if (guide == GuideColor::AxisY)
+        {
+            color = palette::kAxis.at(1);
+        }
+        else if (guide == GuideColor::AxisZ)
+        {
+            color = palette::kAxis.at(2);
+        }
         color.a *= alpha;
         return color;
     };
@@ -776,7 +888,9 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
                                                       MGeometry& data)
 {
     if (fState.drawMode == RigidBodyJoint::kDrawOff)
+    {
         return;
+    }
 
     // Scale a COPY of the shared unit hub to this joint's radius and bake it
     // into the joint's LOCAL space. VP2 applies the DAG matrix once:
@@ -809,19 +923,27 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
     {
         const MRenderItem* item = renderItems.itemAt(i);
         if (item == nullptr)
+        {
             continue;
+        }
         for (std::size_t k = 0; k < 4; ++k)
         {
-            if (item->name() != kHubItems[k].name || hub.indices[k].empty())
+            if (item->name() != kHubItems.at(k).name || hub.indices.at(k).empty())
+            {
                 continue;
-            const auto& indices = hub.indices[k];
+            }
+            const auto& indices = hub.indices.at(k);
             MIndexBuffer* indexBuf = data.createIndexBuffer(MGeometry::kUnsignedInt32);
             if (indexBuf == nullptr)
+            {
                 break;
-            const unsigned int numIndices = static_cast<unsigned int>(indices.size());
+            }
+            const auto numIndices = static_cast<unsigned int>(indices.size());
             void* idxPtr = indexBuf->acquire(numIndices, /*writeOnly=*/true);
             if (idxPtr == nullptr)
+            {
                 break;
+            }
             std::memcpy(idxPtr, indices.data(), numIndices * sizeof(unsigned int));
             indexBuf->commit(idxPtr);
             item->associateWithIndexBuffer(indexBuf);
@@ -846,7 +968,9 @@ bool RigidBodyJointGeometryOverride::refineSelectionPath(const MSelectionInfo& /
 {
     MDagPath jointPath;
     if (!MDagPath::getAPathTo(fJoint, jointPath))
+    {
         return false;
+    }
     dagPath = jointPath;
     objectMask = MSelectionMask(RigidBodyJoint::kSelectionType);
     return true;

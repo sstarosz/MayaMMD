@@ -48,6 +48,7 @@
 #include <maya/MPlugArray.h>
 
 #include <algorithm>
+#include <array>
 
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
@@ -60,7 +61,9 @@ void readDouble3(const MPlug& plug, Double3& out)
     // first) keeps the JointDefinition default: readPlugDouble3 would call
     // asMDataHandle() on a null plug.
     if (plug.isNull())
+    {
         return;
+    }
     out = mmd::maya::readPlugDouble3(plug);
 }
 
@@ -86,18 +89,20 @@ void readDouble3(const MPlug& plug, Double3& out)
 {
     MStatus stat;
     MFnUnitAttribute uAttr;
-    MObject axes[3];
-    const char* suffix[3] = {"X", "Y", "Z"};
-    const char* shortSuffix[3] = {"x", "y", "z"};
+    std::array<MObject, 3> axes{};
+    const std::array<const char*, 3> suffix{"X", "Y", "Z"};
+    const std::array<const char*, 3> shortSuffix{"x", "y", "z"};
     for (int i = 0; i < 3; ++i)
     {
-        axes[i] = uAttr.create(longName + suffix[i], shortName + shortSuffix[i],
-                               MFnUnitAttribute::kAngle, 0.0, &stat);
+        const auto index = static_cast<std::size_t>(i);
+        axes.at(index) =
+            uAttr.create(longName + suffix.at(index), shortName + shortSuffix.at(index),
+                         MFnUnitAttribute::kAngle, 0.0, &stat);
         MMD_CHECK_MSTATUS(stat);
         uAttr.setStorable(true);
         uAttr.setKeyable(false);
     }
-    MObject a = fn.create(longName, shortName, axes[0], axes[1], axes[2], &stat);
+    MObject a = fn.create(longName, shortName, axes.at(0), axes.at(1), axes.at(2), &stat);
     MMD_CHECK_MSTATUS(stat);
     fn.setStorable(true);
     fn.setKeyable(false);
@@ -111,7 +116,7 @@ void readDouble3(const MPlug& plug, Double3& out)
                                  const MString& shortName)
 {
     MStatus stat;
-    MObject a = fn.create(longName, shortName, MFnData::kString, &stat);
+    MObject a = fn.create(longName, shortName, MFnData::kString, MObject::kNullObj, &stat);
     MMD_CHECK_MSTATUS(stat);
     fn.setStorable(true);
     fn.setKeyable(false);
@@ -246,9 +251,17 @@ MStatus RigidBodyJoint::initialize()
     // frame (through frameMatrix — the inherited worldMatrix is dirtied by
     // the DAG, not through attributeAffects), dirties the solver message ->
     // pmxRigidBodyNode.jointShapes[i] -> its outputs.
-    for (const MObject& input :
-         {aJointBodyA, aJointBodyB, aJointLinearMin, aJointLinearMax, aJointAngularMin,
-          aJointAngularMax, aJointLinearStiffness, aJointAngularStiffness, aFrameMatrix})
+    for (const MObject& input : {
+             aJointBodyA,
+             aJointBodyB,
+             aJointLinearMin,
+             aJointLinearMax,
+             aJointAngularMin,
+             aJointAngularMax,
+             aJointLinearStiffness,
+             aJointAngularStiffness,
+             aFrameMatrix,
+         })
     {
         stat = attributeAffects(input, aSolver);
         MMD_CHECK_MSTATUS(stat);
@@ -275,7 +288,9 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
                                        PostEvaluationType evalType)
 {
     if (context.isNormal())
+    {
         MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
+    }
     return MPxLocatorNode::postEvaluation(context, evaluationNode, evalType);
 }
 
@@ -296,21 +311,29 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
     {
         const MPlug solverStep(node, aSolverStep);
         if (!solverStep.isNull())
+        {
             solverStep.asDouble();
+        }
     }
 
     MPlugArray destinations;
     MPlug(node, aSolver).connectedTo(destinations, false, true);
     if (destinations.length() == 0)
+    {
         return view;
+    }
     view.solverObject = destinations[0].node();
     view.solver = dynamic_cast<RigidBodyNode*>(MFnDependencyNode(view.solverObject).userNode());
     if (view.solver == nullptr)
+    {
         return view;
+    }
 
     if (!readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
                              view.definition))
+    {
         return view; // no readable frame: keep the display's "inactive" defaults
+    }
     view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
     view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
     view.active = view.solver->jointStatus(view.definition) ==
@@ -341,7 +364,9 @@ MBoundingBox RigidBodyJoint::boundingBox() const
     const MObject node = thisMObject();
     MDagPath path;
     if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
+    {
         return {};
+    }
     const MMatrix worldToLocal = path.inclusiveMatrixInverse();
 
     const SolverView view = resolveSolverView(node, /*evaluateSolver=*/false);
@@ -360,17 +385,28 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         MPoint p;
         for (unsigned int axis = 0; axis < 3; ++axis)
         {
-            const Range& range = ranges.linear[axis];
+            const Range& range = ranges.linear.at(axis);
             const bool free = range.kind() == RangeKind::Free;
-            p[axis] = ((corner >> axis) & 1U) != 0
-                          ? (free ? 0.0 : std::max(range.upper, 0.0)) + pad
-                          : (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
+            double coordinate = 0.0;
+            if (((corner >> axis) & 1U) != 0U)
+            {
+                coordinate = (free ? 0.0 : std::max(range.upper, 0.0)) + pad;
+            }
+            else
+            {
+                coordinate = (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
+            }
+            p[axis] = coordinate;
         }
         box.expand(p * attachmentA * worldToLocal);
     }
     if (view.live)
+    {
         for (const MMatrix* m : {&view.attachmentB, &view.bodyAWorld, &view.bodyBWorld})
+        {
             box.expand(MPoint::origin * *m * worldToLocal);
+        }
+    }
     return box;
 }
 
@@ -381,10 +417,14 @@ bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& gro
                                          RigidBodySimulation::JointDefinition& out)
 {
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
     MFnDependencyNode depFn(node);
     if (depFn.typeId() != kTypeId)
+    {
         return false;
+    }
 
     MStatus stat;
     const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
@@ -412,7 +452,9 @@ MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
     MPlugArray sources;
     MPlug(joint, end).connectedTo(sources, true, false);
     if (sources.length() == 0)
+    {
         return MObject::kNullObj;
+    }
     const MObject shape = sources[0].node();
     return MFnDependencyNode(shape).typeId() == RigidBodyShape::kTypeId ? shape : MObject::kNullObj;
 }
@@ -429,14 +471,18 @@ bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWor
                                     Double3& translate, Double3& rotate)
 {
     if (!node.hasFn(MFn::kDagNode))
+    {
         return false;
+    }
     MStatus stat;
     MFnDagNode dag(node, &stat);
     const MObject transform = dag.parent(0, &stat);
     MDagPath path;
     if (!stat || transform.isNull() || !transform.hasFn(MFn::kTransform) ||
         MDagPath::getAPathTo(transform, path) != MS::kSuccess)
+    {
         return false;
+    }
     const MTransformationMatrix tm(path.inclusiveMatrix() * groupWorldInverse);
     const MVector t = tm.getTranslation(MSpace::kTransform);
     const MEulerRotation e = tm.eulerRotation(); // radians, XYZ decomposition

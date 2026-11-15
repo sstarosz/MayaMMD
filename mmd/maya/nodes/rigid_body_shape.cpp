@@ -42,6 +42,7 @@
 #include "rigid_body_simulation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -300,11 +301,12 @@ MStatus RigidBodyShape::initialize()
     // (message) -> pmxRigidBodyNode.bodyShapes[i] -> its outputs.  Without
     // it the bodies (and the joint hubs on them) only update when time
     // changes.  The guide transform is NOT an input: the solver drives it.
-    std::vector<MObject> inputs = {aBodyAnchorWorld,    aBodyEnabled,     aBodyGroupId,
-                                   aBodyColliderType,   aBodyShapeSize,   aBodyRestTranslate,
-                                   aBodyRestRotate,     aBodyMass,        aBodyLinearDamping,
-                                   aBodyAngularDamping, aBodyRestitution, aBodyFriction,
-                                   aBodyPhysicsMode};
+    std::vector<MObject> inputs = {
+        aBodyAnchorWorld,   aBodyEnabled,        aBodyGroupId,     aBodyColliderType,
+        aBodyShapeSize,     aBodyRestTranslate,  aBodyRestRotate,  aBodyMass,
+        aBodyLinearDamping, aBodyAngularDamping, aBodyRestitution, aBodyFriction,
+        aBodyPhysicsMode,
+    };
     inputs.insert(inputs.end(), aBodyMaskGroup.begin(), aBodyMaskGroup.end());
     for (const MObject& input : inputs)
     {
@@ -322,10 +324,14 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
                                         RigidBodySimulation::BodyDefinition& out)
 {
     if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
     MFnDependencyNode depFn(node);
     if (depFn.typeName() != kNodeName)
+    {
         return false;
+    }
 
     // The body's REST pose lives in the shape's bodyRestTranslate/Rotate
     // attributes (world space, PMX-verbatim after the MMD→Maya flip).  The
@@ -357,8 +363,14 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
     applyShapeSize(out, shapeSize); // PMX shape_size -> engine radius/extents/length
     out.mask = 0;
     for (int g = 0; g < 16; ++g)
+    {
         if (plug(aBodyMaskGroup.at(g)).asBool())
-            out.mask |= 1L << g;
+        {
+            const auto bits =
+                static_cast<unsigned long>(out.mask) | (1UL << static_cast<unsigned int>(g));
+            out.mask = static_cast<long>(bits);
+        }
+    }
     out.groupId = plug(aBodyGroupId).asShort();
     // Keep the full PMX physics mode (0/1/2) — kinematic is a derived
     // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
@@ -380,7 +392,7 @@ MBoundingBox RigidBodyShape::boundingBox() const
     MStatus stat;
     const MPlug sizePlug = fn.findPlug(aBodyShapeSize, true, &stat);
     const MPlug typePlug = fn.findPlug(aBodyColliderType, true, &stat);
-    double half[3] = {0.5, 0.5, 0.5};
+    std::array<double, 3> half{0.5, 0.5, 0.5};
     if (!sizePlug.isNull())
     {
         const Double3 s = mmd::maya::readPlugDouble3(sizePlug);
@@ -395,10 +407,14 @@ MBoundingBox RigidBodyShape::boundingBox() const
     if (!typePlug.isNull())
     {
         if (typePlug.asShort() == kColliderCapsule)
-            r = half[0] + half[1] * 0.5; // radius + half length
+        {
+            r = half[0] + (half[1] * 0.5); // radius + half length
+        }
         else if (typePlug.asShort() == kColliderBox)
+        {
             r = std::max({half[0], half[1], half[2]});
+        }
         // sphere: radius = half[0]
     }
-    return MBoundingBox(MPoint(-r, -r, -r), MPoint(r, r, r));
+    return {MPoint(-r, -r, -r), MPoint(r, r, r)};
 }

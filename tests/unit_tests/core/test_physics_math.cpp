@@ -22,6 +22,7 @@
 
 #include "physics_math.hpp"
 
+#include <array>
 #include <cmath>
 #include <random>
 
@@ -68,7 +69,7 @@ void requireSameRotation(const Double4& a, const Double4& b, double tol = 1e-6)
 
 TEST_CASE("deg2rad / rad2deg are exact inverses", "[math]")
 {
-    for (double d : {0.0, 30.0, -45.0, 90.0, 180.0, 360.0, 123.456})
+    for (double const d : {0.0, 30.0, -45.0, 90.0, 180.0, 360.0, 123.456})
     {
         REQUIRE(rad2deg(deg2rad(d)) == Approx(d).margin(1e-9));
     }
@@ -103,18 +104,26 @@ TEST_CASE("euler round-trips through the Maya XYZ convention", "[math]")
 {
     // ry must stay within [-90, 90] — that is the canonical range of the XYZ
     // extraction (asin).  rx/rz may be anywhere in [-180, 180] (atan2).
-    const double angles[][3] = {
-        {0.0, 0.0, 0.0},    {30.0, 0.0, 0.0},   {0.0, -45.0, 0.0},
-        {0.0, 0.0, 90.0},   {10.0, 20.0, 30.0}, {-170.0, 15.0, 120.0},
-        {89.0, -89.0, 1.0}, {45.0, 0.0, 180.0}, {-180.0, 45.0, -180.0},
+    const std::array<std::array<double, 3>, 9> angles{
+        {
+            {0.0, 0.0, 0.0},
+            {30.0, 0.0, 0.0},
+            {0.0, -45.0, 0.0},
+            {0.0, 0.0, 90.0},
+            {10.0, 20.0, 30.0},
+            {-170.0, 15.0, 120.0},
+            {89.0, -89.0, 1.0},
+            {45.0, 0.0, 180.0},
+            {-180.0, 45.0, -180.0},
+        },
     };
     for (const auto& a : angles)
     {
         Double3 out;
-        quatToEulerXYZDegrees(eulerDegreesToQuat(a[0], a[1], a[2]), out);
-        REQUIRE(approxEuler(out.x, a[0]));
-        REQUIRE(approxEuler(out.y, a[1]));
-        REQUIRE(approxEuler(out.z, a[2]));
+        quatToEulerXYZDegrees(eulerDegreesToQuat(a.at(0), a.at(1), a.at(2)), out);
+        REQUIRE(approxEuler(out.x, a.at(0)));
+        REQUIRE(approxEuler(out.y, a.at(1)));
+        REQUIRE(approxEuler(out.z, a.at(2)));
     }
 }
 
@@ -139,11 +148,11 @@ TEST_CASE("random euler round-trips (non-gimbal)", "[math]")
 
 TEST_CASE("gimbal lock (ry = +-90) extracts a stable representation", "[math]")
 {
-    for (double ry : {-90.0, 90.0})
+    for (double const ry : {-90.0, 90.0})
     {
-        for (double rx : {-30.0, 10.0, 75.0})
+        for (double const rx : {-30.0, 10.0, 75.0})
         {
-            for (double rz : {-45.0, 20.0})
+            for (double const rz : {-45.0, 20.0})
             {
                 Double3 out;
                 quatToEulerXYZDegrees(eulerDegreesToQuat(rx, ry, rz), out);

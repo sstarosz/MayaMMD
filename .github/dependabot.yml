@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  # Keep the workflow actions current — the workflows pin major tags only
+  # (actions/checkout@v7, actions/setup-python@v6, ...), so minor/patch
+  # releases and security fixes need a bump to be picked up.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+
+  # Python dev dependencies (pytest, ruff, mypy, PySide6).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps"
+    ignore:
+      # ruff is pinned deliberately: its built-in default rule set is the
+      # project's lint baseline (see [tool.ruff] in pyproject.toml), so bumps
+      # must be reviewed together with the findings they surface.
+      - dependency-name: "ruff"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]

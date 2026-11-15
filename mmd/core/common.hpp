@@ -65,7 +65,7 @@ struct Double3
 
     // Contiguous storage for the Maya API (setValue3Double, matrices, ...).
     constexpr double* data() { return &x; }
-    constexpr const double* data() const { return &x; }
+    [[nodiscard]] constexpr const double* data() const { return &x; }
 };
 
 // A `double[4]` tuple — quaternion convention {x, y, z, w}.
@@ -114,7 +114,7 @@ struct Double4
 
     // Contiguous storage for the Maya API / Bullet boundary.
     constexpr double* data() { return &x; }
-    constexpr const double* data() const { return &x; }
+    [[nodiscard]] constexpr const double* data() const { return &x; }
 };
 
 // A 4x4 ROW-vector matrix (Maya convention: p' = p * M, row-major).  Named
@@ -145,7 +145,7 @@ struct Matrix4
     constexpr double& operator()(int r, int c)
     {
         assert(r >= 0 && r < 4 && c >= 0 && c < 4);
-        switch (r * 4 + c)
+        switch ((r * 4) + c)
         {
         case 0:
             return m00;
@@ -184,7 +184,7 @@ struct Matrix4
     constexpr const double& operator()(int r, int c) const
     {
         assert(r >= 0 && r < 4 && c >= 0 && c < 4);
-        switch (r * 4 + c)
+        switch ((r * 4) + c)
         {
         case 0:
             return m00;

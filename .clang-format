@@ -14,6 +14,15 @@ ColumnLimit: 100
 # Break before braces: attach to namespace/class/function opening
 BreakBeforeBraces: Allman
 
+# Braces are mandatory on every control statement: clang-format inserts the
+# missing ones (if/else/for/while/do), and the AllowShort* options below stop
+# any one-line body or block from being collapsed back onto a single line.
+InsertBraces: true
+RemoveBracesLLVM: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+
 # Pointer alignment: left (int *ptr)
 PointerAlignment: Left
 

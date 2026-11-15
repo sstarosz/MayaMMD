@@ -41,16 +41,25 @@ inline std::string sanitizePmxName(const std::string& name)
     for (const char ch : name)
     {
         const unsigned char c = static_cast<unsigned char>(ch);
-        const bool keep = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        const bool keep =
+            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
         if (keep)
+        {
             out.push_back(ch);
+        }
         else if (!out.empty() && out.back() != '_')
+        {
             out.push_back('_');
+        }
     }
     while (!out.empty() && out.back() == '_')
+    {
         out.pop_back();
+    }
     if (!out.empty() && out[0] >= '0' && out[0] <= '9')
+    {
         out = "Model_" + out;
+    }
     return out.empty() ? "Model" : out;
 }
 
@@ -68,7 +77,9 @@ inline MString pmxNodeName(const MObject& solverNode, const MString& nameLocal,
     MString prefix = fn.name();
     const int at = prefix.rindexW("_RigidBodySolver");
     if (at >= 0)
+    {
         prefix = prefix.substringW(0, at - 1);
+    }
 
     std::string segment = fallback;
     for (const MString& name : {nameLocal, nameUniversal})
@@ -90,12 +101,18 @@ inline bool resolveSolver(const MString& target, MObject& outSolver)
 {
     MSelectionList sel;
     if (sel.add(target) != MS::kSuccess || sel.length() == 0)
+    {
         return false;
+    }
     MObject obj;
     if (sel.getDependNode(0, obj) != MS::kSuccess)
+    {
         return false;
+    }
     if (!obj.hasFn(MFn::kDependencyNode))
+    {
         return false;
+    }
 
     MFnDependencyNode fn(obj);
     if (fn.typeName() == RigidBodyNode::kNodeName)

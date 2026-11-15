@@ -27,10 +27,21 @@ namespace
 
 void requireVecClose(const btVector3& a, const btVector3& b, double tol = 1e-4)
 {
-    for (int i = 0; i < 3; ++i)
+    REQUIRE(a.x() == Approx(b.x()).margin(tol));
+    REQUIRE(a.y() == Approx(b.y()).margin(tol));
+    REQUIRE(a.z() == Approx(b.z()).margin(tol));
+}
+
+// btVector3/btMatrix3x3 convert to raw pointers, so a plain subscript reads as
+// pointer arithmetic to the guidelines checks; read the components by name.
+double basisElement(const btTransform& t, int row, int col)
+{
+    const btVector3 v = t.getBasis().getRow(row);
+    if (col == 0)
     {
-        REQUIRE(a[i] == Approx(b[i]).margin(tol));
+        return v.x();
     }
+    return col == 1 ? v.y() : v.z();
 }
 
 void requireTransformClose(const btTransform& a, const btTransform& b, double tol = 1e-4)
@@ -40,7 +51,7 @@ void requireTransformClose(const btTransform& a, const btTransform& b, double to
     {
         for (int c = 0; c < 3; ++c)
         {
-            REQUIRE(a.getBasis()[r][c] == Approx(b.getBasis()[r][c]).margin(tol));
+            REQUIRE(basisElement(a, r, c) == Approx(basisElement(b, r, c)).margin(tol));
         }
     }
 }
@@ -70,7 +81,7 @@ TEST_CASE("doubleMatrixToBtTransform converts identity", "[bridge]")
     {
         for (int c = 0; c < 3; ++c)
         {
-            REQUIRE(t.getBasis()[r][c] == Approx(r == c ? 1.0 : 0.0).margin(1e-6));
+            REQUIRE(basisElement(t, r, c) == Approx(r == c ? 1.0 : 0.0).margin(1e-6));
         }
     }
 }
@@ -98,12 +109,12 @@ TEST_CASE("storePose / poseToTransform round-trip a transform", "[bridge]")
 {
     const Double3 pos(1.0, 2.0, 3.0);
     const Double3 rot(15.0, -30.0, 45.0);
-    btTransform src = transformFromRest(pos, rot);
+    btTransform const src = transformFromRest(pos, rot);
 
     Double3 sp;
     Double4 sq = Double4(0.0, 0.0, 0.0, 1.0);
     storePose(sp, sq, src);
-    btTransform rebuilt = poseToTransform(sp, sq);
+    btTransform const rebuilt = poseToTransform(sp, sq);
     requireTransformClose(rebuilt, src);
 }
 
@@ -112,11 +123,11 @@ TEST_CASE("btTransformToRowMatrix is the exact inverse of doubleMatrixToBtTransf
     // A rotated + translated transform; round-trip must be exact.
     const Double3 pos(1.5, -2.0, 3.25);
     const Double3 rot(30.0, -45.0, 60.0);
-    btTransform src = transformFromRest(pos, rot);
+    btTransform const src = transformFromRest(pos, rot);
 
     Matrix4 row;
     btTransformToRowMatrix(src, row);
-    btTransform rebuilt = doubleMatrixToBtTransform(row);
+    btTransform const rebuilt = doubleMatrixToBtTransform(row);
     requireTransformClose(rebuilt, src, 1e-5);
 
     // The row-vector translation lands in the LAST row (Maya convention).
@@ -148,9 +159,9 @@ TEST_CASE("rowMatrixMultiply agrees with the Bullet compose", "[bridge]")
     Matrix4 out;
     rowMatrixMultiply(t, r, out);
 
-    btTransform tt = doubleMatrixToBtTransform(t);
-    btTransform rt = doubleMatrixToBtTransform(r);
-    btTransform prod = rt * tt; // column-vector: R^T * T^T
+    btTransform const tt = doubleMatrixToBtTransform(t);
+    btTransform const rt = doubleMatrixToBtTransform(r);
+    btTransform const prod = rt * tt; // column-vector: R^T * T^T
     Matrix4 prodRow;
     btTransformToRowMatrix(prod, prodRow);
     for (int rc = 0; rc < 16; ++rc)

@@ -1,0 +1,14 @@
+---
+# Catch2 assertions are macros: REQUIRE/CHECK/REQUIRE_FALSE expand to
+# `do { ... } while (false)` and to unparenthesised statement sequences, so the
+# checks below fire on every assertion rather than on project code.
+#
+# misc-use-anonymous-namespace is off for the same reason: TEST_CASE expands to
+# a `static void dummyFunctionN()` in the global namespace, which the check
+# would want moved into an anonymous namespace — it cannot see through the
+# macro, so every test case is reported.
+InheritParentConfig: true
+Checks: >-
+  -cppcoreguidelines-avoid-do-while,
+  -bugprone-macro-parentheses,
+  -misc-use-anonymous-namespace

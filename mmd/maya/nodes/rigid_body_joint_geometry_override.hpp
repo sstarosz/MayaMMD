@@ -51,6 +51,7 @@
 #include <maya/MPxGeometryOverride.h>
 #include <maya/MVector.h>
 
+#include <array>
 #include <vector>
 
 #include "joint_display.hpp"
@@ -120,7 +121,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         bool valid = false;
         std::vector<OutlineCandidate> candidates;
     };
-    BodyOutline fBodyOutlines[2];
+    std::array<BodyOutline, 2> fBodyOutlines;
     void drawIsolatedBodyOutlines(MHWRender::MUIDrawManager& drawManager,
                                   const MHWRender::MFrameContext& frameContext) const;
 
@@ -176,7 +177,7 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // joints only).
     void readJointInputs();
     void resolveSolver();
-    void cacheBodyOutlines(const MObject (&bodyShapes)[2]);
+    void cacheBodyOutlines(const std::array<MObject, 2>& bodyShapes);
 
     // What the joint permits, from the limits/springs the solver reads
     // (fills DrawState::ranges / sizes / freedom).
@@ -226,5 +227,5 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     // World X/Y/Z as unit directions in the joint's LOCAL space, cached with
     // fLocalToWorld: the markers are axis-aligned rings, built in local space so
     // they keep the hub's proportions even when the model root is scaled.
-    MVector fWorldAxisLocal[3];
+    std::array<MVector, 3> fWorldAxisLocal{};
 };

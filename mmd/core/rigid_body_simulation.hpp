@@ -25,6 +25,7 @@
 #include "common.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -37,16 +38,16 @@ class RigidBodySimulation
   public:
     /// PMX rigid-body physics mode (PMX PhysicsMode: 0 = follow bone,
     /// 1 = physics, 2 = physics + bone).
-    enum class PhysicsMode : short
+    enum class PhysicsMode : std::uint8_t
     {
-        eFollowBone = 0, // kinematic anchor — driven by the related joint
-        ePhysics = 1,    // full dynamic body
-        ePhysicsBone = 2 // dynamic, rotation-only write-back
+        eFollowBone = 0,  // kinematic anchor — driven by the related joint
+        ePhysics = 1,     // full dynamic body
+        ePhysicsBone = 2, // dynamic, rotation-only write-back
     };
 
     /// PMX collider shape.  Values match the PMX ShapeType byte and the
     /// Python ShapeType enum (data_types.py): 0 = sphere, 1 = box, 2 = capsule.
-    enum class ColliderType : short
+    enum class ColliderType : std::uint8_t
     {
         eSphere = 0,
         eBox = 1,
@@ -86,7 +87,7 @@ class RigidBodySimulation
         int resetAnchorIndex = -1; // kinematic anchor whose pose drives scrub-back reset
 
         /// FOLLOW_BONE bodies are kinematic anchors driven by their joints.
-        bool isKinematic() const { return physicsMode == PhysicsMode::eFollowBone; }
+        [[nodiscard]] bool isKinematic() const { return physicsMode == PhysicsMode::eFollowBone; }
     };
 
     /// One PMX joint (a rigid-body constraint between two bodies).
@@ -107,9 +108,9 @@ class RigidBodySimulation
         /// Field-wise equality — the Maya node uses it to detect config edits.
         bool operator==(const JointDefinition& o) const
         {
-            return bodyA == o.bodyA && bodyB == o.bodyB &&
-                   frameT.x == o.frameT.x && frameT.y == o.frameT.y && frameT.z == o.frameT.z &&
-                   frameR.x == o.frameR.x && frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
+            return bodyA == o.bodyA && bodyB == o.bodyB && frameT.x == o.frameT.x &&
+                   frameT.y == o.frameT.y && frameT.z == o.frameT.z && frameR.x == o.frameR.x &&
+                   frameR.y == o.frameR.y && frameR.z == o.frameR.z &&
                    linearMin.x == o.linearMin.x && linearMin.y == o.linearMin.y &&
                    linearMin.z == o.linearMin.z && linearMax.x == o.linearMax.x &&
                    linearMax.y == o.linearMax.y && linearMax.z == o.linearMax.z &&
@@ -129,7 +130,7 @@ class RigidBodySimulation
     /// joints are created; a joint between two bone-driven bodies exists in
     /// the world but moves nothing.  The viewport draws every joint that is
     /// not eActive as inactive.
-    enum class JointStatus : short
+    enum class JointStatus : std::uint8_t
     {
         eActive,
         eMissingBody,   // an end is unset or out of range

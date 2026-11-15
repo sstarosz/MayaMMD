@@ -114,24 +114,36 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Parse flags (safe defaults mirror the former Python writer) ──
     int index = -1;
     if (parser.isFlagSet(kIndexFlag))
+    {
         index = parser.flagArgumentInt(kIndexFlag, 0);
+    }
 
     int bodyA = 0;
     int bodyB = 0;
     if (parser.isFlagSet(kBodyAFlag))
+    {
         bodyA = parser.flagArgumentInt(kBodyAFlag, 0);
+    }
     if (parser.isFlagSet(kBodyBFlag))
+    {
         bodyB = parser.flagArgumentInt(kBodyBFlag, 0);
+    }
 
     MString nameLocal;
     MString nameUniversal;
     if (parser.isFlagSet(kNameFlag))
+    {
         nameLocal = parser.flagArgumentString(kNameFlag, 0);
+    }
     if (parser.isFlagSet(kNameUniversalFlag))
+    {
         nameUniversal = parser.flagArgumentString(kNameUniversalFlag, 0);
+    }
     MString nodeName;
     if (parser.isFlagSet(kNodeNameFlag))
+    {
         nodeName = parser.flagArgumentString(kNodeNameFlag, 0);
+    }
 
     Double3 pos;
     Double3 rot;
@@ -144,42 +156,58 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     if (parser.isFlagSet(kPositionFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             pos[i] = parser.flagArgumentDouble(kPositionFlag, i);
+        }
     }
     if (parser.isFlagSet(kRotationFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             rot[i] = parser.flagArgumentDouble(kRotationFlag, i);
+        }
     }
     if (parser.isFlagSet(kLinearMinFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             lmin[i] = parser.flagArgumentDouble(kLinearMinFlag, i);
+        }
     }
     if (parser.isFlagSet(kLinearMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             lmax[i] = parser.flagArgumentDouble(kLinearMaxFlag, i);
+        }
     }
     if (parser.isFlagSet(kAngularMinFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             amin[i] = parser.flagArgumentDouble(kAngularMinFlag, i);
+        }
     }
     if (parser.isFlagSet(kAngularMaxFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             amax[i] = parser.flagArgumentDouble(kAngularMaxFlag, i);
+        }
     }
     if (parser.isFlagSet(kLinearStiffnessFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             ls[i] = parser.flagArgumentDouble(kLinearStiffnessFlag, i);
+        }
     }
     if (parser.isFlagSet(kAngularStiffnessFlag))
     {
         for (int i = 0; i < 3; ++i)
+        {
             as[i] = parser.flagArgumentDouble(kAngularStiffnessFlag, i);
+        }
     }
 
     // ── Solver / index ──
@@ -281,11 +309,11 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     MFnDagNode solverDagFn(solverNode, &plugStat);
     MObject groupObj = solverDagFn.parent(0, &plugStat);
     const MString jointName =
-        nodeName.length() > 0 ? nodeName
-                              : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
-                                                       "Joint_" + std::to_string(n),
-                                                       kJointNodeSuffix);
-    MObject guideParent = groupObj;
+        nodeName.length() > 0
+            ? nodeName
+            : mmd::maya::pmxNodeName(solverNode, nameLocal, nameUniversal,
+                                     "Joint_" + std::to_string(n), kJointNodeSuffix);
+    const MObject& guideParent = groupObj;
     MFnTransform jointTf;
     MObject jointTransform = jointTf.create(guideParent, &plugStat);
     if (jointTransform.isNull())
@@ -440,6 +468,8 @@ MStatus RigidBodyConstraintCmd::doIt(const MArgList& args)
     int newIndex = -1;
     stat = doCreate(parser, solverNode, newIndex);
     if (stat)
+    {
         setResult(newIndex);
+    }
     return stat;
 }

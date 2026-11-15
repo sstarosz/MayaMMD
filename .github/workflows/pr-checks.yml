@@ -5,6 +5,14 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Superseded pushes on the same PR cancel their in-flight run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
   # Python — formatting, linting, type checking, unit tests
@@ -12,6 +20,7 @@ jobs:
   test-python:
     name: Python
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,12 +91,120 @@ jobs:
         shell: bash
 
   # ---------------------------------------------------------------------------
+  # C++ — clang-format gate (braces are mandatory on control statements,
+  # see .clang-format)
+  # ---------------------------------------------------------------------------
+  format-cpp:
+    name: C++ Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      # Pinned so CI matches what developers run locally — bump this together
+      # with .clang-format, since formatting output varies between versions.
+      - name: Install clang-format
+        run: pip install "clang-format==23.1.4"
+      - name: Format check
+        run: |
+          clang-format --version
+          clang-format --dry-run --Werror $(git ls-files '*.cpp' '*.h' '*.hpp')
+        shell: bash
+
+  # ---------------------------------------------------------------------------
+  # C++ — clang-tidy static analysis (profile: .clang-tidy, includes modernize-*)
+  # The whole tree is clean, so it is a hard gate: any new finding fails the
+  # job.  A second, focused run reports the lines the PR touches.
+  # ---------------------------------------------------------------------------
+  tidy-cpp:
+    name: C++ Tidy
+    needs: [test-python]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # clang-tidy-diff needs the merge base with the target branch.
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Ensure Maya SDK (cache only — CI never downloads the DevKit)
+        run: python scripts/ci/strip_maya_sdk.py ensure --version 2026
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      - name: Install system dependencies (Qt runtime + OpenGL/X11 dev headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libxi-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxt-dev \
+            libxmu-dev
+
+      # Pinned to the same LLVM release as the clang-format job above.
+      - name: Install clang-tidy
+        run: pip install "clang-tidy==23.1.4"
+
+      - name: Configure (emits compile_commands.json for clang-tidy)
+        run: cmake --preset maya2026-release -DBUILD_TESTS=ON
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Lint C++ (whole tree, blocking)
+        run: |
+          clang-tidy --version
+          clang-tidy -p out/build/maya2026-release --quiet \
+            -warnings-as-errors='*,-clang-diagnostic-*' \
+            $(git ls-files '*.cpp')
+        shell: bash
+
+      # Focused view of the same rules: only lines this PR touches, so a
+      # reviewer sees the findings this change introduced.  clang-diagnostic-*
+      # is left out because compiler diagnostics are the C++ Build job's
+      # business.
+      - name: Lint changed lines (blocking)
+        if: github.event_name == 'pull_request'
+        run: |
+          tidy_diff=$(command -v clang-tidy-diff.py || command -v clang-tidy-diff || true)
+          [ -n "${tidy_diff}" ] || { echo "::error::clang-tidy-diff not found on PATH"; exit 1; }
+          git diff -U0 --diff-filter=d "origin/${GITHUB_BASE_REF}...HEAD" -- '*.cpp' \
+            | "${tidy_diff}" -p1 -path out/build/maya2026-release -quiet \
+                -iregex '.*\.(cpp|cc|cxx)' \
+                -warnings-as-errors='*,-clang-diagnostic-*'
+        shell: bash
+
+  # ---------------------------------------------------------------------------
   # C++ — compile the .mll plugin (no Maya required for compilation)
   # ---------------------------------------------------------------------------
   build-cpp:
     name: C++ Build (${{ matrix.os }})
     needs: [test-python]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -149,4 +266,82 @@ jobs:
 
       - name: Run C++ unit tests
         run: ctest --preset default --output-on-failure -E "maya-integration"
+        shell: bash
+
+  # ---------------------------------------------------------------------------
+  # C++ — AddressSanitizer + UndefinedBehaviorSanitizer over the Maya-free core
+  # tests (Bullet/math code with manual indexing and pose round-trips).
+  # Third-party Bullet libs come from vcpkg prebuilt, so only project code is
+  # instrumented.
+  # ---------------------------------------------------------------------------
+  test-sanitizers:
+    name: C++ Sanitizers (ASan+UBSan)
+    needs: [test-python]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Memory errors abort the test binary (ctest fails, job fails).
+      ASAN_OPTIONS: abort_on_error=1:detect_leaks=0
+      # UB is reported with a stack trace but does not abort yet — the run step
+      # counts "runtime error:" lines and surfaces them as a warning.
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Ensure Maya SDK (cache only — CI never downloads the DevKit)
+        run: python scripts/ci/strip_maya_sdk.py ensure --version 2026
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      - name: Install system dependencies (Qt runtime + OpenGL/X11 dev headers)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            libx11-dev \
+            libxi-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxt-dev \
+            libxmu-dev
+
+      - name: Configure (ASan + UBSan)
+        run: |
+          cmake --preset maya2026-release -DBUILD_TESTS=ON \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+        env:
+          MAYAMMD_SDK_CACHE_URL: ${{ secrets.MAYAMMD_SDK_CACHE_URL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+
+      - name: Build core tests
+        run: cmake --build out/build/maya2026-release --config Release --target mmd_core_tests
+        shell: bash
+
+      - name: Run core tests under sanitizers
+        run: |
+          set -o pipefail
+          ctest --preset default -E "maya-integration" 2>&1 | tee sanitizers.log
+          ub=$(grep -c 'runtime error:' sanitizers.log || true)
+          echo "UBSan runtime errors: ${ub}"
+          if [ "${ub}" != "0" ]; then
+            echo "::warning::UBSan reported ${ub} runtime error(s) — see the log above"
+          fi
         shell: bash

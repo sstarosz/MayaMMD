@@ -31,7 +31,7 @@ using namespace mmd::core::physics_math;
 namespace
 {
 // RigidBodySimulation stepping constants (see initialize()/step()).
-constexpr int kSolverIterations = 10;         // Bullet's default, as MMD uses
+constexpr int kSolverIterations = 10; // Bullet's default, as MMD uses
 // Sub-steps one step() may take.  Sized so a whole kMaxStepTime span is
 // simulated exactly (0.5 s / (1/60 s) = 30), which is what makes the adapter's
 // rebuild threshold (maxStepSpan) mean "the step would truncate here": a
@@ -272,8 +272,9 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
 
         if (b.def.isKinematic())
         {
-            body->setCollisionFlags(body->getCollisionFlags() |
-                                    btCollisionObject::CF_KINEMATIC_OBJECT);
+            const auto flags = static_cast<unsigned int>(body->getCollisionFlags()) |
+                               static_cast<unsigned int>(btCollisionObject::CF_KINEMATIC_OBJECT);
+            body->setCollisionFlags(static_cast<int>(flags));
             body->setActivationState(DISABLE_DEACTIVATION);
             body->setGravity(btVector3(0, 0, 0));
             // Record the anchor's REST pose (world space) for scrub-back.
@@ -297,8 +298,9 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
         // (1 << 15 = 0x8000) does not fit a signed short and truncates to
         // -32768 — the same limitation MMD itself has, noted so a future
         // "fix" doesn't change it silently.
-        const short group =
-            static_cast<short>(1 << ((b.def.groupId >= 0 ? b.def.groupId : 0) & 0x0F));
+        const auto groupShift =
+            static_cast<unsigned int>(b.def.groupId >= 0 ? b.def.groupId : 0) & 0x0FU;
+        const auto group = static_cast<short>(1U << groupShift);
         mWorld->addRigidBody(body.get(), group, static_cast<short>(b.def.mask));
         mRigidBodies[i] = std::move(body);
     }
@@ -312,9 +314,8 @@ void RigidBodySimulation::RigidBodySimulationImpl::createBodies()
     // at its fresh-world rest pose on every rewind).  The reset offset itself
     // is derived fresh in resetDynamicBodies from the RAW anchor worlds
     // (anchorCurrent * anchorRest^-1 * bodyRest), so nothing is stored here.
-    for (size_t i = 0; i < mBodies.size(); ++i)
+    for (auto& b : mBodies)
     {
-        Body& b = mBodies[i];
         if (b.def.isKinematic() || !b.def.enabled || b.def.resetAnchorIndex < 0 ||
             b.def.resetAnchorIndex >= static_cast<int>(mAnchorRest.size()))
         {
@@ -413,9 +414,9 @@ bool RigidBodySimulation::RigidBodySimulationImpl::setKinematicPose(size_t ancho
         const btVector3 p0 = prev.getBasis().getColumn(0);
         const btVector3 c1 = t.getBasis().getColumn(1);
         const btVector3 p1 = prev.getBasis().getColumn(1);
-        if (d.length2() > btScalar(kAnchorMoveDistEpsSq) ||
-            c0.dot(p0) < btScalar(1.0) - btScalar(kAnchorMoveRotEps) ||
-            c1.dot(p1) < btScalar(1.0) - btScalar(kAnchorMoveRotEps))
+        if (d.length2() > static_cast<btScalar>(kAnchorMoveDistEpsSq) ||
+            c0.dot(p0) < static_cast<btScalar>(1.0) - static_cast<btScalar>(kAnchorMoveRotEps) ||
+            c1.dot(p1) < static_cast<btScalar>(1.0) - static_cast<btScalar>(kAnchorMoveRotEps))
         {
             moved = true;
         }
@@ -434,7 +435,8 @@ void RigidBodySimulation::RigidBodySimulationImpl::step(double dt)
         return;
     }
     dt = std::clamp(dt, 0.0, kMaxStepTime); // guard against huge jumps / negative dt
-    mWorld->stepSimulation(btScalar(dt), kMaxSubSteps, btScalar(kFixedDt));
+    mWorld->stepSimulation(static_cast<btScalar>(dt), kMaxSubSteps,
+                           static_cast<btScalar>(kFixedDt));
 }
 
 double RigidBodySimulation::maxStepSpan()
@@ -703,7 +705,9 @@ bool RigidBodySimulation::attachmentPose(size_t bodyIndex, const Double3& frameT
 {
     if (!mImpl->mWorld || bodyIndex >= mImpl->mRigidBodies.size() ||
         !mImpl->mRigidBodies[bodyIndex])
+    {
         return false;
+    }
     const auto& body = mImpl->mBodies[bodyIndex].def;
     const btTransform local =
         transformFromRest(body.restPos, body.restRot).inverse() * transformFromRest(frameT, frameR);
@@ -719,15 +723,23 @@ RigidBodySimulation::jointStatus(const JointDefinition& joint,
     const auto valid = [&](long index)
     { return index >= 0 && index < static_cast<long>(bodies.size()); };
     if (!valid(joint.bodyA) || !valid(joint.bodyB))
+    {
         return JointStatus::eMissingBody;
+    }
     if (joint.bodyA == joint.bodyB)
+    {
         return JointStatus::eSameBody;
+    }
     const BodyDefinition& a = bodies[joint.bodyA];
     const BodyDefinition& b = bodies[joint.bodyB];
     if (!a.enabled || !b.enabled)
+    {
         return JointStatus::eDisabledBody;
+    }
     if (a.isKinematic() && b.isKinematic())
+    {
         return JointStatus::eBothKinematic;
+    }
     return JointStatus::eActive;
 }
 
