@@ -33,12 +33,12 @@ maya.standalone.initialize()
 # ── Project / benchmark imports ─────────────────────────────────────────────
 from tests.integration.test_helpers import load_plugin
 
-_SUITE_CHOICES = ["pmx-load", "vmd-load", "vpd-load"]
+_SUITE_CHOICES = ["pmx-load", "vmd-load", "vpd-load", "rigid-body"]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Maya benchmark runner (pmx-load | vmd-load | vpd-load)."
+        description="Maya benchmark runner (pmx-load | vmd-load | vpd-load | rigid-body)."
     )
     parser.add_argument(
         "suite",
@@ -51,6 +51,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         default=None,
         help="Substring filter for model paths (case-insensitive).",
+    )
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=None,
+        help="Frames to measure per model (rigid-body suite only).",
     )
     return parser.parse_args(argv)
 
@@ -94,6 +100,15 @@ def main() -> int:
         report = run_vpd_loading_benchmarks(
             model_filter=args.model,
         )
+    elif args.suite == "rigid-body":
+        from tests.benchmarks.maya.rigid_body_simulation_benchmark import (
+            run_rigid_body_benchmarks,
+        )
+
+        benchmark_kwargs = {"model_filter": args.model}
+        if args.frames is not None:
+            benchmark_kwargs["frames"] = args.frames
+        report = run_rigid_body_benchmarks(**benchmark_kwargs)
     else:
         print(f"ERROR: Unknown suite '{args.suite}'")
         return 1

@@ -143,6 +143,101 @@ ctest --preset default --output-on-failure
 
 See `.vscode/tasks.json` for pre-configured VS Code tasks for all of the above.
 
+### Performance: the rigid-body playback benchmark
+
+Playback cost is dominated by the rigid-body solver, and the solver's cost is
+dominated by how many plugs it reads through the DG per frame. Before changing
+the solver or the body/joint nodes, measure:
+
+#### What the work so far actually bought
+
+Measured on `GirlsFrontline TololoDefault` (298 bodies, 408 joints), same
+machine, `rigid-body` benchmark:
+
+| Measure                                   | Before | After |
+| ----------------------------------------- | -----: | ----: |
+| `sim_frame` (timeline move + solver pull)  | 23–29 ms | **13–16 ms** |
+| `solver` (`compute()` alone)               | 17–19 ms | **7–8 ms** |
+
+This machine's run-to-run variance is large (±40% on a cold run), so compare
+interleaved runs and medians, never single samples.
+
+The two root causes, in the order they were found and worth re-checking if
+this regresses:
+
+1. `readInputs()` re-read every body's and joint's ~30 attributes through
+   `findPlug` on every frame (9.3 ms of a 16.3 ms compute).  The solver now
+   caches its inputs behind `rigidBodyEditSerial()`.
+2. **The expensive one:** the solver was evaluated ~5× per frame because reading
+   the kinematic anchors (`bodyAnchorWorld`) re-dirtied it mid-frame.  Each of
+   those evaluations re-read all 25 anchors and rewrote all 298 outputs.  The
+   anchors are now read once per `rigidBodyAnchorSerial()` and shared
+   (`World::anchorRaw`), and `compute()` skips the world transition entirely
+   when nothing can have changed.
+
+What is left, in priority order: `compute()` still runs ~5× per frame, but only
+one of those runs the physics (measured over 20 frames: 1 world rebuild, 19
+steps, and 40 evaluations that found nothing to do). The other four are output
+re-writes of all 298 bodies, ~1.7 ms each — writing only the outputs Maya
+actually asked for is the next real win.
+
+Approaches already tried and **rejected with evidence** — do not repeat them:
+
+- Bullet deactivation / letting cloth sleep: MMD cloth is constraint-chained to
+  always-active kinematic bodies, so Bullet merges them into one island and
+  nothing ever sleeps.  Identical poses and identical residual motion with and
+  without it.
+- Disabling cached playback: `pmxRigidBodyNode` is a stateful solver, so Maya's
+  Cached Playback drops to Safe Mode by design.
+
+To re-measure:
+
+```bash
+# One representative model (~300 bodies, ~400 joints), 60 measured frames
+python tests/benchmarks/run_benchmarks.py rigid-body
+
+# Other models / longer runs
+python tests/benchmarks/run_benchmarks.py rigid-body --model Miku --frames 120
+```
+
+The suite reports per-frame milliseconds (median over frames):
+
+| Column      | Meaning                                                          |
+| ----------- | ---------------------------------------------------------------- |
+| `sim_frame` | one playback frame: timeline move + solver pull                   |
+| `solver`    | the solver's `compute()` alone (input reads + Bullet + write-back) |
+| `settle`    | the same with the skeleton held past the motion's end (cloth at rest) |
+| `fps`       | frames per second implied by `sim_frame`                          |
+| `setup`     | model import + motion apply (cache/warm-up sanity)                |
+
+Maya standalone has no viewport, so the geometry overrides and
+`boundingBox()` are not covered — this measures the simulation half of the
+frame budget. Each run also writes a JSON report to
+`test-logs/benchmarks/` for trend comparison.
+
+Three invariants keep the per-frame reads small, and a change that breaks them
+shows up as a large `solver` regression:
+
+- `pmxRigidBodyNode` caches its PMX-verbatim inputs and re-reads them only when
+  `mmd::maya::rigidBodyEditSerial()` moves (a reported config edit) or a body /
+  joint connection changed. `bodyAnchorWorld` is per-frame data, not config.
+- The kinematic anchors (`bodyAnchorWorld`) are read once per
+  `mmd::maya::rigidBodyAnchorSerial()` and shared by every evaluation of that
+  frame (`World::anchorRaw`). Reading one is a cross-node plug evaluation, the
+  test rig has 25 of them, and the solver is evaluated several times per frame
+  — once per output batch Maya pulls. Use `noteRigidBodyAnchorEdit()` from
+  anything that can move an anchor.
+- `compute()` returns to the output write without touching the world when
+  nothing can have changed: no input edit (`inputsStale`), the same time, and an
+  unchanged anchor serial. Skipping this fast path is what made playback pay for
+  the world transition several times per frame.
+
+Inside the solver, the remaining per-frame cost is the Bullet step itself plus
+one `bodyAnchorWorld` read per kinematic body — both real simulation work.
+Adding per-frame attribute reads (through `MPlug`) anywhere in `compute()` is
+what to avoid: a single cross-node plug read costs more than the whole
+input-cache bookkeeping.
+
 ## Project Structure
 
 ```

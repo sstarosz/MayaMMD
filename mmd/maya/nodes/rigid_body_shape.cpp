@@ -381,6 +381,30 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
 }
 
 // ===========================================================================
+// Edit notification — the solver caches its PMX-verbatim inputs
+// ===========================================================================
+// Every body field except the kinematic anchor is CONFIGURATION: when one
+// changes, the owning solver must read its inputs again (that is what the
+// attributeAffects(input, aSolver) chain is for — this just says WHICH kind of
+// dirt arrived).  The anchor (bodyAnchorWorld) follows the animated bone and
+// dirties this node on every frame of playback; it is read separately by the
+// solver and must not force a full input re-read.
+MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
+{
+    if (plug.attribute() == aBodyAnchorWorld)
+    {
+        // The bone moved this body's anchor: the solver's anchor cache must be
+        // refreshed (see mmd::maya::rigidBodyAnchorSerial).
+        mmd::maya::noteRigidBodyAnchorEdit();
+    }
+    else
+    {
+        mmd::maya::noteRigidBodyConfigEdit();
+    }
+    return MPxLocatorNode::setDependentsDirty(plug, affected);
+}
+
+// ===========================================================================
 // Bounding box (rest collider, object space)
 // ===========================================================================
 MBoundingBox RigidBodyShape::boundingBox() const
