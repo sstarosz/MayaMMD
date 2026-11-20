@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <array>
+#include <mutex>
 
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
@@ -275,14 +276,37 @@ MStatus RigidBodyJoint::initialize()
 // ===========================================================================
 // Every input can change the drawing (the solver's bodies through solverStep,
 // the frame, the limits, the draw mode), so any dirty plug invalidates it.
+// The two plugs that are NOT configuration are reported to the solver's input
+// cache differently: solverStep follows every solver step, and aFrameMatrix
+// follows the frame (which is compared by value in resolveView — a moving
+// model root dirties it every frame without any edit).
 MStatus RigidBodyJoint::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
+    // Two dirts are not configuration: solverStep follows every solver step,
+    // and frameMatrix follows the joint frame (which a dragged or animated
+    // model root moves on every frame).  The frame gets its own serial so the
+    // display re-reads just the frame and keeps its cached configuration.
+    if (plug.attribute() == aFrameMatrix)
+    {
+        mmd::maya::noteRigidBodyFrameEdit();
+    }
+    else if (plug.attribute() != aSolverStep)
+    {
+        mmd::maya::noteRigidBodyConfigEdit();
+    }
     MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }
 
 // The Evaluation Manager evaluates the node only when an input changed (each
-// solver step reaches solverStep), so every evaluation invalidates it.
+// solver step reaches solverStep), so every evaluation invalidates it.  This is
+// what keeps the hub on body A: its pose is baked into the vertex data, and VP2
+// re-populates only for an object it considers dirty.
+//
+// NOTE: the second argument of setGeometryDrawDirty() must stay at its default
+// (true).  Passing false — "only the vertex data changed, keep the topology" —
+// reads like exactly what a moving hub needs, but VP2 then stops calling
+// populateGeometry altogether and the hubs freeze at their last pose.
 MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
                                        const MEvaluationNode& evaluationNode,
                                        PostEvaluationType evalType)
@@ -300,10 +324,16 @@ MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
 // Everything the joint display needs from the owning solver, in one place:
 // both RigidBodyJoint::boundingBox() and the viewport override resolve their
 // solver, frames and hub radius through this.
+//
+// The CONFIGURATION half (the joint's own fields, its frame, the linked
+// bodies, the constraint status, the hub radius) is cached per node: it
+// changes only on a reported edit or when the joint frame moves, so the
+// display path — which runs for every joint on every playback frame — stops
+// re-reading all of it through the DG.  The LIVE half (attachment and body
+// frames) is resolved every call; that is the part that moves per solver step.
 RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node,
                                                              bool evaluateSolver)
 {
-    SolverView view;
     // Reading the solverStep input evaluates the owning solver (outStep ->
     // solverStep), so the world queried below is the current one.  The
     // bounding box opts out — see the header.
@@ -315,7 +345,125 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
             solverStep.asDouble();
         }
     }
+    if (const auto* self = dynamic_cast<RigidBodyJoint*>(MFnDependencyNode(node).userNode()))
+    {
+        return self->resolveView(); // solverStep already pulled above
+    }
+    return resolveViewUncached(node);
+}
 
+RigidBodyJoint::SolverView RigidBodyJoint::resolveView() const
+{
+    const MObject node = thisMObject();
+    SolverView view;
+    const std::scoped_lock guard(fViewCacheMutex);
+    ViewCache& cache = fViewCache;
+
+    // Both dirts are serials, not DG reads: a joint frame move (its own or the
+    // model root's) only refreshes the frame, everything else refreshes the
+    // whole cached configuration.
+    const std::uint64_t configSerial = mmd::maya::rigidBodyEditSerial();
+    const std::uint64_t frameSerial = mmd::maya::rigidBodyFrameSerial();
+    const bool configStale = !cache.valid || cache.serial != configSerial;
+    // A joint whose frameMatrix is not driven carries no move signal, so its
+    // frame is always read (exactly like the uncached resolver).
+    const bool frameStale = configStale || !cache.frameTracked || cache.frameSerial != frameSerial;
+
+    if (configStale)
+    {
+        cache.solverObject = MObject::kNullObj;
+        MPlugArray destinations;
+        MPlug(node, aSolver).connectedTo(destinations, false, true);
+        if (destinations.length() != 0)
+        {
+            cache.solverObject = destinations[0].node();
+        }
+        cache.serial = configSerial;
+        cache.definition = mmd::core::RigidBodySimulation::JointDefinition{};
+        cache.active = false;
+        cache.hubRadius = mmd::core::joint_display::kFallbackHubRadius;
+        cache.solverUser = nullptr;
+        const MPlug framePlug(node, aFrameMatrix);
+        cache.frameTracked = !framePlug.isNull() && framePlug.isDestination();
+    }
+    // Resolve the solver once per configuration: this is the per-joint hot path.
+    if (cache.solverUser != nullptr && !cache.solverHandle.isAlive())
+    {
+        cache.solverUser = nullptr; // the solver node was deleted
+        cache.solverObject = MObject::kNullObj;
+    }
+    if (cache.solverUser == nullptr && !cache.solverObject.isNull())
+    {
+        cache.solverUser =
+            dynamic_cast<RigidBodyNode*>(MFnDependencyNode(cache.solverObject).userNode());
+        cache.solverHandle = MObjectHandle(cache.solverObject);
+    }
+    view.solverObject = cache.solverObject;
+    view.solver = cache.solverUser;
+    if (view.solver == nullptr)
+    {
+        cache.valid = false;
+        return view;
+    }
+    if (view.solver->hubRadius() <= 0.0)
+    {
+        // The solver has no world yet (nothing to cache: body indices and the
+        // hub radius only exist once it has one).  Resolve as before.
+        cache.valid = false;
+        return resolveViewUncached(node);
+    }
+
+    if (configStale || frameStale)
+    {
+        // Both halves of the refresh need the group space; it is a solver
+        // constant unless the model root moved, which moves the frame too.
+        const MMatrix groupWorldInverse =
+            RigidBodyNode::groupWorldMatrix(view.solverObject).inverse();
+        if (configStale)
+        {
+            if (!readJointDefinition(node, groupWorldInverse, cache.definition))
+            {
+                // No readable frame (no parent transform): the limits were
+                // still read — keep them, exactly like the uncached resolver.
+                cache.valid = false;
+                view.definition = cache.definition;
+                return view;
+            }
+            cache.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
+            cache.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
+            cache.active = view.solver->jointStatus(cache.definition) ==
+                           RigidBodySimulation::JointStatus::eActive;
+            const MPlug scale(view.solverObject, RigidBodyNode::aJointDisplayScale);
+            const double displayScale = scale.isNull() ? 1.0 : std::max(0.05, scale.asDouble());
+            const double model = view.solver->hubRadius();
+            cache.hubRadius =
+                (model > 0.0 ? model : mmd::core::joint_display::kFallbackHubRadius) * displayScale;
+            cache.boundsValid = false; // the corners follow the radius and the limits
+        }
+        else if (!readJointFrame(node, groupWorldInverse, cache.definition.frameT,
+                                 cache.definition.frameR))
+        {
+            cache.valid = false;
+            return view;
+        }
+        cache.frameSerial = frameSerial;
+        cache.valid = true;
+    }
+
+    view.definition = cache.definition;
+    view.active = cache.active;
+    view.hubRadius = cache.hubRadius;
+    view.serial = cache.serial;
+    view.live = view.solver->jointViewportFrames(cache.definition, view.bodyAWorld, view.bodyBWorld,
+                                                 view.attachmentA, view.attachmentB);
+    return view;
+}
+
+// Uncached resolution (the node has no RigidBodyJoint instance behind it, which
+// only happens for non-plugin nodes) — same data, no cache.
+RigidBodyJoint::SolverView RigidBodyJoint::resolveViewUncached(const MObject& node)
+{
+    SolverView view;
     MPlugArray destinations;
     MPlug(node, aSolver).connectedTo(destinations, false, true);
     if (destinations.length() == 0)
@@ -358,9 +506,44 @@ RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node
 // far more often than the solver must run (see resolveSolverView), and one
 // stale-by-an-evaluation hull still contains the drawn hub.  updateDG() is
 // what evaluates the solver, and it is what dirties this drawing.
-MBoundingBox RigidBodyJoint::boundingBox() const
+// The bounding-box corners of a joint, in the joint's OWN frame: the linear
+// guide limits expanded by the marker padding.  They depend only on the limits
+// and the hub radius, so they are computed once per configuration and reused.
+namespace
+{
+std::array<MPoint, 8>
+guideCornerTemplate(double hubRadius, const mmd::core::RigidBodySimulation::JointDefinition& def)
 {
     using namespace mmd::core::joint_display;
+    // The symbolic guides reach about 2.25 dial radii from the hub (spring
+    // zigzag, free-axis arrows, the Z dial with its notch and needles); a
+    // translation region adds its physical extent on top.
+    const double pad = std::max(hubRadius, 2.25 * guideSizes(hubRadius).radius);
+    const Ranges ranges = describe(def);
+    std::array<MPoint, 8> corners;
+    for (unsigned int corner = 0; corner < 8; ++corner)
+    {
+        MPoint p;
+        for (unsigned int axis = 0; axis < 3; ++axis)
+        {
+            const Range& range = ranges.linear.at(axis);
+            const bool upper = ((corner >> axis) & 1U) != 0U;
+            const bool free = range.kind() == RangeKind::Free;
+            double limit = 0.0;
+            if (!free)
+            {
+                limit = upper ? std::max(range.upper, 0.0) : std::min(range.lower, 0.0);
+            }
+            p[axis] = upper ? limit + pad : limit - pad;
+        }
+        corners.at(corner) = p;
+    }
+    return corners;
+}
+} // namespace
+
+MBoundingBox RigidBodyJoint::boundingBox() const
+{
     const MObject node = thisMObject();
     MDagPath path;
     if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
@@ -370,35 +553,25 @@ MBoundingBox RigidBodyJoint::boundingBox() const
     const MMatrix worldToLocal = path.inclusiveMatrixInverse();
 
     const SolverView view = resolveSolverView(node, /*evaluateSolver=*/false);
-    const double hub = view.hubRadius;
     // Without a live world the hub sits at the joint's own transform.
     const MMatrix& attachmentA = view.live ? view.attachmentA : path.inclusiveMatrix();
 
-    // The symbolic guides reach about 2.25 dial radii from the hub (spring
-    // zigzag, free-axis arrows, the Z dial with its notch and needles); a
-    // translation region adds its physical extent on top.
-    const double pad = std::max(hub, 2.25 * guideSizes(hub).radius);
-    const Ranges ranges = describe(view.definition);
-    MBoundingBox box;
-    for (unsigned int corner = 0; corner < 8; ++corner)
+    // This runs for every DRAWN joint on every frame — Maya asks for bounds to
+    // cull — so the invariant half (the guide ranges) comes from the cached
+    // template and only the transform below is per frame.
+    std::array<MPoint, 8> corners;
+    if (!boundsTemplate(corners))
     {
-        MPoint p;
-        for (unsigned int axis = 0; axis < 3; ++axis)
-        {
-            const Range& range = ranges.linear.at(axis);
-            const bool free = range.kind() == RangeKind::Free;
-            double coordinate = 0.0;
-            if (((corner >> axis) & 1U) != 0U)
-            {
-                coordinate = (free ? 0.0 : std::max(range.upper, 0.0)) + pad;
-            }
-            else
-            {
-                coordinate = (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
-            }
-            p[axis] = coordinate;
-        }
-        box.expand(p * attachmentA * worldToLocal);
+        corners = guideCornerTemplate(view.hubRadius, view.definition);
+    }
+
+    // Both matrices are affine, so one product carries all eight corners into
+    // the node's local space.
+    const MMatrix guideToLocal = attachmentA * worldToLocal;
+    MBoundingBox box;
+    for (const MPoint& corner : corners)
+    {
+        box.expand(corner * guideToLocal);
     }
     if (view.live)
     {
@@ -408,6 +581,26 @@ MBoundingBox RigidBodyJoint::boundingBox() const
         }
     }
     return box;
+}
+
+// The joint's own-frame bounding corners, cached per configuration and filled
+// on first use, so the eight points are derived once per edit instead of once
+// per frame.
+bool RigidBodyJoint::boundsTemplate(std::array<MPoint, 8>& corners) const
+{
+    const std::scoped_lock guard(fViewCacheMutex);
+    ViewCache& cache = fViewCache;
+    if (!cache.boundsValid)
+    {
+        if (!cache.valid)
+        {
+            return false; // no resolved configuration yet
+        }
+        cache.boundsCorners = guideCornerTemplate(cache.hubRadius, cache.definition);
+        cache.boundsValid = true;
+    }
+    corners = cache.boundsCorners;
+    return true;
 }
 
 // ===========================================================================

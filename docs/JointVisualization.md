@@ -180,15 +180,48 @@ Each joint's hidden `solverStep` input is connected to its solver's
 joints, and reading it makes the solver evaluate before the joint reads the
 simulated poses. The joint node then tells Viewport 2.0 its drawing is out of
 date: from `setDependentsDirty` under DG evaluation, and from `postEvaluation`
-under the Evaluation Manager, which propagates no dirty during playback. A
-joint redraws only when something it draws changes; a camera move costs
-nothing.
+under the Evaluation Manager, which propagates no dirty during playback. The
+hub's pose is baked into its vertex data, so that dirty is what keeps it on
+body A. A camera move costs nothing.
 
 At a paused frame the solver also re-runs at once when you drag a bone, edit
 a joint or body attribute, or move a joint's transform: each body and joint
 input feeds its node's `solver` message plug. A joint's transform reaches it
 through the hidden `frameMatrix` input, which `pmxRigidBodyConstraint`
 connects to the transform's `worldMatrix`.
+
+### What is read per frame (and what is cached)
+
+Reading a plug through the DG is the expensive part of a redraw, and the
+display path runs for every joint on every playback frame — so the static
+half of what a joint draws is cached and the moving half is not:
+
+| Data                                              | Refreshed                                        |
+| ------------------------------------------------- | ------------------------------------------------ |
+| Attachment / body frames (they move per step)      | every `updateDG` and every `boundingBox`         |
+| Limits, stiffness, body links, status, hub radius  | only when a config edit is reported              |
+| The joint frame (`frameMatrix`)                    | only when the frame changes (its own serial)     |
+| Draw mode, freedom summary, guide sizes            | only when a config edit is reported              |
+
+A *config edit* is reported by `mmd::maya::noteRigidBodyConfigEdit()`
+(`maya_utils.hpp`): `pmxRigidBodyShape` and `pmxRigidBodyJoint` bump a
+scene-wide serial from `setDependentsDirty` for every plug except the two that
+move without an edit — `solverStep` (every solver step) and `frameMatrix`
+(which has its own `noteRigidBodyFrameEdit()` serial, so a moved frame
+re-reads only the frame: the limits / bodies / hub radius stay cached).
+`pmxRigidBodyNode` uses the config serial to decide whether it has to read the
+PMX-verbatim body/joint inputs again; the per-frame kinematic anchor
+(`bodyAnchorWorld`) is read separately and never forces that re-read. Adding a
+new joint or body attribute therefore needs no extra bookkeeping:
+`attributeAffects(input, aSolver)` plus the generic serial covers it.
+
+The geometry override follows the same rule: `SolverView::serial` carries the
+config serial the cached limits were resolved at, and
+`RigidBodyJointGeometryOverride` re-classifies (the `drawMode` plug read, the
+freedom summary and the guide sizes) only when that serial moves. The hub
+itself is re-baked every frame — its attachment moves — but into reused scratch
+streams, straight from the shared unit hub and without the `MPoint * MMatrix`
+homogeneous divide.
 
 ## Jumping in time
 

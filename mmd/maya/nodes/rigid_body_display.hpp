@@ -43,6 +43,7 @@
 #include <maya/MVector.h>
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "rigid_body_shape.hpp"
@@ -144,6 +145,12 @@ bool isSelectedJoint(const MObject& joint);
 
 // Maya's selection state of a DAG path: the lead object or an active one.
 bool isSelected(const MDagPath& path);
+
+// Bumped whenever something that decides an object's display status changed:
+// the selection, or the viewport state that follows it (isolate select).  Cache
+// isSelected() across a redraw with it — the query is a viewport round trip, and
+// every joint asks for it on every frame.
+std::uint64_t displayStatusSerial();
 
 // Maya's wireframe colour for the path, with palette::kSelectionFallback when
 // the colour would be too dark to see.

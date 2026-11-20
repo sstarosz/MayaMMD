@@ -52,6 +52,7 @@
 #include <maya/MVector.h>
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "joint_display.hpp"
@@ -70,10 +71,12 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
 
     MHWRender::DrawAPI supportedDrawAPIs() const override;
 
-    // Update only when the joint is dirtied (see the .cpp): the hub follows
-    // body A because each solver step dirties the joint, not by polling
-    // every refresh.
+    // False: the hub geometry only changes when the hub radius does, and that
+    // edit marks the drawing dirty.  A hard `true` would re-upload every
+    // joint's vertex buffers on every refresh, camera tumbles included.
     bool requiresGeometryUpdate() const override;
+    // False: the item state changes only on edits, which mark the drawing
+    // dirty (a hard `true` does not by itself make VP2 re-prepare the object).
     bool requiresUpdateRenderItems(const MDagPath& dagPath) const override;
 
     void updateDG() override;
@@ -143,6 +146,10 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
         // selected because a parent group is: only a direct pick draws the
         // overlay.
         bool picked = false;
+        // The configuration serial the definition / ranges / sizes were
+        // resolved at (0 = no cached solver view), so the classification can
+        // be skipped while nothing was edited.
+        std::uint64_t serial = 0;
         // Limits, stiffness and bodies as the solver reads them (angles in
         // radians); the frame is only filled for the solver query.
         mmd::core::RigidBodySimulation::JointDefinition definition;
@@ -212,6 +219,22 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     Plugs fPlugs;
     MObject fSolver; // owning pmxRigidBodyNode (resolved in updateDG)
     DrawState fState;
+    // The serial fState.drawMode / ranges / sizes / freedom were classified
+    // at (see SolverView::serial).
+    bool fClassified = false;
+    std::uint64_t fClassifiedSerial = 0;
+    // Cached isSelected() answer for the draw phase, valid while the selection
+    // and isolate state are unchanged (rigid_body_display::displayStatusSerial).
+    bool fSelected = false;
+    bool fSelectedValid = false;
+    std::uint64_t fSelectedSerial = 0;
+    // Scratch streams for populateGeometry, so the per-frame hub rebake does
+    // not allocate (it runs for every joint on every playback frame).
+    std::vector<float> fScratchPositions;
+    std::vector<float> fScratchNormals;
+    // The render items' indices from the last updateRenderItems(), so the
+    // per-frame lookup is one name check instead of a search.
+    std::array<int, 4> fItemIndex{{-1, -1, -1, -1}};
 
     // Body centres and attachment points in the node's LOCAL space (the space
     // the render item's geometry is built in — VP2 applies the joint's DAG matrix).
@@ -219,6 +242,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
     MPoint fLocalB;
     MPoint fAttachmentA;
     MPoint fAttachmentB;
+    // Attachment A's frame mapped into the joint node's local space: the frame
+    // the hub is drawn in (populateGeometry bakes it into the vertices).
     MMatrix fHubToLocal;
     // The joint's DAG matrix and its inverse, both cached in
     // updateRenderItems(): the draw phase reads no DAG state.

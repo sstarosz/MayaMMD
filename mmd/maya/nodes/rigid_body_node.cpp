@@ -1385,10 +1385,15 @@ bool RigidBodyNode::jointViewportFrames(const RigidBodySimulation::JointDefiniti
     }
     const auto poseMatrix = [](const RigidBodySimulation::Pose& pose)
     {
-        MTransformationMatrix tm;
-        tm.setRotationQuaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w);
-        tm.setTranslation(MVector(pose.pos.x, pose.pos.y, pose.pos.z), MSpace::kTransform);
-        return tm.asMatrix();
+        // Rotation from the quaternion, translation in the last ROW (Maya's
+        // matrices are row-vector).  MTransformationMatrix would do the same
+        // through scale/shear/setRotation/setTranslation and validate each
+        // step — this runs four times per joint per frame.
+        MMatrix out = MQuaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w).asMatrix();
+        out(3, 0) = pose.pos.x;
+        out(3, 1) = pose.pos.y;
+        out(3, 2) = pose.pos.z;
+        return out;
     };
     bodyA = poseMatrix(mWorld->sim.bodyPose(joint.bodyA));
     bodyB = poseMatrix(mWorld->sim.bodyPose(joint.bodyB));

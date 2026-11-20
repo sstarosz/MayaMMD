@@ -50,6 +50,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -63,6 +64,10 @@ namespace mmd::maya::rigid_body_display
 {
 namespace
 {
+// Drives isSelected() caching (see displayStatusSerial): the display status of
+// an object cannot change without a selection or a model-editor change.
+std::atomic<std::uint64_t> gDisplayStatusSerial{1};
+
 struct BodyRole
 {
     MObjectHandle shape;
@@ -204,6 +209,7 @@ void selectionChanged(void* /*unused*/)
     {
         return;
     }
+    ++gDisplayStatusSerial;
     State& s = *gState;
     // Isolate-select membership follows the selection.
     s.viewFilters.clear();
@@ -257,6 +263,7 @@ void editorChanged(void* /*unused*/)
     {
         return;
     }
+    ++gDisplayStatusSerial;
     // Isolate select on/off and "show children" belong to the editor state.
     gState->viewFilters.clear();
     for (MItDependencyNodes it(MFn::kPluginLocatorNode); !it.isDone(); it.next())
@@ -439,6 +446,11 @@ bool isSelected(const MDagPath& path)
     return status == MHWRender::kLead || status == MHWRender::kActive;
 }
 
+std::uint64_t displayStatusSerial()
+{
+    return gDisplayStatusSerial.load(std::memory_order_relaxed);
+}
+
 MColor selectionColor(const MDagPath& path)
 {
     const MColor sel = MHWRender::MGeometryUtilities::wireframeColor(path);
@@ -550,6 +562,27 @@ void fillVertexBuffer(MHWRender::MVertexBuffer* buffer, const std::vector<float>
                     sizeof(float));
     buffer->commit(ptr);
 }
+
+// Fill one vertex buffer with zeros (a solid-colour item needs no real UVs — a
+// zero-filled stream satisfies any texture semantic the shader declares).
+void fillZeroVertexBuffer(MHWRender::MVertexBuffer* buffer, unsigned int numVerts, int dimension,
+                          const MHWRender::MVertexBufferDescriptor& desc)
+{
+    if (buffer == nullptr || numVerts == 0 || desc.dataType() != MHWRender::MGeometry::kFloat ||
+        desc.dimension() != dimension)
+    {
+        return;
+    }
+    void* ptr = buffer->acquire(numVerts, /*writeOnly=*/true);
+    if (ptr == nullptr)
+    {
+        return;
+    }
+    std::memset(ptr, 0,
+                static_cast<std::size_t>(numVerts) * static_cast<std::size_t>(dimension) *
+                    sizeof(float));
+    buffer->commit(ptr);
+}
 } // namespace
 
 void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
@@ -561,9 +594,6 @@ void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
     {
         return;
     }
-    // A solid-colour item needs no real UVs — a zeroed float2 stream satisfies
-    // any texture semantic the shader declares.
-    const std::vector<float> dummyUvs(static_cast<std::size_t>(numVerts) * 2, 0.0F);
     const auto fill = [&](const MHWRender::MVertexBufferDescriptor& desc)
     {
         switch (desc.semantic())
@@ -575,7 +605,7 @@ void fillMeshBuffers(const MHWRender::MGeometryRequirements& requirements,
             fillVertexBuffer(data.createVertexBuffer(desc), normals, numVerts, 3, desc);
             break;
         case MHWRender::MGeometry::kTexture:
-            fillVertexBuffer(data.createVertexBuffer(desc), dummyUvs, numVerts, 2, desc);
+            fillZeroVertexBuffer(data.createVertexBuffer(desc), numVerts, 2, desc);
             break;
         default:
             break;

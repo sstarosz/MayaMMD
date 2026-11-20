@@ -833,6 +833,56 @@ def test_joint_bounds_follow_the_hub():
     return True
 
 
+def test_joint_display_cache_refreshes_on_edit():
+    """The joint's cached display data refreshes when it is edited.
+
+    ``RigidBodyJoint::resolveSolverView`` caches the static half of the joint
+    display (limits, linked bodies, status, hub radius) and refreshes it only
+    when a configuration edit is reported — otherwise every joint would re-read
+    every attribute and its frame matrix on every playback frame.  This guards
+    the invalidation: an edit at a paused frame must reach the bounds, both
+    through a joint attribute (limits) and through the solver's display scale.
+    """
+    setup_test_environment()
+    node = _create_node()
+    group = cmds.createNode("transform", name="cacheBodies")
+    _connect_time(node)
+    p0, _p1 = _set_welded_chain(node, group)
+    joint = cmds.ls(type="pmxRigidBodyJoint")[0]
+
+    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    cmds.currentTime(1)
+    cmds.getAttr(f"{node}.outTranslate[1]")
+    rest = cmds.exactWorldBoundingBox(joint)
+    rest_width = rest[3] - rest[0]
+
+    # A free 4-unit linear range along X: the joint's bounds must grow by ~4.
+    cmds.setAttr(f"{joint}.jointLinearMin", 0.0, 0.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointLinearMax", 4.0, 0.0, 0.0, type="double3")
+    ranged = cmds.exactWorldBoundingBox(joint)
+    assert_true(
+        (ranged[3] - ranged[0]) > rest_width + 3.0,
+        f"limits edit should widen the bounds ({rest_width:.2f} -> "
+        f"{ranged[3] - ranged[0]:.2f})",
+    )
+
+    # The solver's display scale feeds the cached hub radius; doubling it must
+    # widen the bounds too (the hub and its guides grow with it).
+    scale = cmds.getAttr(f"{node}.jointDisplayScale")
+    cmds.setAttr(f"{node}.jointDisplayScale", scale * 2.0)
+    scaled = cmds.exactWorldBoundingBox(joint)
+    assert_true(
+        (scaled[3] - scaled[0]) > (ranged[3] - ranged[0]) + 0.05,
+        f"display scale edit should widen the bounds "
+        f"({ranged[3] - ranged[0]:.2f} -> {scaled[3] - scaled[0]:.2f})",
+    )
+    print(
+        f"✓ joint bounds followed a limits edit and a display-scale edit: "
+        f"{rest_width:.2f} -> {ranged[3] - ranged[0]:.2f} -> {scaled[3] - scaled[0]:.2f}"
+    )
+    return True
+
+
 def test_model_root_move_keeps_guides_on_bodies():
     """A collider guide stays on its body when the model root moves.
 
@@ -1554,6 +1604,10 @@ _TESTS = [
         test_repeated_solver_pulls_do_not_step_physics,
     ),
     ("Joint Bounds Follow the Hub", test_joint_bounds_follow_the_hub),
+    (
+        "Joint Display Cache Refreshes on Edit",
+        test_joint_display_cache_refreshes_on_edit,
+    ),
     (
         "Model Root Move Keeps Guides on Bodies",
         test_model_root_move_keeps_guides_on_bodies,

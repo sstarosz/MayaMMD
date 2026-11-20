@@ -37,6 +37,7 @@
 #include <maya/MTransformationMatrix.h>
 #include <maya/MTypes.h>
 #include <maya/MVector.h>
+#include <maya/MViewport2Renderer.h>
 
 #include "maya_utils.hpp"
 #include "rigid_body_simulation.hpp"
@@ -389,6 +390,11 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
 // dirt arrived).  The anchor (bodyAnchorWorld) follows the animated bone and
 // dirties this node on every frame of playback; it is read separately by the
 // solver and must not force a full input re-read.
+//
+// The same filter decides when the COLLIDER drawing is out of date: the
+// collider's own geometry depends on the shape's fields only (its pose comes
+// from the guide transform, which VP2 carries without rebuilding anything), so
+// this is what lets the geometry override skip the per-frame rebuild.
 MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
     if (plug.attribute() == aBodyAnchorWorld)
@@ -400,6 +406,9 @@ MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affect
     else
     {
         mmd::maya::noteRigidBodyConfigEdit();
+        // Default topologyChanged: see the note in RigidBodyJoint::postEvaluation
+        // about why false leaves the geometry stale.
+        MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
     }
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }

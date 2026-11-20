@@ -27,17 +27,13 @@
 namespace mmd::maya
 {
 // ── Rigid-body edit serial ───────────────────────────────────────────────
-// Bumped whenever a rigid body's CONFIGURATION is edited (any PMX field, the
-// body wiring) — but NOT by the per-frame kinematic anchor, which changes on
-// every animated frame.  The solver caches its PMX-verbatim inputs and re-reads
-// them only when this serial moved: re-reading every body's and joint's
+// Bumped whenever a rigid body's or joint's CONFIGURATION is edited (any PMX
+// field, the joint frame, the body/joint wiring) — but NOT by the per-frame
+// kinematic anchor, which changes on every animated frame.  The solver caches
+// its PMX-verbatim inputs and the joints cache their display data, and both
+// re-read only when this serial moved: re-reading every body's and joint's
 // attributes through the DG on every evaluation was the largest single cost
 // of playback.
-//
-// Body edits need a serial of their own because pmxRigidBodyShape dirties
-// bodyShapes[i] for the anchor on every frame too, so that dirt alone cannot
-// tell a configuration edit from a moved bone.  A joint carries no per-frame
-// input, so any jointShapes[] dirt is a real edit and needs no serial.
 //
 // One scene-wide counter is enough — edits are user-speed, and a re-read is
 // always correct (it just costs a rebuild's worth of DG reads).  Atomic
@@ -45,6 +41,7 @@ namespace mmd::maya
 namespace detail
 {
 inline std::atomic<std::uint64_t> rigidBodyEditSerial{0};
+inline std::atomic<std::uint64_t> rigidBodyFrameSerial{0};
 inline std::atomic<std::uint64_t> rigidBodyAnchorSerial{0};
 } // namespace detail
 
@@ -56,6 +53,21 @@ inline std::atomic<std::uint64_t> rigidBodyAnchorSerial{0};
 inline void noteRigidBodyConfigEdit() noexcept
 {
     detail::rigidBodyEditSerial.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Serial for JOINT FRAME movement only (a moved joint transform, or a moved
+// model root which moves every joint frame with it).  Kept apart from the
+// config serial so a joint display can refresh just its frame — recomputing
+// the frame is a DAG matrix evaluation, while the limits / bodies / hub radius
+// it caches alongside are untouched by a move and must not be re-read.
+[[nodiscard]] inline std::uint64_t rigidBodyFrameSerial() noexcept
+{
+    return detail::rigidBodyFrameSerial.load(std::memory_order_relaxed);
+}
+
+inline void noteRigidBodyFrameEdit() noexcept
+{
+    detail::rigidBodyFrameSerial.fetch_add(1, std::memory_order_relaxed);
 }
 
 // Movement of the kinematic anchors — the bone worlds the rigid bodies follow.
