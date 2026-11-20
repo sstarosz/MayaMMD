@@ -738,6 +738,60 @@ def test_paused_frame_edits_rerun_solver():
     return True
 
 
+def test_repeated_solver_pulls_do_not_step_physics():
+    """Pulling the solver several times per frame must not advance the sim.
+
+    The viewport pulls a solver's outputs many times per frame — every guide
+    transform, every joint, every display refresh.  Each of those re-evaluates
+    ``compute()``, and an extra evaluation used to re-read every kinematic
+    anchor and (at a paused frame) ride the dynamic bodies along by an identity
+    move, which zeroed their velocities.  The solver now returns early when
+    nothing can have changed: same time, no input edit, no reported anchor
+    movement.
+
+    The same pull count must therefore give the same result as a single pull.
+    """
+    setup_test_environment()
+    node = _create_node()
+    group = cmds.createNode("transform", name="repeatBodies")
+    _connect_time(node)
+    p0, p1 = _set_welded_chain(node, group)
+    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
+    joint = cmds.ls(type="pmxRigidBodyJoint")[0]
+    # Free the weld along Y so the body moves under gravity.
+    cmds.setAttr(f"{joint}.jointLinearMin", 0.0, 1.0, 0.0, type="double3")
+    cmds.setAttr(f"{joint}.jointLinearMax", 0.0, -1.0, 0.0, type="double3")
+
+    def pull(repeats):
+        return [cmds.getAttr(f"{node}.outTranslate[1]")[0] for _ in range(repeats)]
+
+    cmds.currentTime(1)
+    pull(1)
+    for frame in range(2, 13):  # play: one evaluation per frame
+        cmds.currentTime(frame)
+        pull(1)
+    single = pull(1)[-1][1]
+
+    # Same scene state, but six pulls on every frame: the extra evaluations
+    # must not step (or damp) the simulation, so the body lands in the same
+    # place.
+    cmds.currentTime(1)
+    pull(1)
+    for frame in range(2, 13):
+        cmds.currentTime(frame)
+        pull(6)
+    repeated = pull(1)[-1][1]
+
+    assert_true(
+        abs(single - repeated) < 1e-6,
+        f"repeated pulls must not change the simulation "
+        f"(single={single:.6f}, repeated={repeated:.6f})",
+    )
+    print("âś“ six solver pulls per frame match a single pull")
+    return True
+
+
 def test_joint_bounds_follow_the_hub():
     """A joint is bounded around its LIVE hub, not its rest frame.
 
@@ -1494,6 +1548,10 @@ _TESTS = [
     (
         "Paused-Frame Joint and Body Edits Re-run Solver",
         test_paused_frame_edits_rerun_solver,
+    ),
+    (
+        "Repeated Solver Pulls Do Not Step Physics",
+        test_repeated_solver_pulls_do_not_step_physics,
     ),
     ("Joint Bounds Follow the Hub", test_joint_bounds_follow_the_hub),
     (

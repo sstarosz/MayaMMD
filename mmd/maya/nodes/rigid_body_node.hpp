@@ -26,11 +26,13 @@
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MObjectHandle.h>
+#include <maya/MPlug.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -75,6 +77,10 @@ class RigidBodyNode : public MPxLocatorNode
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
+    // Tracks which inputs were dirtied: element dirts on bodyShapes[] /
+    // jointShapes[] are only re-checked (they arrive every frame for the
+    // kinematic anchors), everything else is a configuration edit.
+    MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
     // This node owns a STATEFUL Bullet world that advances in compute().
     // Cached Playback must NOT treat its outputs as pure functions of its
     // inputs — disable caching so the node is re-evaluated every frame.
@@ -197,6 +203,17 @@ class RigidBodyNode : public MPxLocatorNode
         [[nodiscard]] long indexOf(const MObject& shape) const;
     };
 
+    // The PMX-verbatim inputs of one evaluation: what the solver reads from
+    // the scene's body/joint nodes.  Not the node's state — compute() keeps a
+    // copy (mInputs) so an unedited frame does not have to read it again.
+    struct Inputs
+    {
+        std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies;
+        BodyShapes bodyShapes; // the shape node of each body
+        std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
+        mmd::core::Double3 gravity;
+    };
+
     // The full per-node simulation state: the Bullet world plus the config,
     // wiring, and derived write-back offsets it was built with, bundled and
     // replaced ATOMICALLY on rebuild.  A plain data record — public only so
@@ -219,6 +236,13 @@ class RigidBodyNode : public MPxLocatorNode
         // every moved anchor shares the same world move, the character was
         // repositioned (not animated) and the dynamic chains ride along.
         std::vector<MMatrix> lastAnchorWorld;
+        // The raw anchor worlds READ at `anchorSerial`, in kinematic order.
+        // Reading an anchor is a cross-node plug evaluation and the solver is
+        // evaluated several times per frame, so the reads are shared between
+        // the evaluations of one frame: while rigidBodyAnchorSerial() is
+        // unchanged nothing in the scene can have moved an anchor.
+        std::uint64_t anchorSerial = 0;
+        std::vector<MMatrix> anchorRaw;
         // The kinematic anchors' REST worlds (the joint's composed rest world
         // from the stamped pmxRest* attributes, or the body's own rest world
         // for a boneless pin), in kinematic order — the model-constant "rest"
@@ -233,6 +257,15 @@ class RigidBodyNode : public MPxLocatorNode
         // solved bone world as a joint-local pose.  Invalid for bodies with no
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
+        // Per-anchor constants for the per-frame anchor update (body-indexed;
+        // a null plug = not a kinematic anchor, identity = no rest offset):
+        //   anchorPlug   = the shape's bodyAnchorWorld plug
+        //   anchorOffset = bodyRest * anchorRest^-1 (the raw rigid attachment)
+        // Resolving both at build turns the per-frame work into one plug read
+        // and one matrix multiply per anchor, instead of looking the plug up
+        // and rebuilding/inverting the rest matrices on every frame.
+        std::vector<MPlug> anchorPlug;
+        std::vector<MMatrix> anchorOffset;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };
@@ -243,4 +276,24 @@ class RigidBodyNode : public MPxLocatorNode
     // World, which atomically replaces this one — the node never mutates
     // simulation state piecemeal.
     std::optional<World> mWorld;
+
+    // ── Input cache ───────────────────────────────────────────────────────
+    // The PMX-verbatim inputs are read through the DG, which is expensive
+    // (~9 ms per frame on a 300-body model: one findPlug per attribute per
+    // body and joint).  They only change when something is EDITED, so they
+    // are cached and re-read when an edit is reported:
+    //   * mmd::maya::rigidBodyEditSerial() moves when any body or joint
+    //     reports a configuration edit (the per-frame kinematic anchor is
+    //     deliberately not one), and
+    //   * a bodyShapes[]/jointShapes[] element dirt whose connection no longer
+    //     matches the cached shape (a re-bind or a deleted body) is structural.
+    Inputs mInputs;
+    std::uint64_t mInputsSerial = 0;
+    bool mInputsValid = false;
+    std::vector<bool> mBodySlotDirty;  // bodyShapes[i] dirtied since the last read
+    std::vector<bool> mJointSlotDirty; // jointShapes[i] dirtied since the last read
+
+    // True when the inputs must be read again: a reported config edit, an
+    // element whose connection changed, or no cached inputs.
+    [[nodiscard]] bool inputsStale(const MObject& node) const;
 };

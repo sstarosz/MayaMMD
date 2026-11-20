@@ -34,6 +34,8 @@
 
 #include <maya/MBoundingBox.h>
 #include <maya/MObject.h>
+#include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
@@ -77,6 +79,11 @@ class RigidBodyShape : public MPxLocatorNode
 
     // MPxNode overrides — data-holder only (no compute()).
     MBoundingBox boundingBox() const override; // object-space rest collider box
+    // Reports configuration edits to the solver (mmd::maya::noteRigidBodyConfigEdit).
+    // The kinematic anchor is excluded: it moves on every animated frame and
+    // carries no configuration, so re-reading the solver's inputs for it would
+    // defeat the solver's input cache once per frame per moving body.
+    MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
 
     // Registration helpers
     static void* creator();

@@ -20,6 +20,9 @@ Usage:
     # Run only the VPD loading benchmark
     python tests/benchmarks/run_benchmarks.py vpd-load
 
+    # Run only the rigid-body playback benchmark (physics, per-frame cost)
+    python tests/benchmarks/run_benchmarks.py rigid-body
+
     # … with model filtering
     python tests/benchmarks/run_benchmarks.py pmx-load --model Tololo
 
@@ -71,6 +74,7 @@ _SUITE_CHOICES = [
     "pmx-load",
     "vmd-load",
     "vpd-load",
+    "rigid-body",
 ]
 
 
@@ -99,12 +103,14 @@ def run_vpd_parse_benchmark() -> bool:
 def _run_maya_suite(
     suite: str,
     model_filter: str | None,
+    frames: int | None = None,
 ) -> bool:
     """Run a Maya-based benchmark suite via mayapy.
 
     Args:
         suite:        Sub-suite name to pass to run_maya_benchmarks.py.
         model_filter: Optional model name filter.
+        frames:       Optional frame count (rigid-body suite only).
 
     Returns:
         True on success.
@@ -114,6 +120,8 @@ def _run_maya_suite(
 
     if model_filter:
         cmd.extend(["--model", model_filter])
+    if frames is not None:
+        cmd.extend(["--frames", str(frames)])
 
     print(f"  Invoking mayapy: {' '.join(cmd)}")
     print()
@@ -164,6 +172,14 @@ def run_vpd_load_benchmark(
     return _run_maya_suite("vpd-load", model_filter)
 
 
+def run_rigid_body_benchmark(
+    model_filter: str | None,
+    frames: int | None = None,
+) -> bool:
+    """Run the rigid-body playback benchmark via mayapy."""
+    return _run_maya_suite("rigid-body", model_filter, frames)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -186,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Substring filter for model paths (case-insensitive).",
     )
+    parser.add_argument(
+        "--frames",
+        type=int,
+        default=None,
+        help="Frames to measure per model (rigid-body suite only).",
+    )
     return parser
 
 
@@ -202,6 +224,7 @@ def main() -> int:
             ("pmx-load", "PMX Loading"),
             ("vmd-load", "VMD Loading"),
             ("vpd-load", "VPD Loading"),
+            ("rigid-body", "Rigid Body Playback"),
         ]
     else:
         suite_names = {
@@ -211,6 +234,7 @@ def main() -> int:
             "pmx-load": "PMX Loading",
             "vmd-load": "VMD Loading",
             "vpd-load": "VPD Loading",
+            "rigid-body": "Rigid Body Playback",
         }
         suites_to_run = [(args.suite, suite_names.get(args.suite, args.suite))]
 
@@ -231,6 +255,10 @@ def main() -> int:
             success = run_vmd_load_benchmark(model_filter=args.model)
         elif suite_key == "vpd-load":
             success = run_vpd_load_benchmark(model_filter=args.model)
+        elif suite_key == "rigid-body":
+            success = run_rigid_body_benchmark(
+                model_filter=args.model, frames=args.frames
+            )
 
         results_log.append((suite_label, success))
         all_passed = all_passed and success

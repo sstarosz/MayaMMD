@@ -18,11 +18,62 @@
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
+#include <atomic>
+#include <cstdint>
+
 #include "common.hpp"
 #include "physics_math.hpp"
 
 namespace mmd::maya
 {
+// ── Rigid-body edit serial ───────────────────────────────────────────────
+// Bumped whenever a rigid body's CONFIGURATION is edited (any PMX field, the
+// body wiring) — but NOT by the per-frame kinematic anchor, which changes on
+// every animated frame.  The solver caches its PMX-verbatim inputs and re-reads
+// them only when this serial moved: re-reading every body's and joint's
+// attributes through the DG on every evaluation was the largest single cost
+// of playback.
+//
+// Body edits need a serial of their own because pmxRigidBodyShape dirties
+// bodyShapes[i] for the anchor on every frame too, so that dirt alone cannot
+// tell a configuration edit from a moved bone.  A joint carries no per-frame
+// input, so any jointShapes[] dirt is a real edit and needs no serial.
+//
+// One scene-wide counter is enough — edits are user-speed, and a re-read is
+// always correct (it just costs a rebuild's worth of DG reads).  Atomic
+// because Maya evaluates nodes on parallel threads.
+namespace detail
+{
+inline std::atomic<std::uint64_t> rigidBodyEditSerial{0};
+inline std::atomic<std::uint64_t> rigidBodyAnchorSerial{0};
+} // namespace detail
+
+[[nodiscard]] inline std::uint64_t rigidBodyEditSerial() noexcept
+{
+    return detail::rigidBodyEditSerial.load(std::memory_order_relaxed);
+}
+
+inline void noteRigidBodyConfigEdit() noexcept
+{
+    detail::rigidBodyEditSerial.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Movement of the kinematic anchors — the bone worlds the rigid bodies follow.
+// Reading one costs a cross-node plug evaluation, and the solver used to read
+// every anchor twice on every evaluation (once to detect a paused-frame pose
+// change, again inside the advance), several times per frame: that was the
+// largest per-frame cost of playback.  The solver caches the values it read and
+// refreshes them only when this serial moves.
+[[nodiscard]] inline std::uint64_t rigidBodyAnchorSerial() noexcept
+{
+    return detail::rigidBodyAnchorSerial.load(std::memory_order_relaxed);
+}
+
+inline void noteRigidBodyAnchorEdit() noexcept
+{
+    detail::rigidBodyAnchorSerial.fetch_add(1, std::memory_order_relaxed);
+}
+
 // A joint's stored PMX bone index (pmxBoneIndex), or -1.  The bone builder
 // stamps it on every joint, and the DAG IS the PMX bone hierarchy — shared
 // by pmxRigidBody (resolveBone) and pmxRigidBodyNode (readBodyData's message +
