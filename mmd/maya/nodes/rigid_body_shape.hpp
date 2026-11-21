@@ -27,6 +27,10 @@
  * shown differently.  The node has no compute() — the solver pulls the
  * attributes.
  *
+ * The node stores AUTHORED PMX data only.  The per-frame kinematic anchor is a
+ * real input of the solver (`pmxRigidBodyNode.anchorWorlds[]`, fed from the
+ * related joint's worldMatrix), so it is absent here.
+ *
  * Registered by MayaMMD.mll.
  */
 
@@ -79,10 +83,10 @@ class RigidBodyShape : public MPxLocatorNode
 
     // MPxNode overrides — data-holder only (no compute()).
     MBoundingBox boundingBox() const override; // object-space rest collider box
-    // Reports configuration edits to the solver (mmd::maya::noteRigidBodyConfigEdit).
-    // The kinematic anchor is excluded: it moves on every animated frame and
-    // carries no configuration, so re-reading the solver's inputs for it would
-    // defeat the solver's input cache once per frame per moving body.
+    // Reports a configuration edit to the solver (mmd::maya::noteRigidBodyConfigEdit):
+    // the solver pulls these fields out of band and must re-read them.
+    // Per-frame anchor movement is NOT routed through here — it is a real
+    // solver input (pmxRigidBodyNode.anchorWorlds[]).
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
 
     // Registration helpers
@@ -104,7 +108,6 @@ class RigidBodyShape : public MPxLocatorNode
                                        // FOLLOW_BONE kinematic-anchor binding and the
                                        // write-back parent/reset chain (resolved by the
                                        // solver via the joint DAG).
-    static MObject aBodyAnchorWorld;   // matrix — kinematic-anchor input (joint.worldMatrix[0])
     static MObject aBodyEnabled;       // bool (custom) — disabled bodies are skipped by the solver
     static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
     static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none

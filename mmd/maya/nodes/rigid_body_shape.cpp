@@ -14,6 +14,10 @@
  * to the body's CURRENT pose each frame.  The collider is drawn by a
  * geometry override registered for `drawdb/geometry/pmxRigidBodyShape` (not
  * here).
+ *
+ * The body's runtime INPUTS are not stored here: the kinematic anchor lives on
+ * the solver (`pmxRigidBodyNode.anchorWorlds[]`, fed straight from the related
+ * joint's worldMatrix), so this node holds authored PMX data only.
  */
 
 #include "rigid_body_shape.hpp"
@@ -24,7 +28,6 @@
 #include <maya/MFnData.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
-#include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
@@ -111,7 +114,6 @@ const MTypeId RigidBodyShape::kTypeId(0x0011C106); // unique Maya node type id
 // ===========================================================================
 MObject RigidBodyShape::aSolver;
 MObject RigidBodyShape::aBodyJoint;
-MObject RigidBodyShape::aBodyAnchorWorld;
 MObject RigidBodyShape::aBodyEnabled;
 MObject RigidBodyShape::aBodyNameLocal;
 MObject RigidBodyShape::aBodyNameUniversal;
@@ -149,7 +151,6 @@ MStatus RigidBodyShape::initialize()
     MFnTypedAttribute tAttr;
     MFnEnumAttribute eAttr;
     MFnMessageAttribute mAttr;
-    MFnMatrixAttribute matAttr;
     MStatus stat;
 
     // --- solver back-pointer (message) ---
@@ -161,12 +162,6 @@ MStatus RigidBodyShape::initialize()
     aBodyJoint = mAttr.create("bodyJoint", "bjnt", &stat);
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(false);
-
-    // --- kinematic-anchor input: the bone world the body follows ---
-    aBodyAnchorWorld = matAttr.create("bodyAnchorWorld", "baw", MFnMatrixAttribute::kDouble, &stat);
-    MMD_CHECK_MSTATUS(stat);
-    matAttr.setStorable(true);
-    matAttr.setKeyable(false);
 
     // --- body data (mirrors the old pmxRigidBodyNode bodies[] children) ---
     aBodyEnabled = makeNumeric(nAttr, "bodyEnabled", "ben", MFnNumericData::kBoolean, 1.0);
@@ -258,8 +253,6 @@ MStatus RigidBodyShape::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyJoint);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyAnchorWorld);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyEnabled);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyNameLocal);
@@ -296,17 +289,17 @@ MStatus RigidBodyShape::initialize()
     stat = addAttribute(aDrawMode);
     MMD_CHECK_MSTATUS(stat);
 
-    // A bone drag or a body edit at a paused frame must re-run the solver.
-    // The solver pulls the body through the message array (not a data
-    // connection), so the dirt needs an explicit path: input -> solver
-    // (message) -> pmxRigidBodyNode.bodyShapes[i] -> its outputs.  Without
-    // it the bodies (and the joint hubs on them) only update when time
-    // changes.  The guide transform is NOT an input: the solver drives it.
+    // A body edit must re-run the solver.  The solver pulls the body through
+    // the message array (not a data connection), so the dirt needs an explicit
+    // path: input -> solver (message) -> pmxRigidBodyNode.bodyShapes[i] -> its
+    // outputs.  Without it the bodies (and the joint hubs on them) only update
+    // when time changes.  The guide transform is NOT an input: the solver
+    // drives it, and so is the kinematic anchor (a real solver input, fed
+    // straight from the related joint).
     std::vector<MObject> inputs = {
-        aBodyAnchorWorld,   aBodyEnabled,        aBodyGroupId,     aBodyColliderType,
-        aBodyShapeSize,     aBodyRestTranslate,  aBodyRestRotate,  aBodyMass,
-        aBodyLinearDamping, aBodyAngularDamping, aBodyRestitution, aBodyFriction,
-        aBodyPhysicsMode,
+        aBodyEnabled,        aBodyGroupId,     aBodyColliderType, aBodyShapeSize,
+        aBodyRestTranslate,  aBodyRestRotate,  aBodyMass,         aBodyLinearDamping,
+        aBodyAngularDamping, aBodyRestitution, aBodyFriction,     aBodyPhysicsMode,
     };
     inputs.insert(inputs.end(), aBodyMaskGroup.begin(), aBodyMaskGroup.end());
     for (const MObject& input : inputs)
@@ -384,32 +377,23 @@ bool RigidBodyShape::readBodyDefinition(const MObject& node,
 // ===========================================================================
 // Edit notification — the solver caches its PMX-verbatim inputs
 // ===========================================================================
-// Every body field except the kinematic anchor is CONFIGURATION: when one
-// changes, the owning solver must read its inputs again (that is what the
+// Every field on this node is CONFIGURATION: when one changes, the owning
+// solver must read its inputs again (that is what the
 // attributeAffects(input, aSolver) chain is for — this just says WHICH kind of
-// dirt arrived).  The anchor (bodyAnchorWorld) follows the animated bone and
-// dirties this node on every frame of playback; it is read separately by the
-// solver and must not force a full input re-read.
+// dirt arrived).  The per-frame kinematic anchor is NOT one of them: it is a
+// real input of the solver (`anchorWorlds[]`, fed straight from the related
+// joint), so it never dirties this node at all.
 //
-// The same filter decides when the COLLIDER drawing is out of date: the
+// The same notification decides when the COLLIDER drawing is out of date: the
 // collider's own geometry depends on the shape's fields only (its pose comes
 // from the guide transform, which VP2 carries without rebuilding anything), so
 // this is what lets the geometry override skip the per-frame rebuild.
 MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
-    if (plug.attribute() == aBodyAnchorWorld)
-    {
-        // The bone moved this body's anchor: the solver's anchor cache must be
-        // refreshed (see mmd::maya::rigidBodyAnchorSerial).
-        mmd::maya::noteRigidBodyAnchorEdit();
-    }
-    else
-    {
-        mmd::maya::noteRigidBodyConfigEdit();
-        // Default topologyChanged: see the note in RigidBodyJoint::postEvaluation
-        // about why false leaves the geometry stale.
-        MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
-    }
+    mmd::maya::noteRigidBodyConfigEdit();
+    // Default topologyChanged: see the note in RigidBodyJoint::postEvaluation
+    // about why false leaves the geometry stale.
+    MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }
 

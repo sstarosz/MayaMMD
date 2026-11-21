@@ -150,6 +150,22 @@ class RigidBodyNode : public MPxLocatorNode
     // Unconnected slots remain disabled placeholders to preserve output indices.
     static MObject aBodyShapes;
 
+    // Per-body kinematic-anchor input: aAnchorWorlds[i] <- the related joint's
+    // worldMatrix[0] (a real DATA connection, wired by pmxRigidBody), read
+    // through the data block.  This is the solver's only per-frame input, and
+    // it lives HERE rather than on the shape so the shape stays authored PMX
+    // data: a bone move dirties this plug, Maya carries it to the outputs, and
+    // the data block caches the value across the solver pulls of one frame.
+    // A body with no related joint stores its pinned rest world here (the
+    // pmxRigidBody command sets the element value); dynamic bodies leave the
+    // element unset — their anchors are never read.
+    //
+    // A bone that ALSO drives a dynamic body's write-back cannot feed this
+    // array: joint.worldMatrix -> anchorWorlds -> outTranslate ->
+    // joint.translate would be a DG cycle, so the command pins the anchor
+    // instead (see pmxRigidBody).
+    static MObject aAnchorWorlds;
+
     // Per-joint message array: aJointShapes[i] -> the pmxRigidBodyJoint node
     // for PMX joint i (PMX order — one selectable/movable locator per joint).
     // The solver pulls every joint's PMX-verbatim data from the connected
@@ -230,19 +246,12 @@ class RigidBodyNode : public MPxLocatorNode
         // (joint_display::hubRadiusForLinks); recomputed with every rebuild.
         double hubRadius = 0.0;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
-        // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
+        // The kinematic anchors' RAW world matrices (anchorWorlds[i], BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.
         // Used to detect a whole-skeleton rigid drag at a paused frame: when
         // every moved anchor shares the same world move, the character was
         // repositioned (not animated) and the dynamic chains ride along.
         std::vector<MMatrix> lastAnchorWorld;
-        // The raw anchor worlds READ at `anchorSerial`, in kinematic order.
-        // Reading an anchor is a cross-node plug evaluation and the solver is
-        // evaluated several times per frame, so the reads are shared between
-        // the evaluations of one frame: while rigidBodyAnchorSerial() is
-        // unchanged nothing in the scene can have moved an anchor.
-        std::uint64_t anchorSerial = 0;
-        std::vector<MMatrix> anchorRaw;
         // The kinematic anchors' REST worlds (the joint's composed rest world
         // from the stamped pmxRest* attributes, or the body's own rest world
         // for a boneless pin), in kinematic order — the model-constant "rest"
@@ -257,14 +266,11 @@ class RigidBodyNode : public MPxLocatorNode
         // solved bone world as a joint-local pose.  Invalid for bodies with no
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
-        // Per-anchor constants for the per-frame anchor update (body-indexed;
-        // a null plug = not a kinematic anchor, identity = no rest offset):
-        //   anchorPlug   = the shape's bodyAnchorWorld plug
-        //   anchorOffset = bodyRest * anchorRest^-1 (the raw rigid attachment)
-        // Resolving both at build turns the per-frame work into one plug read
-        // and one matrix multiply per anchor, instead of looking the plug up
-        // and rebuilding/inverting the rest matrices on every frame.
-        std::vector<MPlug> anchorPlug;
+        // Per-anchor constant for the per-frame anchor update (body-indexed;
+        // identity = no rest offset): bodyRest * anchorRest^-1, the raw rigid
+        // attachment.  Resolved at build so the per-frame work is one data
+        // block read and one matrix multiply per anchor, instead of rebuilding
+        // and inverting the rest matrices every frame.
         std::vector<MMatrix> anchorOffset;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
@@ -283,8 +289,8 @@ class RigidBodyNode : public MPxLocatorNode
     // body and joint).  They only change when something is EDITED, so they
     // are cached and re-read when an edit is reported:
     //   * mmd::maya::rigidBodyEditSerial() moves when any body or joint
-    //     reports a configuration edit (the per-frame kinematic anchor is
-    //     deliberately not one), and
+    //     reports a configuration edit (the per-frame kinematic anchors are a
+    //     separate, real input — aAnchorWorlds[], not part of this cache), and
     //   * a bodyShapes[]/jointShapes[] element dirt whose connection no longer
     //     matches the cached shape (a re-bind or a deleted body) is structural.
     Inputs mInputs;

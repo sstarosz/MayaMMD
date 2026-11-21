@@ -163,6 +163,16 @@ def _read_output(node: str, index: int) -> tuple[float, float, float]:
     return tuple(cmds.getAttr(f"{node}.outTranslate[{index}]")[0])
 
 
+def _set_anchor(node: str, index: int, matrix=_IDENTITY_MATRIX) -> None:
+    """Pin solver.anchorWorlds[index] (what pmxRigidBody does for a boneless body)."""
+    cmds.setAttr(f"{node}.anchorWorlds[{index}]", *matrix, type="matrix")
+
+
+def _connect_anchor(node: str, index: int, source: str) -> None:
+    """Feed solver.anchorWorlds[index] from a joint's worldMatrix (as pmxRigidBody does)."""
+    cmds.connectAttr(source, f"{node}.anchorWorlds[{index}]", force=True)
+
+
 def _set_welded_chain(node: str, group: str) -> tuple[str, str]:
     """Set up body 0 (kinematic anchor) + body 1 (dynamic) rigidly welded.
 
@@ -249,7 +259,6 @@ def test_attribute_surface_and_defaults():
         "bodyFriction",
         "bodyPhysicsMode",
         "bodyJoint",
-        "bodyAnchorWorld",
         "drawMode",
     ]
     for child in body_children:
@@ -394,29 +403,9 @@ def test_kinematic_anchor_drives_welded_body():
     # Rigid weld: SPRING_6DOF (type 0) with zero limits = locked.
     _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
 
-    # Anchor world matrix on the body's OWN shape: translate the kinematic
-    # anchor to y=3 (no bodyJoint message -> the derived offset K^-1 =
-    # identity).
-    cmds.setAttr(
-        f"{p0}.bodyAnchorWorld",
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        3,
-        0,
-        1,
-        type="matrix",
-    )
+    # Anchor world matrix: translate the kinematic anchor to y=3 (no
+    # bodyJoint message -> the derived offset K^-1 = identity).
+    _set_anchor(node, 0, (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 3, 0, 1))
 
     # Step several frames so the weld settles and the chain follows the anchor.
     last_y = 1.0
@@ -473,7 +462,7 @@ def test_config_edit_forces_rebuild():
     cmds.connectAttr(f"{joint_b}.message", f"{p1}.bodyJoint")
 
     # Anchor at the origin (identity) so its current pose is captured for reset.
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    _set_anchor(node, 0)
 
     cmds.currentTime(1)
     initial = _read_output(node, 1)
@@ -516,29 +505,10 @@ def test_solver_location_does_not_affect_simulation():
     node = cmds.createNode(_NODE_TYPE, name="testRigidBodyNode", parent=holder)
     _connect_time(node)
     group = cmds.createNode("transform", name="solverLocBodies")
-    p0, _p1 = _set_welded_chain(node, group)
+    _p0, _p1 = _set_welded_chain(node, group)
 
     # World-space anchor at y=3 (there is no groupWorldMatrix input anymore).
-    cmds.setAttr(
-        f"{p0}.bodyAnchorWorld",
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        3,
-        0,
-        1,
-        type="matrix",
-    )
+    _set_anchor(node, 0, (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 3, 0, 1))
 
     # Step several frames so the weld settles.
     last_y = 1.0
@@ -587,7 +557,7 @@ def test_whole_skeleton_move_rides_dynamic_chain_along():
     p0 = _add_body(node, group, 0, rest=(0.0, 0.0, 0.0), name="dragAnchor")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
-    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{p0}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{joint_a}.worldMatrix[0]")
 
     p1 = _add_body(node, group, 1, rest=(0.0, 1.0, 0.0), name="dragDyn")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
@@ -645,7 +615,7 @@ def test_bone_drag_at_paused_frame_dirties_solver():
     p0 = _add_body(node, group, 0, rest=(0.0, 0.0, 0.0), name="pausedDragAnchor")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
-    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{p0}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{joint_a}.worldMatrix[0]")
 
     p1 = _add_body(node, group, 1, rest=(0.0, 1.0, 0.0), name="pausedDragDyn")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
@@ -700,8 +670,8 @@ def test_paused_frame_edits_rerun_solver():
     node = _create_node()
     group = cmds.createNode("transform", name="editBodies")
     _connect_time(node)
-    p0, p1 = _set_welded_chain(node, group)
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    _p0, p1 = _set_welded_chain(node, group)
+    _set_anchor(node, 0)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
     joint_frame = cmds.listRelatives(joint, parent=True)[0]
@@ -755,8 +725,8 @@ def test_repeated_solver_pulls_do_not_step_physics():
     node = _create_node()
     group = cmds.createNode("transform", name="repeatBodies")
     _connect_time(node)
-    p0, p1 = _set_welded_chain(node, group)
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    _p0, p1 = _set_welded_chain(node, group)
+    _set_anchor(node, 0)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
     # Free the weld along Y so the body moves under gravity.
@@ -803,10 +773,10 @@ def test_joint_bounds_follow_the_hub():
     node = _create_node()
     group = cmds.createNode("transform", name="boundsBodies")
     _connect_time(node)
-    p0, _p1 = _set_welded_chain(node, group)
+    _p0, _p1 = _set_welded_chain(node, group)
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
 
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    _set_anchor(node, 0)
     cmds.currentTime(1)
     cmds.getAttr(f"{node}.outTranslate[1]")
     rest = cmds.exactWorldBoundingBox(joint)
@@ -818,7 +788,7 @@ def test_joint_bounds_follow_the_hub():
     # Lift the kinematic anchor by 3: the welded hub rides up to y=3.5.
     lifted = list(_IDENTITY_MATRIX)
     lifted[13] = 3.0
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *lifted, type="matrix")
+    _set_anchor(node, 0, lifted)
     cmds.getAttr(f"{node}.outTranslate[1]")
     moved = cmds.exactWorldBoundingBox(joint)
     # A box around the rest frame would end near y=1.7, below the hub.
@@ -847,10 +817,10 @@ def test_joint_display_cache_refreshes_on_edit():
     node = _create_node()
     group = cmds.createNode("transform", name="cacheBodies")
     _connect_time(node)
-    p0, _p1 = _set_welded_chain(node, group)
+    _p0, _p1 = _set_welded_chain(node, group)
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
 
-    cmds.setAttr(f"{p0}.bodyAnchorWorld", *_IDENTITY_MATRIX, type="matrix")
+    _set_anchor(node, 0)
     cmds.currentTime(1)
     cmds.getAttr(f"{node}.outTranslate[1]")
     rest = cmds.exactWorldBoundingBox(joint)
@@ -905,7 +875,7 @@ def test_model_root_move_keeps_guides_on_bodies():
     shape = _add_body(node, group, 0, rest=(0.0, 1.0, 0.0), name="guideAnchor")
     cmds.setAttr(f"{shape}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{bone}.message", f"{shape}.bodyJoint")
-    cmds.connectAttr(f"{bone}.worldMatrix[0]", f"{shape}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{bone}.worldMatrix[0]")
     guide = cmds.listRelatives(shape, parent=True)[0]
     # As the importer wires it: the solver drives the guide transform.
     cmds.connectAttr(f"{node}.outGuideTranslate[0]", f"{guide}.translate")
@@ -949,7 +919,7 @@ def test_model_root_move_keeps_joint_pivot():
     p0 = _add_body(node, group, 0, rest=(0.0, 0.0, 0.0), name="pivotAnchor")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{bone}.message", f"{p0}.bodyJoint")
-    cmds.connectAttr(f"{bone}.worldMatrix[0]", f"{p0}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{bone}.worldMatrix[0]")
     p1 = _add_body(node, group, 1, rest=(0.0, -1.0, 0.0), name="pivotBob")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_PHYSICS)
@@ -1003,7 +973,7 @@ def test_rewind_rebuild_keeps_character_move():
     p0 = _add_body(node, group, 0, rest=(0.0, 0.0, 0.0), name="rewindAnchor")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
-    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{p0}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{joint_a}.worldMatrix[0]")
 
     p1 = _add_body(node, group, 1, rest=(0.0, 1.0, 0.0), name="rewindDyn")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
@@ -1082,7 +1052,7 @@ def test_rewind_rebuild_pins_posed_skeleton():
     p0 = _add_body(node, group, 0, rest=(0.0, 0.0, 0.0), name="posedAnchor")
     cmds.setAttr(f"{p0}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_a}.message", f"{p0}.bodyJoint")
-    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{p0}.bodyAnchorWorld")
+    _connect_anchor(node, 0, f"{joint_a}.worldMatrix[0]")
 
     p1 = _add_body(node, group, 1, rest=(0.0, 1.0, 0.0), name="posedDyn")
     cmds.setAttr(f"{p1}.bodyMass", 1.0)
@@ -1312,7 +1282,7 @@ def test_rewind_rebuild_pins_body_with_later_reset_anchor():
     p1 = _add_body(node, group, 1, rest=(0.0, 0.0, 0.0), name="laterAnchor")
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_anchor}.message", f"{p1}.bodyJoint")
-    cmds.connectAttr(f"{joint_anchor}.worldMatrix[0]", f"{p1}.bodyAnchorWorld")
+    _connect_anchor(node, 1, f"{joint_anchor}.worldMatrix[0]")
 
     # Rigid weld between the anchor and the dynamic body.
     _add_weld_joint(node, group, 0, frame=(0.0, 0.5, 0.0))
@@ -1409,7 +1379,7 @@ def test_disabled_kinematic_body_does_not_shift_anchor_write_back():
     p1 = _add_body(node, group, 1, rest=(0.0, 0.0, 0.0), name="disabledKinEnabled")
     cmds.setAttr(f"{p1}.bodyPhysicsMode", _PHYSICS_MODE_FOLLOW_BONE)
     cmds.connectAttr(f"{joint_a}.message", f"{p1}.bodyJoint")
-    cmds.connectAttr(f"{joint_a}.worldMatrix[0]", f"{p1}.bodyAnchorWorld")
+    _connect_anchor(node, 1, f"{joint_a}.worldMatrix[0]")
 
     # Body 2: dynamic on bone 1 (joint_b), welded to the anchor, 1 unit above.
     p2 = _add_body(node, group, 2, rest=(0.0, 1.0, 0.0), name="disabledKinDyn")
