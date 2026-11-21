@@ -150,10 +150,13 @@ class RigidBodyNode : public MPxLocatorNode
 
     // Per-body message array: aBodyShapes[i] -> the pmxRigidBodyShape node
     // for PMX body i (PMX order — one selectable/movable locator per body).
-    // The solver pulls every body's PMX-verbatim data from the connected
-    // shape node via RigidBodyShape::readBodyDefinition — the REST pose from
-    // the shape's bodyRestTranslate/bodyRestRotate attributes (the guide
-    // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
+    // This edge is IDENTITY, not data: it fixes the shape -> body-index
+    // mapping the joints and the output slots resolve through, and its dirt
+    // reports a re-bind / deleted body (see inputsStale).  The body's
+    // PMX-verbatim VALUES arrive through aBodyBodies below — a real input,
+    // read from the data block, with the rest pose in the shape's
+    // bodyRestTranslate/bodyRestRotate (the guide TRANSFORM is the CURRENT
+    // pose, driven by the solver; it is not read).
     // Unconnected slots remain disabled placeholders to preserve output indices.
     static MObject aBodyShapes;
 

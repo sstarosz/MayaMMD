@@ -9,8 +9,9 @@
  * Each PMX rigid body becomes its own MPxLocatorNode under the model's
  * `{model}_Bodies` sub-group (inside the `{model}_RigidBodies` group).  The
  * node is BOTH:
- *   1. a data holder — every PMX body field is a storable attribute (the
- *      solver reads them through its `bodyShapes[]` message array), and
+ *   1. a data holder — every PMX body field is a storable attribute,
+ *      published as the `body` compound below into the solver's `bodies[i]`
+ *      input (`bodyShapes[]` carries only the shape's identity), and
  *   2. the viewport GUIDE — its transform is DRIVEN by the solver each frame
  *      to the body's CURRENT world pose, so the collider (drawn by the
  *      geometry override at the guide-local origin) follows the animation:
