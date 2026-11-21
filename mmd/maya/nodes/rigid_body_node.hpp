@@ -37,6 +37,9 @@
 #include <utility>
 #include <vector>
 
+#include <array>
+#include <atomic>
+
 // The engine header is Bullet-free (the engine itself is a PIMPL), so pulling
 // it in here stays cheap and keeps Bullet an implementation detail.
 #include "rigid_body_simulation.hpp"
@@ -77,10 +80,14 @@ class RigidBodyNode : public MPxLocatorNode
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
-    // Tracks which inputs were dirtied: element dirts on bodyShapes[] /
-    // jointShapes[] are only re-checked (they arrive every frame for the
-    // kinematic anchors), everything else is a configuration edit.
+    // Marks the config inputs stale, and flags a bodies[] dirty so compute()
+    // re-reads the body records from the data block.  The bodies are a real
+    // input, so this never needs a scene-wide serial.
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
+    // The Evaluation Manager can evaluate without calling setDependentsDirty,
+    // so the bodies[] dirt is also picked up here.
+    MStatus preEvaluation(const MDGContext& context,
+                          const MEvaluationNode& evaluationNode) override;
     // This node owns a STATEFUL Bullet world that advances in compute().
     // Cached Playback must NOT treat its outputs as pure functions of its
     // inputs — disable caching so the node is re-evaluated every frame.
@@ -149,6 +156,26 @@ class RigidBodyNode : public MPxLocatorNode
     // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
     // Unconnected slots remain disabled placeholders to preserve output indices.
     static MObject aBodyShapes;
+
+    // Per-body simulation INPUT: aBodyBodies[i] is connected from a
+    // pmxRigidBodyShape's `body` compound by pmxRigidBody (one connectAttr per
+    // body, expanded to one edge per child).  The element is decoded by
+    // decodeBody() from the data block; the shape's long names are repeated
+    // here because a compound-to-compound connection pairs children by name.
+    static MObject aBodyBodies;
+    static MObject aInEnabled;
+    static MObject aInGroupId;
+    static std::array<MObject, 16> aInMaskGroup;
+    static MObject aInColliderType;
+    static MObject aInShapeSize;
+    static MObject aInRestTranslate;
+    static MObject aInRestRotate;
+    static MObject aInMass;
+    static MObject aInLinearDamping;
+    static MObject aInAngularDamping;
+    static MObject aInRestitution;
+    static MObject aInFriction;
+    static MObject aInPhysicsMode;
 
     // Per-body kinematic-anchor input: aAnchorWorlds[i] <- the related joint's
     // worldMatrix[0] (a real DATA connection, wired by pmxRigidBody), read
@@ -284,22 +311,25 @@ class RigidBodyNode : public MPxLocatorNode
     std::optional<World> mWorld;
 
     // ── Input cache ───────────────────────────────────────────────────────
-    // The PMX-verbatim inputs are read through the DG, which is expensive
-    // (~9 ms per frame on a 300-body model: one findPlug per attribute per
-    // body and joint).  They only change when something is EDITED, so they
-    // are cached and re-read when an edit is reported:
-    //   * mmd::maya::rigidBodyEditSerial() moves when any body or joint
-    //     reports a configuration edit (the per-frame kinematic anchors are a
-    //     separate, real input — aAnchorWorlds[], not part of this cache), and
+    // The PMX-verbatim inputs are expensive to read, so they are cached:
+    //   * the BODY records come from the `bodies[]` data-block input, re-read
+    //     when that plug arrived dirty (mBodiesDirty, set from both
+    //     setDependentsDirty and preEvaluation),
+    //   * the JOINT records are pulled out of band and re-read when
+    //     mmd::maya::rigidBodyEditSerial() moves (joints still notify through
+    //     their own message), and
     //   * a bodyShapes[]/jointShapes[] element dirt whose connection no longer
     //     matches the cached shape (a re-bind or a deleted body) is structural.
     Inputs mInputs;
     std::uint64_t mInputsSerial = 0;
     bool mInputsValid = false;
+    // Set when the data block's bodies[] arrived dirty (DG or Evaluation
+    // Manager); compute() re-reads the body records then.
+    std::atomic<bool> mBodiesDirty{true};
     std::vector<bool> mBodySlotDirty;  // bodyShapes[i] dirtied since the last read
     std::vector<bool> mJointSlotDirty; // jointShapes[i] dirtied since the last read
 
-    // True when the inputs must be read again: a reported config edit, an
-    // element whose connection changed, or no cached inputs.
+    // True when the JOINT inputs must be read again: a reported config edit,
+    // an element whose connection changed, or no cached inputs.
     [[nodiscard]] bool inputsStale(const MObject& node) const;
 };

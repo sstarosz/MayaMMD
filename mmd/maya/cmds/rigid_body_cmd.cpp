@@ -534,9 +534,20 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         }
     }
     // Register the shape on the solver: shape.solver -> solver.bodyShapes[n]
-    // (PMX order — the solver pulls each body from its shape in readBodyData).
+    // (PMX order — identity for joints and the output slots) AND the body
+    // records themselves: shape.body -> solver.bodies[n].  The compound
+    // connection is what makes a field edit ordinary DG dirt on the solver,
+    // so no attributeAffects/message relay is needed for it.
     mmd::maya::connectOrReplace(shapePlug(RigidBodyShape::aSolver),
                                 shapesPlug.elementByLogicalIndex(n));
+    if (mmd::maya::connectOrReplace(
+            shapePlug(RigidBodyShape::aBody),
+            fn.findPlug(RigidBodyNode::aBodyBodies, true, &plugStat).elementByLogicalIndex(n)) !=
+        MS::kSuccess)
+    {
+        MGlobal::displayWarning("pmxRigidBody: could not connect the body data to the solver; "
+                                "the simulation will use defaults for this body");
+    }
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the

@@ -208,6 +208,15 @@ def test_append_body_data():
         any(guide in str(d) for d in gr_dests),
         f"guide rotate not driven by outGuideRotate[0] ({gr_dests})",
     )
+    # The body data reaches the solver through the shape.body -> solver.bodies[0]
+    # compound connection (the mechanism that replaced the out-of-band reads),
+    # so an edit on the shape shows up in the solver's input.
+    cmds.setAttr(f"{base}.bodyMass", 9.5)
+    assert_eq(
+        round(cmds.getAttr(f"{solver}.bodies[0].bodyMass"), 6),
+        9.5,
+        "shape.body not connected to solver.bodies[0]",
+    )
     print("✓ append body stores data at index 0 (+ guide driven by the solver)")
     return True
 

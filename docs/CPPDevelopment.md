@@ -176,12 +176,13 @@ this regresses:
    `RigidBodyJoint::resolveView()` now caches the configuration, refreshed by
    the config serial, and the frame by its own serial.
 3. **The expensive one:** the solver was evaluated ~5× per frame because reading
-   the kinematic anchors (`bodyAnchorWorld`) re-dirtied it mid-frame.  Each of
-   those evaluations re-read all 25 anchors and rewrote all 298 outputs.  The
-   anchors are now read once per `rigidBodyAnchorSerial()` and shared
-   (`World::anchorRaw`), and `compute()` skips the world transition entirely
-   when nothing can have changed.  This alone took the in-viewport frame from
-   41 ms to 17 ms.
+   the kinematic anchors re-dirtied it mid-frame.  Each of those evaluations
+   re-read all 25 anchors and rewrote all 298 outputs.  The anchors are now a
+   real node input (`pmxRigidBodyNode.anchorWorlds[]`, fed straight from the
+   related joint's `worldMatrix`), so Maya carries the dirt and the data block
+   serves the value to every pull of the frame; `compute()` still returns
+   without touching the world when nothing moved.  This alone took the
+   in-viewport frame from 41 ms to 17 ms.
 
 What is left, in priority order: `compute()` still runs ~5× per frame, but only
 one of those runs the physics (measured over 20 frames: 1 world rebuild, 19
@@ -234,18 +235,26 @@ frame budget. Each run also writes a JSON report to
 Two invariants keep the per-frame reads small, and a change that breaks them
 shows up as a large `solver` regression:
 
-- `pmxRigidBodyNode` caches its PMX-verbatim inputs and re-reads them only when
-  `mmd::maya::rigidBodyEditSerial()` moves (a reported config edit) or a body /
-  joint connection changed. `bodyAnchorWorld` is per-frame data, not config.
-- The kinematic anchors (`bodyAnchorWorld`) are read once per
-  `mmd::maya::rigidBodyAnchorSerial()` and shared by every evaluation of that
-  frame (`World::anchorRaw`). Reading one is a cross-node plug evaluation, the
-  test rig has 25 of them, and the solver is evaluated several times per frame
-  — once per output batch Maya pulls. Use `noteRigidBodyAnchorEdit()` from
-  anything that can move an anchor.
-- `compute()` returns to the output write without touching the world when
-  nothing can have changed: no input edit (`inputsStale`), the same time, and an
-  unchanged anchor serial. Skipping this fast path is what made playback pay for
+- `pmxRigidBodyNode` no longer caches the body records out of band: they are a
+  real input (`bodies[]`, fed by each shape's `body` compound), so an edit is
+  ordinary dirt and the values come from the data block.  The node re-reads
+  them only when that plug arrived dirty (`setDependentsDirty` **and**
+  `preEvaluation`, because Parallel evaluation can skip the former).
+  `anchorWorlds[]` is per-frame data, not config.
+- The kinematic anchors are a REAL input: `pmxRigidBodyNode.anchorWorlds[i]` is
+  wired from the related joint's `worldMatrix[0]` by `pmxRigidBody` (a boneless
+  pin stores its rest world instead) and read through `MDataBlock`.  Bone
+  movement therefore arrives as ordinary input dirt, and the data block caches
+  the value across the pulls of one frame — no cross-node plug evaluation and
+  no invalidation serial.  A bone that also drives a dynamic body's write-back
+  cannot feed this array (joint → solver → joint would be a DG cycle); the
+  command pins that anchor and warns.
+- JOINT records are still pulled out of band, so they keep the
+  `mmd::maya::rigidBodyEditSerial()` cache (`attributeAffects(input, aSolver)`
+  on the joint node plus a connection change are what invalidate it).
+- `compute()` reads the anchors every evaluation and lets `frame()` decide:
+  when no input changed, the time is the same and no anchor moved, the world is
+  returned untouched.  Skipping this fast path is what made playback pay for
   the world transition several times per frame.
 - `pmxRigidBodyJoint::resolveSolverView()` caches the joint's static display
   data (limits, body links, status, hub radius) and refreshes the live
@@ -254,8 +263,8 @@ shows up as a large `solver` regression:
   no DG read is needed per joint per frame just to notice a move.
 
 Inside the solver, the remaining per-frame cost is the Bullet step itself plus
-one `bodyAnchorWorld` read per kinematic body — both real simulation work.
-Adding per-frame attribute reads (through `MPlug`) anywhere in `compute()` is
+one anchor data-block read per kinematic body — both real simulation work.
+Adding cross-node attribute reads (through `MPlug`) anywhere in `compute()` is
 what to avoid: a single cross-node plug read costs more than the whole
 input-cache bookkeeping.
 

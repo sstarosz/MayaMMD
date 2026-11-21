@@ -59,12 +59,14 @@ def _add_body(
 ) -> str:
     """Create one body: a guide transform at `rest` + a pmxRigidBodyShape.
 
-    The shape is wired into ``node.bodyShapes[index]`` (shape.aSolver ->
-    solver.bodyShapes[i]) and carries the shared body fields.  The REST pose
-    lives in the shape's ``bodyRestTranslate``/``bodyRestRotate`` attributes
-    (the solver reads it from there); the guide transform is only the viewport
-    handle (in a real import the solver drives it to the CURRENT pose each
-    frame — these tests read the solver outputs directly).
+    # The shape is wired into ``node.bodyShapes[index]`` (identity, used by
+    # joints and the output slots) and its ``body`` compound into
+    # ``node.bodies[index]`` (the simulation records), exactly as
+    # ``pmxRigidBody`` does it.  The REST pose lives in the shape's
+    # ``bodyRestTranslate``/``bodyRestRotate`` attributes; the guide transform
+    # is only the viewport handle (in a real import the solver drives it to
+    # the CURRENT pose each frame — these tests read the solver outputs
+    # directly).
     """
     guide = cmds.createNode("transform", name=f"{name}{index}", parent=group)
     cmds.setAttr(f"{guide}.translate", *rest, type="double3")
@@ -72,6 +74,7 @@ def _add_body(
         "pmxRigidBodyShape", name=f"{name}{index}Shape", parent=guide
     )
     cmds.connectAttr(f"{shape}.solver", f"{node}.bodyShapes[{index}]")
+    cmds.connectAttr(f"{shape}.body", f"{node}.bodies[{index}]")
     cmds.setAttr(f"{shape}.bodyRestTranslate", *rest, type="double3")
     cmds.setAttr(f"{shape}.bodyRestRotate", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{shape}.bodyEnabled", True)

@@ -210,10 +210,13 @@ move without an edit — `solverStep` (every solver step) and `frameMatrix`
 (which has its own `noteRigidBodyFrameEdit()` serial, so a moved frame
 re-reads only the frame: the limits / bodies / hub radius stay cached).
 `pmxRigidBodyNode` uses the config serial to decide whether it has to read the
-PMX-verbatim body/joint inputs again; the per-frame kinematic anchor
-(`bodyAnchorWorld`) is read separately and never forces that re-read. Adding a
-new joint or body attribute therefore needs no extra bookkeeping:
-`attributeAffects(input, aSolver)` plus the generic serial covers it.
+joint records again; the body records (`bodies[]`) and the per-frame kinematic
+anchors (`anchorWorlds[]`) are real inputs read through the data block and
+never make the node re-read the joints. Adding a new joint attribute therefore
+still needs no extra bookkeeping (`attributeAffects(input, aSolver)` plus the
+generic serial); a new BODY field must be added to both compounds — the shape's
+`body` and the solver's `bodies[]` — because a compound connection pairs its
+children by name.
 
 The geometry override follows the same rule: `SolverView::serial` carries the
 config serial the cached limits were resolved at, and

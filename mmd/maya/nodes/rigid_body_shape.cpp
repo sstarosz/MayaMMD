@@ -7,23 +7,26 @@
  * rigid_body_shape.hpp).
  *
  * The node is a plain data holder: every PMX body field is a storable
- * attribute (no compute() — the solver reads them through its `bodyShapes[]`
- * message array).  The body's REST pose lives in the `bodyRestTranslate` /
+ * attribute (no compute()).  The simulation inputs are gathered in ONE `body`
+ * compound that pmxRigidBody connects into the solver's `bodies[i]` input, so
+ * an edit travels as ordinary DG dirt and this node needs no notification
+ * logic.  The body's REST pose lives in the `bodyRestTranslate` /
  * `bodyRestRotate` attributes; the node's DAG parent transform is the viewport
  * GUIDE — placed at the rest pose by the builder, then DRIVEN by the solver
  * to the body's CURRENT pose each frame.  The collider is drawn by a
  * geometry override registered for `drawdb/geometry/pmxRigidBodyShape` (not
  * here).
  *
- * The body's runtime INPUTS are not stored here: the kinematic anchor lives on
- * the solver (`pmxRigidBodyNode.anchorWorlds[]`, fed straight from the related
- * joint's worldMatrix), so this node holds authored PMX data only.
+ * The body's per-frame INPUT is not stored here either: the kinematic anchor
+ * lives on the solver (`pmxRigidBodyNode.anchorWorlds[]`, fed straight from
+ * the related joint's worldMatrix), so this node holds authored PMX data only.
  */
 
 #include "rigid_body_shape.hpp"
 
 #include <maya/MDagPath.h>
 #include <maya/MEulerRotation.h>
+#include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnData.h>
 #include <maya/MFnDependencyNode.h>
@@ -50,33 +53,11 @@
 #include <string>
 #include <vector>
 
-using mmd::core::applyShapeSize;
 using mmd::core::Double3;
 using mmd::core::RigidBodySimulation;
 
 namespace
 {
-// Map the node's persisted attribute enum (kColliderBox=1..kColliderCapsule=3)
-// to the engine's PMX-aligned enum (eSphere=0..eCapsule=2).  The attribute
-// values are stored in scenes, so they cannot change.
-[[nodiscard]] RigidBodySimulation::ColliderType colliderToEngine(short v)
-{
-    switch (v)
-    {
-    case RigidBodyShape::kColliderBox:
-        return RigidBodySimulation::ColliderType::eBox;
-    case RigidBodyShape::kColliderSphere:
-        return RigidBodySimulation::ColliderType::eSphere;
-    default:
-        return RigidBodySimulation::ColliderType::eCapsule; // kColliderCapsule
-    }
-}
-
-// Read a k3Double child plug into a core Double3.
-void readDouble3(const MPlug& plug, Double3& out)
-{
-    out = mmd::maya::readPlugDouble3(plug);
-}
 
 // Create a numeric attribute with the standard storable + non-keyable flags,
 // so each schema line stays a single readable declaration.
@@ -114,6 +95,7 @@ const MTypeId RigidBodyShape::kTypeId(0x0011C106); // unique Maya node type id
 // ===========================================================================
 MObject RigidBodyShape::aSolver;
 MObject RigidBodyShape::aBodyJoint;
+MObject RigidBodyShape::aBody;
 MObject RigidBodyShape::aBodyEnabled;
 MObject RigidBodyShape::aBodyNameLocal;
 MObject RigidBodyShape::aBodyNameUniversal;
@@ -248,149 +230,64 @@ MStatus RigidBodyShape::initialize()
         eAttr.setKeyable(false);
     }
 
+    // --- the simulation inputs, as ONE compound the solver consumes ---
+    // pmxRigidBody connects this straight into pmxRigidBodyNode.bodies[i], so
+    // every field edit is ordinary DG dirt along a real edge: the shape needs
+    // no attributeAffects/message relay, and the solver reads the values from
+    // its data block.  The children keep their flat long names, so
+    // `shape.bodyMass` (AE template, physics panel) is unchanged.
+    {
+        MFnCompoundAttribute cAttr;
+        aBody = cAttr.create("body", "body", &stat);
+        MMD_CHECK_MSTATUS(stat);
+        cAttr.setStorable(true);
+        cAttr.setKeyable(false);
+        cAttr.addChild(aBodyEnabled);
+        cAttr.addChild(aBodyGroupId);
+        for (MObject& mask : aBodyMaskGroup)
+        {
+            cAttr.addChild(mask);
+        }
+        cAttr.addChild(aBodyColliderType);
+        cAttr.addChild(aBodyShapeSize);
+        cAttr.addChild(aBodyRestTranslate);
+        cAttr.addChild(aBodyRestRotate);
+        cAttr.addChild(aBodyMass);
+        cAttr.addChild(aBodyLinearDamping);
+        cAttr.addChild(aBodyAngularDamping);
+        cAttr.addChild(aBodyRestitution);
+        cAttr.addChild(aBodyFriction);
+        cAttr.addChild(aBodyPhysicsMode);
+    }
+
     // --- attribute registration ---
     stat = addAttribute(aSolver);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyJoint);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyEnabled);
-    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyNameLocal);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyNameUniversal);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyGroupId);
-    MMD_CHECK_MSTATUS(stat);
-    for (int g = 0; g < 16; ++g)
-    {
-        stat = addAttribute(aBodyMaskGroup.at(g));
-        MMD_CHECK_MSTATUS(stat);
-    }
-    stat = addAttribute(aBodyColliderType);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyShapeSize);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyRestTranslate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyRestRotate);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyMass);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyLinearDamping);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyAngularDamping);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyRestitution);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyFriction);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aBodyPhysicsMode);
+    stat = addAttribute(aBody);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aDrawMode);
     MMD_CHECK_MSTATUS(stat);
-
-    // A body edit must re-run the solver.  The solver pulls the body through
-    // the message array (not a data connection), so the dirt needs an explicit
-    // path: input -> solver (message) -> pmxRigidBodyNode.bodyShapes[i] -> its
-    // outputs.  Without it the bodies (and the joint hubs on them) only update
-    // when time changes.  The guide transform is NOT an input: the solver
-    // drives it, and so is the kinematic anchor (a real solver input, fed
-    // straight from the related joint).
-    std::vector<MObject> inputs = {
-        aBodyEnabled,        aBodyGroupId,     aBodyColliderType, aBodyShapeSize,
-        aBodyRestTranslate,  aBodyRestRotate,  aBodyMass,         aBodyLinearDamping,
-        aBodyAngularDamping, aBodyRestitution, aBodyFriction,     aBodyPhysicsMode,
-    };
-    inputs.insert(inputs.end(), aBodyMaskGroup.begin(), aBodyMaskGroup.end());
-    for (const MObject& input : inputs)
-    {
-        stat = attributeAffects(input, aSolver);
-        MMD_CHECK_MSTATUS(stat);
-    }
 
     return MS::kSuccess;
 }
 
 // ===========================================================================
-// Body data reading (used by the solver)
+// Viewport invalidation — the simulation needs none
 // ===========================================================================
-bool RigidBodyShape::readBodyDefinition(const MObject& node,
-                                        RigidBodySimulation::BodyDefinition& out)
-{
-    if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
-    {
-        return false;
-    }
-    MFnDependencyNode depFn(node);
-    if (depFn.typeName() != kNodeName)
-    {
-        return false;
-    }
-
-    // The body's REST pose lives in the shape's bodyRestTranslate/Rotate
-    // attributes (world space, PMX-verbatim after the MMD→Maya flip).  The
-    // shape's TRANSFORM is the CURRENT pose, driven by the solver each frame
-    // so the guide follows the animation — the rest pose is deliberately NOT
-    // read from the transform (that would feed the animated pose back as
-    // rest and break the write-back offset K).
-    MStatus stat;
-    const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
-    {
-        MPlug p = depFn.findPlug(a, true, &stat);
-        return p;
-    };
-    Double3 restT;
-    Double3 restR;
-    readDouble3(plug(aBodyRestTranslate), restT);
-    readDouble3(plug(aBodyRestRotate), restR);
-    out.restPos = restT;
-    out.restRot = restR;
-
-    out.mass = plug(aBodyMass).asDouble();
-    out.linearDamping = plug(aBodyLinearDamping).asDouble();
-    out.angularDamping = plug(aBodyAngularDamping).asDouble();
-    out.friction = plug(aBodyFriction).asDouble();
-    out.restitution = plug(aBodyRestitution).asDouble();
-    out.colliderType = colliderToEngine(plug(aBodyColliderType).asShort());
-    Double3 shapeSize;
-    readDouble3(plug(aBodyShapeSize), shapeSize);
-    applyShapeSize(out, shapeSize); // PMX shape_size -> engine radius/extents/length
-    out.mask = 0;
-    for (int g = 0; g < 16; ++g)
-    {
-        if (plug(aBodyMaskGroup.at(g)).asBool())
-        {
-            const auto bits =
-                static_cast<unsigned long>(out.mask) | (1UL << static_cast<unsigned int>(g));
-            out.mask = static_cast<long>(bits);
-        }
-    }
-    out.groupId = plug(aBodyGroupId).asShort();
-    // Keep the full PMX physics mode (0/1/2) — kinematic is a derived
-    // property and PHYSICS vs PHYSICS_BONE must stay distinguishable.
-    out.physicsMode =
-        static_cast<RigidBodySimulation::PhysicsMode>(plug(aBodyPhysicsMode).asShort());
-    out.enabled = plug(aBodyEnabled).asBool();
-    return true;
-}
-
-// ===========================================================================
-// Edit notification — the solver caches its PMX-verbatim inputs
-// ===========================================================================
-// Every field on this node is CONFIGURATION: when one changes, the owning
-// solver must read its inputs again (that is what the
-// attributeAffects(input, aSolver) chain is for — this just says WHICH kind of
-// dirt arrived).  The per-frame kinematic anchor is NOT one of them: it is a
-// real input of the solver (`anchorWorlds[]`, fed straight from the related
-// joint), so it never dirties this node at all.
-//
-// The same notification decides when the COLLIDER drawing is out of date: the
-// collider's own geometry depends on the shape's fields only (its pose comes
-// from the guide transform, which VP2 carries without rebuilding anything), so
-// this is what lets the geometry override skip the per-frame rebuild.
+// The simulation fields live in the `body` compound, which pmxRigidBody
+// connects into the solver's `bodies[]` input: an edit is ordinary DG dirt
+// along that edge, so this node has no notification logic to write.  What is
+// left is the COLLIDER drawing, whose geometry depends on the shape's fields
+// only (its pose comes from the guide transform, which VP2 carries without
+// rebuilding anything).
 MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
-    mmd::maya::noteRigidBodyConfigEdit();
     // Default topologyChanged: see the note in RigidBodyJoint::postEvaluation
     // about why false leaves the geometry stale.
     MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
