@@ -188,6 +188,28 @@
             "problemMatcher": []
         },
         {
+            "label": "Benchmark: Rigid Body Playback",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                ".\\tests\\benchmarks\\run_benchmarks.py",
+                "rigid-body",
+                "--frames",
+                "120"
+            ],
+            "group": "test",
+            "options": {
+                "env": {
+                    "PATH": "${workspaceFolder}\\.venv\\Scripts;${env:PATH}"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "Benchmark: Plot Results",
             "type": "shell",
             "command": "python",
@@ -410,13 +432,14 @@
             "type": "pickString",
             "description": "Select the benchmark suite to run",
             "options": [
-                "all",
-                "parse",
+                "all",`
+                "parse",`
                 "pmx-load",
                 "vmd-load",
                 "vmd-parse",
                 "vpd-load",
-                "vpd-parse"
+                "vpd-parse",
+                "rigid-body"
             ],
             "default": "all"
         }

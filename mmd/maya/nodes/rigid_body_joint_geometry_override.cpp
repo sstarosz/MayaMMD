@@ -155,6 +155,54 @@ const Hub& unitHub()
     return hub;
 }
 
+// Scale the shared unit hub to `radius` and bake it into the joint's LOCAL
+// space, writing straight into the caller's scratch streams (no per-frame
+// allocation).
+//
+// NOTE: this bakes the pose, and it has to.  Handing VP2 the pose as a render
+// item matrix instead (so the vertices could stay static) does not work: a
+// geometry override's item matrix is COMPOSED with the node's DAG transform
+// rather than replacing it — the hubs come out double-transformed — and
+// without a per-frame dirty VP2 never re-prepares the object to pick the new
+// matrix up, so they also freeze in place.
+//
+// `hubToLocal` is the product of two world matrices, so it is affine: the
+// perspective row is (0,0,0,1) and the homogeneous divide of `MPoint * MMatrix`
+// is a no-op.  Transforming the vertices as a VECTOR (3x3, no divide) plus the
+// translation gives the same result for one multiplication less and without the
+// MPoint temporary — this runs for all 42 hub vertices of every joint on every
+// frame and every pass.
+void bakeHubGeometry(const Mesh& hub, double radius, const MMatrix& hubToLocal,
+                     std::vector<float>& positions, std::vector<float>& normals)
+{
+    const std::size_t count = hub.positions.size();
+    positions.resize(count);
+    normals.resize(count);
+    if (count == 0)
+    {
+        return;
+    }
+
+    const MVector translation(hubToLocal(3, 0), hubToLocal(3, 1), hubToLocal(3, 2));
+    const MMatrix normalToLocal = hubToLocal.inverse().transpose();
+    for (std::size_t i = 0; i + 3 <= count; i += 3)
+    {
+        const MVector p = MVector(hub.positions[i] * radius, hub.positions[i + 1] * radius,
+                                  hub.positions[i + 2] * radius) *
+                              hubToLocal +
+                          translation;
+        const MVector n =
+            (MVector(hub.normals[i], hub.normals[i + 1], hub.normals[i + 2]) * normalToLocal)
+                .normal();
+        positions[i] = static_cast<float>(p.x);
+        positions[i + 1] = static_cast<float>(p.y);
+        positions[i + 2] = static_cast<float>(p.z);
+        normals[i] = static_cast<float>(n.x);
+        normals[i + 1] = static_cast<float>(n.y);
+        normals[i + 2] = static_cast<float>(n.z);
+    }
+}
+
 // Read a k3Double (or angle3) plug; a missing plug reads as zero.
 [[nodiscard]] mmd::core::Double3 readDouble3(const MPlug& plug)
 {
@@ -311,16 +359,21 @@ bool RigidBodyJointGeometryOverride::requiresGeometryUpdate() const
 {
     // True would force a full update (solver queries + buffer upload) on
     // EVERY viewport refresh, camera tumbles included.  Everything the joint
-    // draws from outside its node dirties it instead: solver steps and
-    // edits through RigidBodyJoint (setDependentsDirty / postEvaluation),
-    // selection and isolate changes through rigid_body_display, hidden
-    // bodies through the outline watches.
+    // draws from outside its node dirties it instead: solver steps and edits
+    // through RigidBodyJoint (setDependentsDirty / postEvaluation), selection
+    // and isolate changes through rigid_body_display, hidden bodies through the
+    // outline watches.
     return false;
 }
 
 bool RigidBodyJointGeometryOverride::requiresUpdateRenderItems(const MDagPath& /*dagPath*/) const
 {
-    return true;
+    // False: the item state (enable / draw mode / shader) only changes on
+    // edits, which mark the drawing dirty.  Returning true does NOT make VP2
+    // re-prepare the object on its own — the hubs would simply stop following
+    // the bodies — so the per-evaluation dirty in RigidBodyJoint is what keeps
+    // them live.
+    return false;
 }
 
 // ===========================================================================
@@ -333,22 +386,45 @@ void RigidBodyJointGeometryOverride::updateDG()
         return;
     }
 
-    // The bodies are connections; the solver turns them into its indices.
-    const std::array<MObject, 2> bodyShapes{
-        RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
-        RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB),
-    };
-    readJointInputs();
     resolveSolver();
-    cacheBodyOutlines(bodyShapes);
+    // The hub's colour, the marker sizes and the guide ranges all derive from
+    // the joint's limits, which only change on an edit — the solver view's
+    // serial says so.  Recomputing them for every joint on every playback
+    // frame was pure noise next to the update itself.
+    if (!fClassified || fState.serial == 0 || fState.serial != fClassifiedSerial)
+    {
+        fState.drawMode = fPlugs.drawMode.asShort();
+        classifyState();
+        fClassified = true;
+        fClassifiedSerial = fState.serial;
+    }
+
+    // Only a picked joint outlines its bodies: resolving the two body
+    // connections costs DG queries, and the overlays are the only consumer.
+    if (fState.picked)
+    {
+        const std::array<MObject, 2> bodyShapes{
+            RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
+            RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB),
+        };
+        cacheBodyOutlines(bodyShapes);
+    }
+    else
+    {
+        for (auto& outline : fBodyOutlines)
+        {
+            outline.valid = false;
+            outline.candidates.clear();
+        }
+    }
     updateOutlineWatches();
-    classifyState();
 }
 
-// This node's own data: the draw mode and the limits/stiffness the solver reads.
+// This node's own data: the draw mode (read in updateDG) and the
+// limits/stiffness the solver reads.  Used only while no solver view is
+// available — otherwise the view carries the same values, already cached.
 void RigidBodyJointGeometryOverride::readJointInputs()
 {
-    fState.drawMode = fPlugs.drawMode.asShort();
     auto& def = fState.definition;
     def.bodyA = -1;
     def.bodyB = -1;
@@ -364,12 +440,13 @@ void RigidBodyJointGeometryOverride::readJointInputs()
 // frames, hub radius).  The bodies' CURRENT poses come from the solver in world
 // space; updateRenderItems() maps them into the node's local space.
 // resolveSolverView also evaluates the solver, so the world it reports is the
-// current one.
+// current one — and it caches the joint's configuration, so the per-frame path
+// does not re-read every joint attribute and frame matrix.
 void RigidBodyJointGeometryOverride::resolveSolver()
 {
-    auto& def = fState.definition;
     fState.hasAttachments = false;
     fState.active = false;
+    fState.serial = 0;
     fSolver = MObject::kNullObj;
     // "picked" = the joint itself is selected (not just one of its ancestors),
     // which is what the overlay ownership rules key off.
@@ -377,14 +454,14 @@ void RigidBodyJointGeometryOverride::resolveSolver()
     const RigidBodyJoint::SolverView view = RigidBodyJoint::resolveSolverView(fJoint);
     if (view.solver == nullptr)
     {
+        // Not wired to a solver: draw the joint's own (unconstrained) data.
+        readJointInputs();
         return;
     }
 
     fSolver = view.solverObject;
-    def.bodyA = view.definition.bodyA;
-    def.bodyB = view.definition.bodyB;
-    def.frameT = view.definition.frameT;
-    def.frameR = view.definition.frameR;
+    fState.definition = view.definition;
+    fState.serial = view.serial;
     fState.active = view.active;
     fState.hasAttachments = view.live;
     fState.attachmentAWorld = view.attachmentA;
@@ -494,9 +571,9 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
     const bool visible = fState.drawMode != RigidBodyJoint::kDrawOff;
 
     // Attachment and body positions, in the joint node's LOCAL space (the space
-    // the render item's geometry is built in — VP2 applies the joint's DAG matrix).
-    // Without a live solver snapshot nothing but the hub is drawn, so the hub
-    // simply sits at the joint frame.
+    // the render item's geometry is built in — VP2 applies the joint's DAG
+    // matrix).  Without a live solver snapshot nothing but the hub is drawn, so
+    // the hub simply sits at the joint frame.
     fLocalToWorld = dagPath.inclusiveMatrix();
     fWorldToLocal = fLocalToWorld.inverse();
     const MMatrix& worldToLocal = fWorldToLocal;
@@ -535,27 +612,46 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
     const auto shadedModes =
         static_cast<MGeometry::DrawMode>(static_cast<unsigned int>(MGeometry::kShaded) |
                                          static_cast<unsigned int>(MGeometry::kTextured));
-    for (const HubItem& spec : kHubItems)
+    for (std::size_t k = 0; k < kHubItems.size(); ++k)
     {
+        const HubItem& spec = kHubItems.at(k);
         MRenderItem* item = nullptr;
-        const int index = renderItems.indexOf(spec.name);
-        if (index >= 0)
+        // The item indices are stable across frames: check the remembered one
+        // (one name compare) before searching the list.
+        int& cached = fItemIndex.at(k);
+        if (cached >= 0 && cached < renderItems.length())
         {
-            item = renderItems.itemAt(index);
-        }
-        else
-        {
-            item = MRenderItem::Create(spec.name, MRenderItem::NonMaterialSceneItem,
-                                       spec.wire ? MGeometry::kLines : MGeometry::kTriangles);
-            if (item == nullptr)
+            MRenderItem* candidate = renderItems.itemAt(cached);
+            if (candidate != nullptr && candidate->name() == spec.name)
             {
-                continue;
+                item = candidate;
             }
-            // The hub respects scene depth.
-            item->depthPriority(MRenderItem::sDormantWireDepthPriority);
-            // Pick under the joint's own selection type (priority), not "locator".
-            item->setSelectionMask(MSelectionMask(RigidBodyJoint::kSelectionType));
-            renderItems.append(item);
+        }
+        if (item == nullptr)
+        {
+            cached = renderItems.indexOf(spec.name);
+            if (cached >= 0)
+            {
+                item = renderItems.itemAt(cached);
+            }
+            else
+            {
+                item = MRenderItem::Create(spec.name, MRenderItem::NonMaterialSceneItem,
+                                           spec.wire ? MGeometry::kLines : MGeometry::kTriangles);
+                if (item == nullptr)
+                {
+                    continue;
+                }
+                // The hub respects scene depth.
+                item->depthPriority(MRenderItem::sDormantWireDepthPriority);
+                // Pick under the joint's own selection type (priority), not "locator".
+                item->setSelectionMask(MSelectionMask(RigidBodyJoint::kSelectionType));
+                if (!renderItems.append(item))
+                {
+                    continue;
+                }
+                cached = renderItems.length() - 1;
+            }
         }
         // Must match the viewport's display modes or the item never draws.
         MGeometry::DrawMode drawMode = MGeometry::kWireframe;
@@ -571,9 +667,9 @@ void RigidBodyJointGeometryOverride::updateRenderItems(const MDagPath& dagPath,
         }
         item->setDrawMode(drawMode);
         // Vertices are joint-local: populateGeometry bakes the attachment-to-
-        // local transform in, so VP2 applies only the joint's DAG transform
-        // (including its animated parents).  Supplying a world matrix here
-        // is unreliable in the geometry-override draw path.
+        // local transform in, so VP2 applies only the joint's DAG transform.
+        // A matrix here would be COMPOSED with that DAG transform (not replace
+        // it) and double-transforms the hub — see bakeHubGeometry().
         item->setMatrix(nullptr);
         item->enable(visible && (spec.wire || !inactive));
         // Shared shaders per colour (rigid_body_display).
@@ -600,8 +696,21 @@ void RigidBodyJointGeometryOverride::addUIDrawables(const MDagPath& dagPath,
                                                     MHWRender::MUIDrawManager& drawManager,
                                                     const MHWRender::MFrameContext& frameContext)
 {
-    if (fState.drawMode == RigidBodyJoint::kDrawOff ||
-        !mmd::maya::rigid_body_display::isSelected(dagPath))
+    if (fState.drawMode == RigidBodyJoint::kDrawOff)
+    {
+        return;
+    }
+    // The display status is a viewport query, and every joint asks for it on
+    // every redraw; it can only change when the selection or the isolate state
+    // does, so the answer is reused until then.
+    const std::uint64_t statusSerial = mmd::maya::rigid_body_display::displayStatusSerial();
+    if (!fSelectedValid || statusSerial != fSelectedSerial)
+    {
+        fSelected = mmd::maya::rigid_body_display::isSelected(dagPath);
+        fSelectedSerial = statusSerial;
+        fSelectedValid = true;
+    }
+    if (!fSelected)
     {
         return;
     }
@@ -892,47 +1001,30 @@ void RigidBodyJointGeometryOverride::populateGeometry(const MGeometryRequirement
         return;
     }
 
-    // Scale a COPY of the shared unit hub to this joint's radius and bake it
-    // into the joint's LOCAL space. VP2 applies the DAG matrix once:
-    // vertex * attachmentWorld * inverse(jointWorld) * jointWorld.
+    // Bake the shared unit hub into this joint's LOCAL space, reusing the
+    // scratch streams: this runs for every joint on every frame.
     const Hub& hub = unitHub();
-    Mesh mesh = hub.mesh;
-    const double radius = fState.hubRadius;
-    const MMatrix normalToLocal = fHubToLocal.inverse().transpose();
-    for (std::size_t i = 0; i < mesh.positions.size(); i += 3)
-    {
-        const MPoint p = MPoint(mesh.positions[i] * radius, mesh.positions[i + 1] * radius,
-                                mesh.positions[i + 2] * radius) *
-                         fHubToLocal;
-        const MVector n =
-            (MVector(mesh.normals[i], mesh.normals[i + 1], mesh.normals[i + 2]) * normalToLocal)
-                .normal();
-        mesh.positions[i] = static_cast<float>(p.x);
-        mesh.positions[i + 1] = static_cast<float>(p.y);
-        mesh.positions[i + 2] = static_cast<float>(p.z);
-        mesh.normals[i] = static_cast<float>(n.x);
-        mesh.normals[i + 1] = static_cast<float>(n.y);
-        mesh.normals[i + 2] = static_cast<float>(n.z);
-    }
-
-    mmd::maya::rigid_body_display::fillMeshBuffers(requirements, mesh.positions, mesh.normals,
+    bakeHubGeometry(hub.mesh, fState.hubRadius, fHubToLocal, fScratchPositions, fScratchNormals);
+    mmd::maya::rigid_body_display::fillMeshBuffers(requirements, fScratchPositions, fScratchNormals,
                                                    data);
 
     // Each hub item indexes its own half of the shared vertices.
-    for (int i = 0; i < renderItems.length(); ++i)
+    const int itemCount = renderItems.length();
+    for (int i = 0; i < itemCount; ++i)
     {
         const MRenderItem* item = renderItems.itemAt(i);
         if (item == nullptr)
         {
             continue;
         }
+        const MString& name = item->name();
         for (std::size_t k = 0; k < 4; ++k)
         {
-            if (item->name() != kHubItems.at(k).name || hub.indices.at(k).empty())
+            const auto& indices = hub.indices.at(k);
+            if (indices.empty() || name != kHubItems.at(k).name)
             {
                 continue;
             }
-            const auto& indices = hub.indices.at(k);
             MIndexBuffer* indexBuf = data.createIndexBuffer(MGeometry::kUnsignedInt32);
             if (indexBuf == nullptr)
             {

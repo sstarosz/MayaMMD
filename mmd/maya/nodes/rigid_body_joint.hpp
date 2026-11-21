@@ -33,9 +33,15 @@
 #include <maya/MBoundingBox.h>
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
+#include <maya/MObjectHandle.h>
+#include <maya/MPlug.h>
+#include <maya/MPlugArray.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
+
+#include <cstdint>
+#include <mutex>
 
 #include "joint_display.hpp"         // kFallbackHubRadius, guideSizes
 #include "rigid_body_simulation.hpp" // core JointDefinition
@@ -142,6 +148,11 @@ class RigidBodyJoint : public MPxLocatorNode
         // The rendered hub radius: the model's hub size (or the fallback) x
         // the user's jointDisplayScale.
         double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
+        // The configuration serial `definition` / `active` / `hubRadius` were
+        // resolved at (0 = not from the cache).  A consumer that derives more
+        // data from them (the display's freedom / guide sizes) can skip that
+        // work while this serial is unchanged.
+        std::uint64_t serial = 0;
     };
     // Resolves `view` for `node`.  With `evaluateSolver` (the viewport
     // override's updateDG) it reads the solverStep input first, so the world
@@ -151,6 +162,14 @@ class RigidBodyJoint : public MPxLocatorNode
     // solver needs to run, and a pull there would evaluate the whole solver
     // (every body and joint) per query.  It passes false and gets the solver's
     // current world as-is; the drawn geometry always comes from updateDG().
+    //
+    // The resolver is CACHED per node: the joint's own configuration, its
+    // solver wiring, the constraint status and the hub radius only change on a
+    // reported config edit (mmd::maya::rigidBodyEditSerial) or when the joint's
+    // frame moves (aFrameMatrix), so the per-frame display path (updateDG,
+    // boundingBox) re-reads neither the joint's attributes, the frame matrix
+    // nor the group matrix.  Only the live attachment / body frames — the part
+    // that moves on every solver step — are resolved every call.
     [[nodiscard]] static SolverView resolveSolverView(const MObject& node,
                                                       bool evaluateSolver = true);
 
@@ -184,4 +203,48 @@ class RigidBodyJoint : public MPxLocatorNode
     static MObject
         aJointAngularStiffness; // float3 — angular axis stiffness (Bullet spring stiffness)
     static MObject aDrawMode;   // enum — viewport draw mode (DrawMode)
+
+  private:
+    // Static part of SolverView, cached across calls (see resolveSolverView).
+    // `serial` / `frameWorld` are the two things that can invalidate it: a
+    // reported configuration edit anywhere in the scene, and this joint's
+    // frame moving.  Only cacheable while the owning solver has a live world
+    // (before the first solve there is no body index or hub radius to cache).
+    //
+    // boundingBox() may be called from an evaluation/draw thread while the
+    // override resolves its view, so every access holds the mutex (the cache
+    // saves several DG queries per call, so the lock is noise by comparison).
+    struct ViewCache
+    {
+        bool valid = false;
+        std::uint64_t serial = 0;
+        MObject solverObject;
+        mmd::core::RigidBodySimulation::JointDefinition definition;
+        bool active = false;
+        double hubRadius = 0.0;
+        // The frame serial the cached frame was read at, and whether the joint
+        // frame is driven at all (aFrameMatrix connected): an undriven frame
+        // carries no move signal, so it is re-read on every call.
+        std::uint64_t frameSerial = 0;
+        bool frameTracked = false;
+        // The solver's MPxNode, resolved once per configuration.  Looking it up
+        // costs an MFnDependencyNode plus a dynamic_cast, and the view is
+        // resolved for every joint on every frame.  The handle guards against
+        // the node being deleted behind our back.
+        RigidBodyNode* solverUser = nullptr;
+        MObjectHandle solverHandle;
+        // The joint's bounding-box corners in its OWN frame (the guide limits
+        // plus the marker padding).  They depend only on the limits and the hub
+        // radius, so boundingBox() — which Maya calls for culling of every drawn
+        // joint on every frame — no longer re-derives the ranges per call.
+        std::array<MPoint, 8> boundsCorners{};
+        bool boundsValid = false;
+    };
+    mutable std::mutex fViewCacheMutex;
+    mutable ViewCache fViewCache;
+
+    [[nodiscard]] SolverView resolveView() const;
+    [[nodiscard]] static SolverView resolveViewUncached(const MObject& node);
+    // Copy the cached bounds template; false when there is none yet.
+    [[nodiscard]] bool boundsTemplate(std::array<MPoint, 8>& corners) const;
 };

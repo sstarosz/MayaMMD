@@ -16,6 +16,25 @@ visualization (hubs, motion ranges, A/B links), editable Attribute-Editor
 templates, PMX physics validation, and MMD-matching Spring6Dof simulation
 with a selection-neutral import.
 
+Rigid-body performance: the kinematic anchors moved from the per-body
+`pmxRigidBodyShape` node to a real solver input
+(`pmxRigidBodyNode.anchorWorlds[]`, fed from the related joint's
+`worldMatrix`).  The shape now stores authored PMX data only, a bone move is
+ordinary input dirt instead of a scene-wide serial, and the anchor cache and
+its atomic counter are gone.  A bone that also drives a dynamic body's
+write-back cannot be an anchor source (that would be a dependency cycle), so
+a follow-bone body on such a mixed bone is pinned at the bone and the import
+warns.
+
+The per-body PMX fields are a real solver input too: `pmxRigidBody` connects
+each shape's new `body` compound into `pmxRigidBodyNode.bodies[i]`, so a body
+edit is ordinary dirt and the solver reads the records from its data block
+instead of pulling every attribute out of band.  `pmxRigidBodyShape` now has
+no simulation notification logic at all, and `pmxRigidBodyNode` no longer
+needs a scene-wide serial for body edits.  The compound children keep their
+flat long names, so `bodyMass`, `bodyShapeSize`, … are still addressed
+directly in the Attribute Editor and in scripts.
+
 Model visibility: a collapsible Visibility section in the tool panel gained
 Mesh / Bones / Rigid Bodies / Joints toggles plus Show All / Hide All for the
 selected model; freshly imported models start with rigid bodies and joints

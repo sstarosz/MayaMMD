@@ -147,39 +147,50 @@ See `.vscode/tasks.json` for pre-configured VS Code tasks for all of the above.
 
 Playback cost is dominated by the rigid-body solver, and the solver's cost is
 dominated by how many plugs it reads through the DG per frame. Before changing
-the solver or the body/joint nodes, measure:
+the solver, the joint display or the body/joint nodes, measure:
 
 #### What the work so far actually bought
 
 Measured on `GirlsFrontline TololoDefault` (298 bodies, 408 joints), same
-machine, `rigid-body` benchmark:
+machine, `rigid-body` benchmark, and a scripted timeline walk with forced
+redraws in an interactive Maya for the viewport numbers:
 
 | Measure                                   | Before | After |
 | ----------------------------------------- | -----: | ----: |
 | `sim_frame` (timeline move + solver pull)  | 23–29 ms | **13–16 ms** |
 | `solver` (`compute()` alone)               | 17–19 ms | **7–8 ms** |
+| in-viewport frame (`eval med`, scripted)   | 41.0 ms  | **17 ms** |
+| joint display per drawn frame             | —        | **0.0 ms** (VP2-cached) |
+| rig with the viewport suspended           | —        | 13 ms (bones/skinning, not this plugin) |
 
 This machine's run-to-run variance is large (±40% on a cold run), so compare
 interleaved runs and medians, never single samples.
 
-The two root causes, in the order they were found and worth re-checking if
+The three root causes, in the order they were found and worth re-checking if
 this regresses:
 
 1. `readInputs()` re-read every body's and joint's ~30 attributes through
    `findPlug` on every frame (9.3 ms of a 16.3 ms compute).  The solver now
    caches its inputs behind `rigidBodyEditSerial()`.
-2. **The expensive one:** the solver was evaluated ~5× per frame because reading
-   the kinematic anchors (`bodyAnchorWorld`) re-dirtied it mid-frame.  Each of
-   those evaluations re-read all 25 anchors and rewrote all 298 outputs.  The
-   anchors are now read once per `rigidBodyAnchorSerial()` and shared
-   (`World::anchorRaw`), and `compute()` skips the world transition entirely
-   when nothing can have changed.
+2. The joint display re-read every joint's attributes and frame per redraw.
+   `RigidBodyJoint::resolveView()` now caches the configuration, refreshed by
+   the config serial, and the frame by its own serial.
+3. **The expensive one:** the solver was evaluated ~5× per frame because reading
+   the kinematic anchors re-dirtied it mid-frame.  Each of those evaluations
+   re-read all 25 anchors and rewrote all 298 outputs.  The anchors are now a
+   real node input (`pmxRigidBodyNode.anchorWorlds[]`, fed straight from the
+   related joint's `worldMatrix`), so Maya carries the dirt and the data block
+   serves the value to every pull of the frame; `compute()` still returns
+   without touching the world when nothing moved.  This alone took the
+   in-viewport frame from 41 ms to 17 ms.
 
 What is left, in priority order: `compute()` still runs ~5× per frame, but only
 one of those runs the physics (measured over 20 frames: 1 world rebuild, 19
 steps, and 40 evaluations that found nothing to do). The other four are output
 re-writes of all 298 bodies, ~1.7 ms each — writing only the outputs Maya
-actually asked for is the next real win.
+actually asked for is the next real win. The display has nothing left
+(`updateDG`, `populateGeometry` and `boundingBox` all measured 0.0 ms per
+redraw once VP2's caching is respected).
 
 Approaches already tried and **rejected with evidence** — do not repeat them:
 
@@ -187,6 +198,12 @@ Approaches already tried and **rejected with evidence** — do not repeat them:
   always-active kinematic bodies, so Bullet merges them into one island and
   nothing ever sleeps.  Identical poses and identical residual motion with and
   without it.
+- `MRenderItem::setMatrix()` to carry the hub pose so the vertex data could stay
+  static: the item matrix is composed with the node's DAG transform (hubs
+  double-transform and fly off the model) and nothing re-prepares the item
+  without a per-frame dirty (hubs freeze).
+- `setGeometryDrawDirty(obj, /*topologyChanged=*/false)`: VP2 then stops calling
+  `populateGeometry` altogether and the hubs freeze.
 - Disabling cached playback: `pmxRigidBodyNode` is a stateful solver, so Maya's
   Cached Playback drops to Safe Mode by design.
 
@@ -215,28 +232,117 @@ Maya standalone has no viewport, so the geometry overrides and
 frame budget. Each run also writes a JSON report to
 `test-logs/benchmarks/` for trend comparison.
 
-Three invariants keep the per-frame reads small, and a change that breaks them
+Two invariants keep the per-frame reads small, and a change that breaks them
 shows up as a large `solver` regression:
 
-- `pmxRigidBodyNode` caches its PMX-verbatim inputs and re-reads them only when
-  `mmd::maya::rigidBodyEditSerial()` moves (a reported config edit) or a body /
-  joint connection changed. `bodyAnchorWorld` is per-frame data, not config.
-- The kinematic anchors (`bodyAnchorWorld`) are read once per
-  `mmd::maya::rigidBodyAnchorSerial()` and shared by every evaluation of that
-  frame (`World::anchorRaw`). Reading one is a cross-node plug evaluation, the
-  test rig has 25 of them, and the solver is evaluated several times per frame
-  — once per output batch Maya pulls. Use `noteRigidBodyAnchorEdit()` from
-  anything that can move an anchor.
-- `compute()` returns to the output write without touching the world when
-  nothing can have changed: no input edit (`inputsStale`), the same time, and an
-  unchanged anchor serial. Skipping this fast path is what made playback pay for
+- `pmxRigidBodyNode` no longer caches the body records out of band: they are a
+  real input (`bodies[]`, fed by each shape's `body` compound), so an edit is
+  ordinary dirt and the values come from the data block.  The node re-reads
+  them only when that plug arrived dirty (`setDependentsDirty` **and**
+  `preEvaluation`, because Parallel evaluation can skip the former).
+  `anchorWorlds[]` is per-frame data, not config.
+- The kinematic anchors are a REAL input: `pmxRigidBodyNode.anchorWorlds[i]` is
+  wired from the related joint's `worldMatrix[0]` by `pmxRigidBody` (a boneless
+  pin stores its rest world instead) and read through `MDataBlock`.  Bone
+  movement therefore arrives as ordinary input dirt, and the data block caches
+  the value across the pulls of one frame — no cross-node plug evaluation and
+  no invalidation serial.  A bone that also drives a dynamic body's write-back
+  cannot feed this array (joint → solver → joint would be a DG cycle); the
+  command pins that anchor and warns.
+- JOINT records are still pulled out of band, so they keep the
+  `mmd::maya::rigidBodyEditSerial()` cache (`attributeAffects(input, aSolver)`
+  on the joint node plus a connection change are what invalidate it).
+- `compute()` reads the anchors every evaluation and lets `frame()` decide:
+  when no input changed, the time is the same and no anchor moved, the world is
+  returned untouched.  Skipping this fast path is what made playback pay for
   the world transition several times per frame.
+- `pmxRigidBodyJoint::resolveSolverView()` caches the joint's static display
+  data (limits, body links, status, hub radius) and refreshes the live
+  attachment frames only; its frame is re-read when
+  `mmd::maya::rigidBodyFrameSerial()` moves (a moved joint or model root), so
+  no DG read is needed per joint per frame just to notice a move.
 
 Inside the solver, the remaining per-frame cost is the Bullet step itself plus
-one `bodyAnchorWorld` read per kinematic body — both real simulation work.
-Adding per-frame attribute reads (through `MPlug`) anywhere in `compute()` is
+one anchor data-block read per kinematic body — both real simulation work.
+Adding cross-node attribute reads (through `MPlug`) anywhere in `compute()` is
 what to avoid: a single cross-node plug read costs more than the whole
 input-cache bookkeeping.
+
+Both geometry overrides take part in VP2 caching: `requiresGeometryUpdate()`
+returns false for both (the node marks its drawing dirty on every input edit)
+and `requiresUpdateRenderItems()` returns false as well for both. Do not turn
+either back on to "make sure" a change is picked up: mark the drawing dirty
+where the change happens instead.
+
+One thing that looks like a shortcut but is not: handing VP2 the pose through
+`MRenderItem::setMatrix()` so that the vertex data can stay static. For an item
+in a geometry override that matrix is **composed** with the node's DAG
+transform instead of replacing it (the hubs double-transform and fly off the
+model), and returning `true` from `requiresUpdateRenderItems()` does not by
+itself make VP2 re-prepare the object, so the item matrix is never refreshed and
+the hubs freeze. The pose therefore stays baked into the vertices, and the
+per-evaluation `setGeometryDrawDirty()` in `RigidBodyJoint` is load-bearing.
+
+### The viewport half
+
+A joint's hub is re-baked every frame: its pose is part of the vertex data
+(see the note above on why the render-item matrix cannot carry it), so
+`RigidBodyJoint` marks the drawing dirty on every evaluation. What is left in
+that path is kept free of DG reads and of allocations:
+
+- `updateDG()` reads the joint once through `RigidBodyJoint::resolveSolverView()`
+  and re-classifies the hub only when its config serial moved (see
+  `docs/JointVisualization.md`).
+- `populateGeometry()` bakes the shared unit hub into reused scratch streams,
+  and `fillMeshBuffers()` `memset`s a zeroed UV stream instead of building a
+  temporary `std::vector`.
+- `updateRenderItems()` finds its four render items through the remembered
+  indices and only falls back to a name search when VP2 reordered the list.
+- `addUIDrawables()` caches Maya's display status (a viewport query) until the
+  selection or isolate state changes, instead of asking once per joint per
+  redraw (`rigid_body_display::displayStatusSerial`).
+
+The dirty calls keep `setGeometryDrawDirty()`'s default `topologyChanged`
+argument: passing `false` ("only the vertex data changed") reads like exactly
+what a moving hub needs, but VP2 then stops calling `populateGeometry` and the
+hubs freeze at their last pose. A collider is no different.
+
+`pmxRigidBodyShape`'s geometry is pose-independent, so its override is not
+repopulated during playback at all; only its `addUIDrawables()` wire runs.
+
+Maya standalone has no viewport, so none of the display cost above is measured
+by the benchmark. To measure it, run an interactive Maya with a model and a
+motion loaded, and walk the timeline with a forced redraw:
+
+```python
+from time import perf_counter
+from maya import cmds
+
+start, frames = 1, 60
+cmds.currentTime(start, update=True)
+cmds.refresh(force=True)  # warm-up: shader compile, first buffer upload
+samples = []
+for i in range(frames):
+    began = perf_counter()
+    cmds.currentTime(start + 1 + i, update=True)
+    cmds.refresh(force=True)
+    samples.append(perf_counter() - began)
+samples.sort()
+print(f"median {samples[len(samples) // 2] * 1000:.2f} ms/frame")
+```
+
+Repeat the walk with the display switched off (`pmxRigidBodyJoint.drawMode =
+0`, `pmxRigidBodyShape.drawMode = 0`) and with the solver disabled
+(`pmxRigidBodyNode.nodeState = 1`) to attribute the cost. Two traps when
+comparing numbers:
+
+- Hiding the joints also stops the physics: the joint override is what pulls
+  `pmxRigidBodyNode.frameMatrix`. Subtract the benchmark's `solver` column to
+  split draw from simulation.
+- `cmds.playbackOptions` is real-time synced by default, so any "achieved fps"
+  measured through `cmds.play()` saturates at the scene frame rate (24) however
+  fast the frame really is. Measure a scripted walk instead (as above), or set
+  `playbackOptions(playbackSpeed=1)` first.
 
 ## Project Structure
 

@@ -43,6 +43,7 @@
 #include <maya/MGeometry.h>
 #include <maya/MHWGeometry.h>
 #include <maya/MObject.h>
+#include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MPxGeometryOverride.h>
 #include <maya/MShaderManager.h>
@@ -65,11 +66,12 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
 
     MHWRender::DrawAPI supportedDrawAPIs() const override;
 
-    // Re-prepare EVERY frame: drawMode / group colour / selection status are
-    // DG (not DAG) changes on the shape node, which VP2's default dirty
-    // tracking may otherwise miss (the solid then stays disabled and the
-    // collider disappears when the user switches to Solid).  The meshes are
-    // tiny, so the per-frame rebuild cost is negligible.
+    // Re-prepare only when the SHAPE changes: drawMode / group colour / size /
+    // collider type are DG edits on the shape node, and the node marks its
+    // drawing dirty for exactly those (RigidBodyShape::setDependentsDirty).
+    // The collider's own geometry never depends on the body's pose — the guide
+    // transform carries that — so a moving body, a camera tumble or an
+    // unrelated refresh must not rebuild 300 collider meshes.
     bool requiresGeometryUpdate() const override;
     bool requiresUpdateRenderItems(const MDagPath& dagPath) const override;
 
@@ -95,6 +97,20 @@ class RigidBodyShapeGeometryOverride : public MHWRender::MPxGeometryOverride
     // Group colour (palette + kinematic dim + disabled grey) — the SOLID
     // always keeps this; selection is shown as a wireframe overlay instead.
     void groupColor(float& r, float& g, float& b) const;
+
+    // The shape's inputs, resolved once (the attributes never change): reading
+    // them per refresh through findPlug is a DG query per attribute per body,
+    // which is pure overhead next to the five value reads that follow.
+    struct Plugs
+    {
+        MPlug type;
+        MPlug size;
+        MPlug group;
+        MPlug mode;
+        MPlug physicsMode;
+        MPlug enabled;
+    };
+    Plugs fPlugs;
 
     // Per-frame data pulled from the shape node in updateDG().
     struct DrawState

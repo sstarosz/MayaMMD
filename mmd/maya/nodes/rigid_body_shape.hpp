@@ -9,8 +9,9 @@
  * Each PMX rigid body becomes its own MPxLocatorNode under the model's
  * `{model}_Bodies` sub-group (inside the `{model}_RigidBodies` group).  The
  * node is BOTH:
- *   1. a data holder — every PMX body field is a storable attribute (the
- *      solver reads them through its `bodyShapes[]` message array), and
+ *   1. a data holder — every PMX body field is a storable attribute,
+ *      published as the `body` compound below into the solver's `bodies[i]`
+ *      input (`bodyShapes[]` carries only the shape's identity), and
  *   2. the viewport GUIDE — its transform is DRIVEN by the solver each frame
  *      to the body's CURRENT world pose, so the collider (drawn by the
  *      geometry override at the guide-local origin) follows the animation:
@@ -26,6 +27,13 @@
  * (none/wire/solid) is a per-node `drawMode` attribute so bodies can be
  * shown differently.  The node has no compute() — the solver pulls the
  * attributes.
+ *
+ * The node stores AUTHORED PMX data only.  The simulation inputs are exposed
+ * as one `body` compound (see `aBody`) that pmxRigidBody connects into the
+ * solver's `bodies[i]` input — a field edit is ordinary DG dirt, so this node
+ * carries no notification logic.  The per-frame kinematic anchor is a solver
+ * input too (`pmxRigidBodyNode.anchorWorlds[]`, fed from the related joint's
+ * worldMatrix), so it never appears here.
  *
  * Registered by MayaMMD.mll.
  */
@@ -79,32 +87,31 @@ class RigidBodyShape : public MPxLocatorNode
 
     // MPxNode overrides — data-holder only (no compute()).
     MBoundingBox boundingBox() const override; // object-space rest collider box
-    // Reports configuration edits to the solver (mmd::maya::noteRigidBodyConfigEdit).
-    // The kinematic anchor is excluded: it moves on every animated frame and
-    // carries no configuration, so re-reading the solver's inputs for it would
-    // defeat the solver's input cache once per frame per moving body.
+    // Marks the COLLIDER drawing dirty only.  The simulation fields need no
+    // notification: they are connected into the solver's `bodies[]` input, so
+    // Maya carries their dirt.
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
 
     // Registration helpers
     static void* creator();
     static MStatus initialize();
 
-    // Read this node into a core BodyDefinition (used by the solver's
-    // readBodyData — it pulls each body from its connected body shape node).
-    // Returns false when `node` is not a pmxRigidBodyShape.
-    static bool readBodyDefinition(const MObject& node,
-                                   mmd::core::RigidBodySimulation::BodyDefinition& out);
-
     // ------------------------------------------------------------------
     // Attributes — the PMX rigid-body data, stored VERBATIM (mirrors the
     // fields that used to live in pmxRigidBodyNode's bodies[] compound).
     // ------------------------------------------------------------------
-    static MObject aSolver;            // message -> owning pmxRigidBodyNode (wired at import)
-    static MObject aBodyJoint;         // message <- related joint (its bone).  Drives the
-                                       // FOLLOW_BONE kinematic-anchor binding and the
-                                       // write-back parent/reset chain (resolved by the
-                                       // solver via the joint DAG).
-    static MObject aBodyAnchorWorld;   // matrix — kinematic-anchor input (joint.worldMatrix[0])
+    static MObject aSolver;    // message -> owning pmxRigidBodyNode (wired at import)
+    static MObject aBodyJoint; // message <- related joint (its bone).  Drives the
+                               // FOLLOW_BONE kinematic-anchor binding and the
+                               // write-back parent/reset chain (resolved by the
+                               // solver via the joint DAG).
+    // The simulation INPUTS as one compound, connected to the solver's
+    // `bodies[i]` compound input by pmxRigidBody (one connectAttr per body).
+    // This is what makes the shape a pure data node: a field edit travels
+    // along the connection as ordinary dirt, so the shape needs no
+    // notification logic.  The children keep their flat long names, so
+    // `shape.bodyMass` (AE template, panel, tests) is unchanged.
+    static MObject aBody;
     static MObject aBodyEnabled;       // bool (custom) — disabled bodies are skipped by the solver
     static MObject aBodyNameLocal;     // string — PMX name_local; "" = none
     static MObject aBodyNameUniversal; // string — PMX name_universal; "" = none

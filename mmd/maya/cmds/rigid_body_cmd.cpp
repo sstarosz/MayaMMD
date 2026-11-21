@@ -8,10 +8,15 @@
  *
  * ``-create`` is the single body-modification path (the PMX import loops it).
  * Create writes the body DATA, binds FOLLOW_BONE bodies to their related
- * joint through the kinematic-anchor input (bodies[i].bodyAnchorWorld), and
- * ALWAYS connects outTranslate/outRotate STRAIGHT into the related joint for
- * a dynamic body on a bone (the node computes the joint-local pose internally
- * via the bone hierarchy and derives the write-back K offset itself).
+ * joint through the solver's kinematic-anchor input
+ * (solver.anchorWorlds[i] <- joint.worldMatrix), and ALWAYS connects
+ * outTranslate/outRotate STRAIGHT into the related joint for a dynamic body on
+ * a bone (the node computes the joint-local pose internally via the bone
+ * hierarchy and derives the write-back K offset itself).
+ *
+ * A bone cannot be both an anchor source and a write-back target — that would
+ * be a DG cycle — so on such a (rare, mixed) bone physics wins and the
+ * follow-bone body's anchor is pinned at the bone's current world.
  *
  * The command's interface is minimal (see rigid_body_cmd.hpp); all the
  * implementation helpers live in the anonymous namespace below so the header
@@ -149,6 +154,78 @@ MDagPath resolveBone(const MString& bone, const MDagPath& groupPath)
         }
     }
     return out;
+}
+
+// True when another body's write-back already drives this joint's local pose
+// (solver.outTranslate/outRotate -> joint.translate/rotate).  Such a joint
+// cannot also be a kinematic-anchor SOURCE: joint.worldMatrix ->
+// solver.anchorWorlds -> solver.outTranslate -> joint.translate would be a DG
+// cycle, which Maya refuses to create.
+bool jointDrivenBySolver(const MDagPath& jointPath)
+{
+    if (!jointPath.isValid())
+    {
+        return false;
+    }
+    MFnDependencyNode jointFn(jointPath.node());
+    for (const char* attribute : {"translate", "rotate"})
+    {
+        MStatus stat;
+        const MPlug plug = jointFn.findPlug(attribute, true, &stat);
+        if (plug.isNull())
+        {
+            continue;
+        }
+        MPlugArray sources;
+        plug.connectedTo(sources, true, false);
+        for (unsigned int i = 0; i < sources.length(); ++i)
+        {
+            MFnDependencyNode sourceFn(sources[i].node());
+            if (sourceFn.typeName() == RigidBodyNode::kNodeName)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The reverse of jointDrivenBySolver: a dynamic body created AFTER a
+// follow-bone body on the same bone must not fail its write-back connection on
+// a DG cycle.  Detach the anchor edge feeding this joint's world into the
+// solver's anchorWorlds[] and pin the element at its current value — physics
+// wins on a mixed bone (see pmxRigidBodyNode::aAnchorWorlds).
+void detachAnchorEdges(const MObject& solverNode, const MObject& jointNode)
+{
+    MFnDependencyNode solverFn(solverNode);
+    MStatus stat;
+    const MPlug anchors = solverFn.findPlug(RigidBodyNode::aAnchorWorlds, true, &stat);
+    if (anchors.isNull())
+    {
+        return;
+    }
+    const unsigned int count = anchors.numElements();
+    for (unsigned int i = 0; i < count; ++i)
+    {
+        const MPlug element = anchors.elementByPhysicalIndex(i);
+        MPlugArray sources;
+        element.connectedTo(sources, true, false);
+        if (sources.length() == 0 || sources[0].node() != jointNode)
+        {
+            continue;
+        }
+        // Evaluate the driven value BEFORE detaching, then freeze it.
+        const MMatrix pinned = mmd::maya::readPlugMatrix(element);
+        MDGModifier modifier;
+        if (modifier.disconnect(sources[0], element) != MS::kSuccess ||
+            modifier.doIt() != MS::kSuccess)
+        {
+            MGlobal::displayWarning(
+                "pmxRigidBody: could not detach the kinematic anchor of a mixed bone");
+            continue;
+        }
+        mmd::maya::setPlugMatrixValue(element, pinned);
+    }
 }
 
 // ===========================================================================
@@ -457,13 +534,24 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         }
     }
     // Register the shape on the solver: shape.solver -> solver.bodyShapes[n]
-    // (PMX order — the solver pulls each body from its shape in readBodyData).
+    // (PMX order — identity for joints and the output slots) AND the body
+    // records themselves: shape.body -> solver.bodies[n].  The compound
+    // connection is what makes a field edit ordinary DG dirt on the solver,
+    // so no attributeAffects/message relay is needed for it.
     mmd::maya::connectOrReplace(shapePlug(RigidBodyShape::aSolver),
                                 shapesPlug.elementByLogicalIndex(n));
+    if (mmd::maya::connectOrReplace(
+            shapePlug(RigidBodyShape::aBody),
+            fn.findPlug(RigidBodyNode::aBodyBodies, true, &plugStat).elementByLogicalIndex(n)) !=
+        MS::kSuccess)
+    {
+        MGlobal::displayWarning("pmxRigidBody: could not connect the body data to the solver; "
+                                "the simulation will use defaults for this body");
+    }
 
     // ── Bone binding ──
     // FOLLOW_BONE bodies are bound to their related joint through the
-    // kinematic-anchor INPUT (joint.worldMatrix -> shape.bodyAnchorWorld; the
+    // kinematic-anchor INPUT (joint.worldMatrix -> solver.anchorWorlds[n]; the
     // node applies the body<->bone rest offset K^-1, derived internally at
     // world build) — this is what makes the collider "live on the correct
     // bone".  Dynamic bodies are wired for write-back here too (see the
@@ -473,24 +561,39 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // CURRENT pose by the solver).
     if (kinematic)
     {
-        // The anchor world lives on the shape node (bodyAnchorWorld — a
-        // matrix attribute, not an array element), so there is no separate
-        // kinematic-order index to track.  The node applies the
-        // body<->joint rest offset (K^-1, derived internally when the world
-        // is built) on top.  The Bullet world runs in world space, so the
-        // anchor is stored as-is.
-        if (jointPath.isValid())
+        const MPlug anchorPlug =
+            fn.findPlug(RigidBodyNode::aAnchorWorlds, true, &plugStat).elementByLogicalIndex(n);
+        // A bone that already drives a dynamic body's write-back cannot feed
+        // the anchor: joint.worldMatrix -> anchorWorlds -> outTranslate ->
+        // joint.translate is a DG cycle, which Maya refuses.  Physics wins on
+        // such a bone (the body keeps its write-back) and the follow-bone body
+        // is pinned at the bone's current world instead.
+        if (jointPath.isValid() && !jointDrivenBySolver(jointPath))
         {
-            mmd::maya::connectOrReplace(jointWorldPlug,
-                                        shapePlug(RigidBodyShape::aBodyAnchorWorld));
+            if (mmd::maya::connectOrReplace(jointWorldPlug, anchorPlug) != MS::kSuccess)
+            {
+                MGlobal::displayWarning(
+                    "pmxRigidBody: could not connect the kinematic anchor; pinning it");
+                mmd::maya::setPlugMatrixValue(anchorPlug, jointPath.inclusiveMatrix());
+            }
         }
         else
         {
-            // No related joint: a static collider pinned at its rest pose.
-            // Pin the body's DIRECT world rest pose — not a round-tripped
-            // decomposition, which would drop group scale.
-            const MMatrix bodyWorld = mmd::maya::matrixFromTR(worldT, worldR);
-            mmd::maya::setPlugMatrixValue(shapePlug(RigidBodyShape::aBodyAnchorWorld), bodyWorld);
+            if (jointPath.isValid())
+            {
+                MGlobal::displayWarning(
+                    MString("pmxRigidBody: bone '") + jointPath.partialPathName() +
+                    "' drives a physics body's write-back; the follow-bone body is "
+                    "pinned instead of following the driven pose");
+            }
+            // No related joint (a static collider) or a write-back-driven
+            // bone: pin the anchor at the joint's current world — the anchor
+            // the node expects, whose body<->bone offset it derives itself.  A
+            // boneless pin uses the body's DIRECT world rest pose, not a
+            // round-tripped decomposition (which would drop group scale).
+            const MMatrix pinned = jointPath.isValid() ? jointPath.inclusiveMatrix()
+                                                       : mmd::maya::matrixFromTR(worldT, worldR);
+            mmd::maya::setPlugMatrixValue(anchorPlug, pinned);
         }
     }
 
@@ -505,6 +608,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // physics chain has a body).
     if (!kinematic && jointPath.isValid())
     {
+        // A follow-bone body on this bone may already have made the joint an
+        // anchor source; that edge would form a DG cycle with the write-back
+        // below.  Physics wins on a mixed bone: detach + pin the anchor.
+        detachAnchorEdges(solverNode, jointPath.node());
         MPlug outT =
             fn.findPlug(RigidBodyNode::aOutTranslate, true, &plugStat).elementByLogicalIndex(n);
         MPlug outR =

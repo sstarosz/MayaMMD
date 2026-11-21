@@ -125,13 +125,18 @@ These attributes make the model self-describing for fast root discovery and UI d
 > Bullet. The root attribute above simply records which solver node the model
 > uses.
 >
-> On the solver node itself, the per-body data is **not** stored as solver
-> attributes: `bodyShapes[]` is a message array connected to one
-> `pmxRigidBodyShape` node per body, and each shape node carries the body's
-> PMX-verbatim fields (`bodyColliderType`, `bodyShapeSize`, `bodyRestTranslate`/
-> `bodyRestRotate`, `bodyGroupId`, `bodyMaskGroup0..15`, `bodyMass`,
-> `bodyPhysicsMode`, …).  The shape's DAG parent transform is the body's
-> viewport GUIDE — the solver drives it to the body's CURRENT pose each frame
+> On the solver node itself, the per-body data is **not** authored: each body
+> lives on its own `pmxRigidBodyShape` node, and the shape publishes its
+> PMX-verbatim fields as one `body` compound (`bodyColliderType`,
+> `bodyShapeSize`, `bodyRestTranslate`/`bodyRestRotate`, `bodyGroupId`,
+> `bodyMaskGroup0..15`, `bodyMass`, `bodyPhysicsMode`, …) that `pmxRigidBody`
+> connects into the solver's `bodies[i]` input.  The compound children keep
+> their flat long names, so `getAttr`/`setAttr` on `shape.bodyMass` (and the
+> Attribute Editor template) work as before.  The solver also keeps a
+> `bodyShapes[]` message array tied to the same nodes — that is identity
+> (joints reference bodies by shape, and the output slots must not shift), not
+> data.  The shape's DAG parent transform is the body's viewport GUIDE — the
+> solver drives it to the body's CURRENT pose each frame
 > (`outGuideTranslate[]`/`outGuideRotate[]` on the solver), so the collider
 > follows the animation.  The REST pose lives in the shape's
 > `bodyRestTranslate`/`bodyRestRotate` attributes — edit those (or the other
