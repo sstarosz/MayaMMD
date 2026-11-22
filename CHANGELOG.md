@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Simpler solver lifecycle:** the solver keeps ownership of its world during
+  playback. One frame routine replaces three transition helpers, removes repeated
+  movement detection and preserves rebuild, reposition and same-frame behavior.
+
 Added a scene-wide rigid body and joint editor with grouping, filtering, selection sync, deletion, joint diagnostics, collapsible scrolling panels, and improved callback cleanup.
 
 Rigid-body physics: per-body and per-joint viewport guides with joint

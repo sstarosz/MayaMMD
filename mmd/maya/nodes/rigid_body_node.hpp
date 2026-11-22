@@ -289,8 +289,8 @@ class RigidBodyNode : public MPxLocatorNode
 
     // The full per-node simulation state: the Bullet world plus the config,
     // wiring, and derived write-back offsets it was built with, bundled and
-    // replaced ATOMICALLY on rebuild.  A plain data record — public only so
-    // the translation-unit frame functions can build / advance it; every
+    // replaced together on rebuild. A plain data record — public only so
+    // the translation-unit frame function can update it; every
     // field is touched exclusively from rigid_body_node.cpp.
     struct World
     {
@@ -331,10 +331,8 @@ class RigidBodyNode : public MPxLocatorNode
     };
 
   private:
-    // The simulation state; empty = no bodies (a valid no-op).  compute()
-    // runs a pure frame transition (build or advance) that produces a NEW
-    // World, which atomically replaces this one — the node never mutates
-    // simulation state piecemeal.
+    // Owned simulation state; empty = no bodies (a valid no-op). Playback
+    // updates this world in place. Rebuilds construct a replacement first.
     std::optional<World> mWorld;
 
     // ── Input cache ───────────────────────────────────────────────────────

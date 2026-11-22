@@ -1016,133 +1016,51 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
            in.gravity.z != world.gravity.z;
 }
 
-// The world must be (re)built when its config differs from the current inputs,
-// or when the time moved somewhere a step cannot carry it: backwards (rebuild
-// rather than re-simulate) or forwards past what one step() can simulate.
-// A forward jump beyond maxStepSpan() is under-simulated — every chain is left
-// lagging behind the skeleton by the remainder, which is the transient seen
-// after scrubbing the timeline (or loading a motion on the current frame).
-// Rebuilding re-pins the chains to the CURRENT skeleton pose instead, so a
-// jumped frame is self-consistent.
-[[nodiscard]] bool needsRebuild(const World& world, const Inputs& in, const MTime& now)
+// The solver owns a stable World during playback. Only a rebuild replaces it;
+// ordinary frames update its simulation and anchor history in place.
+void frame(std::optional<World>& world, const Inputs& in, const MObject& node, const MTime& now,
+           const std::vector<MMatrix>& anchors)
 {
-    if (configChanged(world, in))
+    const double dt =
+        world ? (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds) : 0.0;
+    if (!world || configChanged(*world, in) || dt < 0.0 || dt > RigidBodySimulation::maxStepSpan())
     {
-        return true;
+        // First evaluation, config edit, rewind or oversized jump: build from
+        // authored rest data and pin to the current skeleton, without stepping.
+        world = buildWorld(node, in, now, anchors);
+        return;
     }
-    const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
-    return dt < 0.0 || dt > RigidBodySimulation::maxStepSpan();
-}
 
-// Advance the simulation by the frame span when time moved, or by one fixed
-// tick when a kinematic bone was dragged at the current frame.  The anchors
-// are refreshed first so the colliders track their bones.  Returns the world
-// with the updated timeline cursor (unchanged when nothing happened).
-//
-// Whole-skeleton drags (moving/rotating the whole character) do NOT run
-// physics on the move: every bone-attached anchor shares the same world-space
-// rigid move, so the dynamic chains ride along by that move instead of being
-// yanked by teleported anchors.  This is checked on EVERY evaluation — not
-// just at a paused frame — because an interactive viewport drag does not
-// necessarily re-evaluate the solver while it happens; without the check, the
-// first playback step after the drag would hit anchors already teleported by
-// the move and yank the chains by it (272/273 joints jumped up to 75° in the
-// reproduced case).  A local bone drag moves the anchors differently (returns
-// nullopt) and still steps normally.
-[[nodiscard]] World advanceWithAnchors(World world, const MTime& now,
-                                       std::vector<MMatrix> curAnchors, bool anchorsMoved)
-{
-    const double dt = (now - MTime(world.lastTime, world.lastTimeUnit)).as(MTime::kSeconds);
-
-    if (const auto move = detectWholeSkeletonMove(world, world.lastAnchorWorld, curAnchors))
+    std::vector<MMatrix> curAnchors;
+    const bool anchorsMoved = updateKinematicAnchors(*world, anchors, curAnchors);
+    if (dt == 0.0 && !anchorsMoved)
     {
-        // Character repositioned as a unit: ride the chains along by the
-        // shared move (velocities zeroed + kinematic interpolation reset by
-        // the engine).  When time is also advancing, keep stepping from the
-        // corrected pose; at a paused frame there is nothing to step.
+        // Repeated output pulls must neither step nor reset velocities.
+        return;
+    }
+
+    const auto move = detectWholeSkeletonMove(*world, world->lastAnchorWorld, curAnchors);
+    if (dt == 0.0 && !move)
+    {
+        // A local pose edit at a paused frame re-pins the chain, just like
+        // a rewind. A whole-character move instead preserves the solved pose.
+        world = buildWorld(node, in, now, anchors);
+        return;
+    }
+    if (move)
+    {
         RigidBodySimulation::Pose movePose;
         storePose(movePose.pos, movePose.quat, *move);
-        world.sim.rideDynamicBodiesAlong(movePose);
-        if (dt > 0.0)
-        {
-            world.sim.step(dt);
-        }
+        world->sim.rideDynamicBodiesAlong(movePose);
     }
-    else if (dt > 0.0)
+    if (dt > 0.0)
     {
-        world.sim.step(dt);
+        // Reposition first when the character moved and time advanced together.
+        world->sim.step(dt);
     }
-    else if (anchorsMoved)
-    {
-        // Local bone drag at a paused frame — one fixed tick so chains react.
-        world.sim.step(RigidBodySimulation::kFixedDt);
-    }
-    else
-    {
-        return world; // nothing moved — the anchor history is still current
-    }
-    world.lastAnchorWorld = std::move(curAnchors);
-    world.lastTime = now.value();
-    world.lastTimeUnit = now.unit();
-    return world;
-}
-
-// advance() with the anchors the caller already read: frame() needs them to
-// decide between a rebuild and a ride, so they are read once per evaluation
-// and passed in.
-[[nodiscard]] World advance(World world, const MTime& now, const std::vector<MMatrix>& anchors)
-{
-    std::vector<MMatrix> curAnchors;
-    const bool anchorsMoved = updateKinematicAnchors(world, anchors, curAnchors);
-    return advanceWithAnchors(std::move(world), now, std::move(curAnchors), anchorsMoved);
-}
-
-// The whole frame transition: (re)build the world when its config or time
-// demands it, otherwise advance it.  The previous world is moved in and the
-// result replaces it — state is never mutated piecemeal.
-[[nodiscard]] std::optional<World> frame(std::optional<World> world, const Inputs& in,
-                                         const MObject& node, const MTime& now,
-                                         const std::vector<MMatrix>& anchors)
-{
-    if (!world || needsRebuild(*world, in, now))
-    {
-        // The rebuild derives its own REST reference from the stamped
-        // pmxRest* attributes (buildWorld reads the joint rest worlds — a
-        // model constant, so the pinning is identical whether the world is
-        // first built, rebuilt on a config change, or rebuilt on a scrub-back;
-        // a moved/posed skeleton is never baked into the offset).
-        return buildWorld(node, in, now, anchors);
-    }
-    // A PAUSED-FRAME pose change (e.g. an animation was just applied and
-    // posed the bones at the current frame without time advancing) re-pins
-    // the chains by rebuilding — exactly what a scrub-back rebuild produces,
-    // so the frame looks the same whether you arrived by first play or by
-    // rewind.  A whole-skeleton move still rides (handled by advance); the
-    // rebuild also re-baselines lastAnchorWorld, which would otherwise see
-    // the pose change as a "drag" on the next eval.
-    const double dt = (now - MTime(world->lastTime, world->lastTimeUnit)).as(MTime::kSeconds);
-    if (dt == 0.0)
-    {
-        std::vector<MMatrix> curAnchors;
-        const bool anchorsMoved = updateKinematicAnchors(*world, anchors, curAnchors);
-        if (!anchorsMoved)
-        {
-            // A repeat evaluation of the same frame with the same skeleton
-            // pose: nothing to simulate, and in particular no ride-along (that
-            // would zero every dynamic body's velocity once per repeat).  Maya
-            // pulls the solver several times per frame, so this is the common
-            // case, not an edge case.
-            return world;
-        }
-        if (!detectWholeSkeletonMove(*world, world->lastAnchorWorld, curAnchors).has_value())
-        {
-            return buildWorld(node, in, now, anchors);
-        }
-        // A whole-skeleton move at a paused frame: ride, and reuse the anchors
-        // just read instead of reading them a second time.
-        return advanceWithAnchors(std::move(*world), now, std::move(curAnchors), anchorsMoved);
-    }
-    return advance(std::move(*world), now, anchors);
+    world->lastAnchorWorld = std::move(curAnchors);
+    world->lastTime = now.value();
+    world->lastTimeUnit = now.unit();
 }
 
 // Display configuration is derived directly from the authored inputs. Asking
@@ -2364,8 +2282,8 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     dataBlock.inputArrayValue(aJointShapes);
 
     // Frame transition: refresh whichever input group went stale, then
-    // (re)build or advance the world.  The new world atomically replaces the
-    // old one.  Bodies and joints are both real inputs, read from the data
+    // rebuild or update the owned world. Bodies and joints are real inputs,
+    // read from the data
     // block when their arrays arrive dirty (or when the wiring changed).
     const bool staleInputs = inputsStale(thisMObject());
     const bool bodiesDirty = mBodiesDirty.exchange(false, std::memory_order_relaxed) || staleInputs;
@@ -2395,8 +2313,7 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
     // The anchors are a real input, so read them every evaluation: the data
     // block serves the value Maya pushed once for this frame, and frame()
     // early-outs on a repeat pull where nothing moved.
-    mWorld = frame(std::move(mWorld), mInputs, thisMObject(), now,
-                   readAnchorWorlds(dataBlock, mInputs.bodies.size()));
+    frame(mWorld, mInputs, thisMObject(), now, readAnchorWorlds(dataBlock, mInputs.bodies.size()));
 
     MDataHandle step = dataBlock.outputValue(aOutStep);
     step.setDouble(now.as(MTime::kSeconds));
