@@ -238,11 +238,12 @@ def _populate_rigid_body_constraints(
     ``rigid_body_index_b``), so this MUST run after ``_populate_rigid_bodies``
     (the command connects each joint to the bodies' shape nodes).  Joints are
     appended in PMX order so the joint index matches the PMX joint index.
-    Each call creates a selectable ``pmxRigidBodyJoint`` node — its transform
-    IS the joint frame, so the constraint is visible and editable in the
-    viewport — wired into the solver's ``jointShapes[]`` message array and
-    named by ``name_registry``.  The caller moves the new joint nodes into
-    the ``{model}_Joints`` sub-group.
+    Each call creates a selectable ``pmxRigidBodyJoint`` node — its rest frame
+    is authored on the node (``jointRestTranslate`` / ``jointRestRotate``) and
+    fed to the solver through ``joints[]``, while its DAG transform is a
+    solver-driven guide to the live attachment — wired into the solver's
+    ``jointShapes[]`` / ``joints[]`` arrays and named by ``name_registry``.  The
+    caller moves the new joint nodes into the ``{model}_Joints`` sub-group.
 
     Unlike bodies, a failed joint needs no count check: nothing downstream
     references joints by index, so a dropped joint just means one constraint

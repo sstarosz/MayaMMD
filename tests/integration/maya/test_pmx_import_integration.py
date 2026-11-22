@@ -368,9 +368,9 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
 
     # The jointShapes message array mirrors the PMX rigid-body constraints
     # (one pmxRigidBodyJoint node per PMX joint, in PMX order — created by the
-    # native pmxRigidBodyConstraint command after every body exists; each
-    # joint node's transform IS the joint frame).  PMX 2.1 joint types are
-    # not supported yet and are skipped on import.
+    # native pmxRigidBodyConstraint command after every body exists; the joint
+    # DATA, frame included, lives on the node and is fed to solver.joints[]).
+    # PMX 2.1 joint types are not supported yet and are skipped on import.
     supported_joints = [j for j in pmx_data.joints if int(j.type.value) == 0]
     expected_joints = len(supported_joints)
     assert_true(
@@ -425,14 +425,31 @@ def test_pmx_rigid_body_node_creation(pmx_data: PmxModel, maya_pmx_data):
             first.name_local,
             "first joint name_local",
         )
-        # The frame is the joint guide's transform (Z-flip on position).
+        # The frame is authored on the node (Z-flip on position); the guide is
+        # placed there initially and then driven by the solver.
+        assert_true(
+            approx_equal_tuple(
+                cmds.getAttr(f"{jbase}.jointRestTranslate")[0],
+                (first.position.x, first.position.y, -first.position.z),
+            ),
+            f"first joint frame translate Z-flip wrong "
+            f"{cmds.getAttr(f'{jbase}.jointRestTranslate')}",
+        )
         assert_true(
             approx_equal_tuple(
                 cmds.getAttr(f"{guide[0]}.translate")[0],
                 (first.position.x, first.position.y, -first.position.z),
             ),
-            f"first joint frame translate Z-flip wrong "
+            f"first joint guide not placed at the rest frame "
             f"{cmds.getAttr(f'{guide[0]}.translate')}",
+        )
+        joint_data = (
+            cmds.listConnections(f"{solver}.joints[0]", source=True, plugs=True) or []
+        )
+        assert_eq(
+            [str(plug).split(".")[-1] for plug in joint_data],
+            ["joint"],
+            f"joints[0] should be fed by the joint compound ({joint_data})",
         )
         assert_true(
             approx_equal_tuple(

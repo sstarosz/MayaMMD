@@ -8,22 +8,30 @@
  *
  * Each PMX joint becomes its own MPxLocatorNode under the model's
  * `{model}_Joints` sub-group (inside the `{model}_RigidBodies` group).  The
- * node is BOTH:
- *   1. a data holder — every PMX joint field except the FRAME is a storable
- *      attribute (the solver reads them through its `jointShapes[]` message
- *      array), except the two BODIES, which are message connections from
- *      their pmxRigidBodyShape nodes, and
- *   2. the joint's FRAME — unlike the bodies (whose guide transform is
- *      ANIMATED by the solver), a joint is static config, so its DAG
- *      transform IS the joint frame: moving/rotating the node repositions
- *      the constraint, and the solver reads the frame straight from the
- *      transform (translate + XYZ rotate) in the {model}_RigidBodies
- *      group's space — the space of the bodies' rest poses.
+ * node is a plain data holder, exactly like pmxRigidBodyShape:
+ *   - every PMX joint field — INCLUDING the FRAME
+ *     (`jointRestTranslate` / `jointRestRotate`, in the bodies' rest space) —
+ *     is a storable attribute, gathered in ONE `joint` compound that
+ *     pmxRigidBodyConstraint connects into the solver's `joints[i]` input, so
+ *     an edit travels as ordinary DG dirt and this node needs no notification
+ *     logic.  The two BODIES are message connections from their
+ *     pmxRigidBodyShape nodes (identity, not data).
+ *   - the DAG transform above the node is the viewport GUIDE: placed at the
+ *     rest frame by the command, then DRIVEN by the solver to the joint's
+ *     live attachment on body A each frame
+ *     (solver.outJointTranslate/outJointRotate -> transform.translate/rotate).
+ *     The collider-style readout follows the animation, and its pivot sits on
+ *     the drawn glyph.  To move the constraint, edit the rest-frame
+ *     attributes, not the driven transform.
  *
  * The joint is drawn by RigidBodyJointGeometryOverride, registered for this
  * node's classification (`drawdb/geometry/pmxRigidBodyJoint`; see
  * docs/JointVisualization.md), with a per-node `drawMode` attribute.  The
- * node has no compute() — the solver pulls the attributes.
+ * node has no compute() — the solver reads the attributes through its input.
+ *
+ * The solver supplies the guide pose and the hidden jointDisplay inputs
+ * (radius, activity and local bounds). Drawing state belongs to the geometry
+ * override. This node has no private runtime state or solver binding.
  *
  * Registered by MayaMMD.mll.
  */
@@ -31,22 +39,13 @@
 #pragma once
 
 #include <maya/MBoundingBox.h>
-#include <maya/MMatrix.h>
 #include <maya/MObject.h>
-#include <maya/MObjectHandle.h>
 #include <maya/MPlug.h>
 #include <maya/MPlugArray.h>
 #include <maya/MPxLocatorNode.h>
-#include <maya/MString.h>
 #include <maya/MTypeId.h>
 
-#include <cstdint>
-#include <mutex>
-
-#include "joint_display.hpp"         // kFallbackHubRadius, guideSizes
 #include "rigid_body_simulation.hpp" // core JointDefinition
-
-class RigidBodyNode; // owning solver (SolverView::solver)
 
 // ===========================================================================
 // RigidBodyJoint
@@ -80,20 +79,18 @@ class RigidBodyJoint : public MPxLocatorNode
     ~RigidBodyJoint() override;
 
     // MPxNode overrides — data-holder only (no compute()).
-    // Bounded by what the joint draws, around the hub's LIVE position on
-    // body A (it leaves the frame as body A moves): Frame Selected works and
-    // the joint can be culled.
+    // Bounded by what the joint draws around the node's origin: the node's
+    // transform IS the live attachment on body A, so the box is static per
+    // configuration (the limits and the hub radius) and does not follow the
+    // pose — the DAG transform does.
     bool isBounded() const override { return true; }
     MBoundingBox boundingBox() const override;
 
-    // The joint draws the solver's bodies, data from outside its own node,
-    // so RigidBodyJointGeometryOverride updates only when told to: every
-    // change to this node's inputs (solverStep after each solver step, the
-    // frame, the joint fields) marks its geometry dirty.  Both paths are
-    // needed: DG evaluation dirties plugs (setDependentsDirty), while the
-    // Evaluation Manager propagates no dirty during playback and only
-    // evaluates the node (postEvaluation).
+    // Forward this node's input changes to the drawing implementation in both
+    // DG and Evaluation Manager modes. No display state is kept on the node.
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
+    MStatus preEvaluation(const MDGContext& context,
+                          const MEvaluationNode& evaluationNode) override;
     MStatus postEvaluation(const MDGContext& context, const MEvaluationNode& evaluationNode,
                            PostEvaluationType evalType) override;
 
@@ -101,92 +98,42 @@ class RigidBodyJoint : public MPxLocatorNode
     static void* creator();
     static MStatus initialize();
 
-    // Read this node into a core JointDefinition (used by the solver's
-    // readJointData — it pulls each joint from its connected joint node).
-    // The FRAME comes from the node's DAG transform, measured in the space of
-    // the {model}_RigidBodies group — the space the bodies' rest poses live
-    // in, so moving the model root or the group never re-rigs the joints.
-    // `groupWorldInverse` is that group's INVERSE world matrix
-    // (RigidBodyNode::groupWorldMatrix(...).inverse()); the inverse is passed
-    // in because the solver reads every joint of a model on every evaluation,
-    // so inverting the group matrix per joint would dominate that loop.
-    // The rest comes from attributes.  bodyA / bodyB stay -1: the bodies are
-    // connections (bodyShape), which only the solver can turn into its body
-    // indices (RigidBodyNode::bodyIndex).  Returns false when `node` is not a
+    // Read this node into a core JointDefinition (the display path uses it;
+    // the solver reads the same values from its `joints[]` data-block input).
+    // Everything comes from attributes — the FRAME included, in the bodies'
+    // rest space (world at import), so the DAG transform is NOT read.
+    // bodyA / bodyB stay -1: the bodies are connections (bodyShape), which
+    // only the solver can turn into its body indices
+    // (RigidBodyNode::bodyIndex).  Returns false when `node` is not a
     // pmxRigidBodyJoint.
-    static bool readJointDefinition(const MObject& node, const MMatrix& groupWorldInverse,
+    static bool readJointDefinition(const MObject& node,
                                     mmd::core::RigidBodySimulation::JointDefinition& out);
     // The pmxRigidBodyShape connected to `end` (aJointBodyA / aJointBodyB);
     // null when the end is unconnected or not a rigid body.
     static MObject bodyShape(const MObject& joint, const MObject& end);
-    // Just the FRAME (translate + XYZ rotate in degrees, in the space of the
-    // {model}_RigidBodies group) of a joint node; false when it has no parent
-    // transform.  `groupWorldInverse` as in readJointDefinition.
-    static bool readJointFrame(const MObject& node, const MMatrix& groupWorldInverse,
-                               mmd::core::Double3& translate, mmd::core::Double3& rotate);
-
-    // Everything the joint DISPLAY needs from the owning solver, resolved once
-    // (the node's bounding box and the viewport override both need it):
-    // the joint definition with its live body indices, whether the constraint
-    // is active, the live attachment / body frames, and the hub radius.
-    struct SolverView
-    {
-        // The owning solver node (null when the joint is not wired to one).
-        MObject solverObject;
-        RigidBodyNode* solver = nullptr;
-        // Limits + stiffness as the solver reads them; frameT/frameR are the
-        // joint's frame in the bodies' rest space.
-        mmd::core::RigidBodySimulation::JointDefinition definition;
-        // The solver would create this constraint (JointStatus::eActive).
-        bool active = false;
-        // The frames came from a live world (false before the first solve).
-        bool live = false;
-        MMatrix attachmentA; // world: the frame carried by body A
-        MMatrix attachmentB; // world: the frame carried by body B
-        MMatrix bodyAWorld;  // world: body A's centre/orientation
-        MMatrix bodyBWorld;
-        // The rendered hub radius: the model's hub size (or the fallback) x
-        // the user's jointDisplayScale.
-        double hubRadius = mmd::core::joint_display::kFallbackHubRadius;
-        // The configuration serial `definition` / `active` / `hubRadius` were
-        // resolved at (0 = not from the cache).  A consumer that derives more
-        // data from them (the display's freedom / guide sizes) can skip that
-        // work while this serial is unchanged.
-        std::uint64_t serial = 0;
-    };
-    // Resolves `view` for `node`.  With `evaluateSolver` (the viewport
-    // override's updateDG) it reads the solverStep input first, so the world
-    // it queries is the current one — that connection is what evaluates the
-    // solver.  boundingBox() must NOT do that: Maya asks for a node's bounds
-    // for culling, marquee picking and Frame Selected far more often than the
-    // solver needs to run, and a pull there would evaluate the whole solver
-    // (every body and joint) per query.  It passes false and gets the solver's
-    // current world as-is; the drawn geometry always comes from updateDG().
-    //
-    // The resolver is CACHED per node: the joint's own configuration, its
-    // solver wiring, the constraint status and the hub radius only change on a
-    // reported config edit (mmd::maya::rigidBodyEditSerial) or when the joint's
-    // frame moves (aFrameMatrix), so the per-frame display path (updateDG,
-    // boundingBox) re-reads neither the joint's attributes, the frame matrix
-    // nor the group matrix.  Only the live attachment / body frames — the part
-    // that moves on every solver step — are resolved every call.
-    [[nodiscard]] static SolverView resolveSolverView(const MObject& node,
-                                                      bool evaluateSolver = true);
 
     // ------------------------------------------------------------------
-    // Attributes — the PMX joint data.  The joint FRAME (position +
-    // orientation) is NOT an attribute — it is the node's DAG transform.
+    // Attributes — the PMX joint data, including the FRAME.  The frame is
+    // `jointRestTranslate` / `jointRestRotate` (the bodies' rest space, world
+    // at import); the DAG transform above the node is a solver-driven
+    // READOUT, not the frame (see the file header).
     // ------------------------------------------------------------------
     static MObject aSolver; // message -> owning pmxRigidBodyNode (wired at import)
-    // Input <- solver.outStep: a real DG dependency, so every solver step
-    // reaches the joint (which then marks its drawing dirty; see
-    // postEvaluation) and reading it evaluates the solver first.  The value
-    // itself is unused.
+    // Input <- solver.outStep: ordering for selected-joint overlays only.
     static MObject aSolverStep;
-    // Input <- the joint transform's worldMatrix[0] (wired by the command):
-    // moving the frame dirties the solver through it.  The solver still reads
-    // the frame from the DAG (readJointFrame); the value itself is unused.
-    static MObject aFrameMatrix;
+    // Derived display inputs <- solver.outJointDisplay[i]. These are separate
+    // from the authored PMX compound and do not depend on simulation time.
+    static MObject aJointDisplay;
+    static MObject aJointHubRadius;
+    static MObject aJointActive;
+    static MObject aJointBoundsMin;
+    static MObject aJointBoundsMax;
+    // Per-joint simulation values, gathered in ONE compound that
+    // pmxRigidBodyConstraint connects into the solver's `joints[i]`: an edit
+    // is ordinary DG dirt along that edge (no attributeAffects relay).
+    static MObject aJoint;
+    static MObject aJointRestTranslate; // float3 — rest frame position (bodies' rest space)
+    static MObject aJointRestRotate;    // float3 — rest frame XYZ rotation, degrees
     static MObject aJointNameLocal;     // string — PMX name_local; "" = none
     static MObject aJointNameUniversal; // string — PMX name_universal; "" = none
     // message <- body A / B's pmxRigidBodyShape.message (PMX
@@ -203,48 +150,4 @@ class RigidBodyJoint : public MPxLocatorNode
     static MObject
         aJointAngularStiffness; // float3 — angular axis stiffness (Bullet spring stiffness)
     static MObject aDrawMode;   // enum — viewport draw mode (DrawMode)
-
-  private:
-    // Static part of SolverView, cached across calls (see resolveSolverView).
-    // `serial` / `frameWorld` are the two things that can invalidate it: a
-    // reported configuration edit anywhere in the scene, and this joint's
-    // frame moving.  Only cacheable while the owning solver has a live world
-    // (before the first solve there is no body index or hub radius to cache).
-    //
-    // boundingBox() may be called from an evaluation/draw thread while the
-    // override resolves its view, so every access holds the mutex (the cache
-    // saves several DG queries per call, so the lock is noise by comparison).
-    struct ViewCache
-    {
-        bool valid = false;
-        std::uint64_t serial = 0;
-        MObject solverObject;
-        mmd::core::RigidBodySimulation::JointDefinition definition;
-        bool active = false;
-        double hubRadius = 0.0;
-        // The frame serial the cached frame was read at, and whether the joint
-        // frame is driven at all (aFrameMatrix connected): an undriven frame
-        // carries no move signal, so it is re-read on every call.
-        std::uint64_t frameSerial = 0;
-        bool frameTracked = false;
-        // The solver's MPxNode, resolved once per configuration.  Looking it up
-        // costs an MFnDependencyNode plus a dynamic_cast, and the view is
-        // resolved for every joint on every frame.  The handle guards against
-        // the node being deleted behind our back.
-        RigidBodyNode* solverUser = nullptr;
-        MObjectHandle solverHandle;
-        // The joint's bounding-box corners in its OWN frame (the guide limits
-        // plus the marker padding).  They depend only on the limits and the hub
-        // radius, so boundingBox() — which Maya calls for culling of every drawn
-        // joint on every frame — no longer re-derives the ranges per call.
-        std::array<MPoint, 8> boundsCorners{};
-        bool boundsValid = false;
-    };
-    mutable std::mutex fViewCacheMutex;
-    mutable ViewCache fViewCache;
-
-    [[nodiscard]] SolverView resolveView() const;
-    [[nodiscard]] static SolverView resolveViewUncached(const MObject& node);
-    // Copy the cached bounds template; false when there is none yet.
-    [[nodiscard]] bool boundsTemplate(std::array<MPoint, 8>& corners) const;
 };

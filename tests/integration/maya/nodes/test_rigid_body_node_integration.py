@@ -130,15 +130,18 @@ def _add_weld_joint(
 ) -> str:
     """Create one rigid-weld joint: a pmxRigidBodyJoint node at `frame`.
 
-    The joint's guide transform IS the frame (the solver reads the world
-    frame); SPRING_6DOF (type 0) with zero limits = locked.  Wired into
-    ``node.jointShapes[index]`` and linked to the shapes in
+    The joint's REST FRAME is authored on the node (jointRestTranslate, in the
+    bodies' rest space) and fed to ``node.joints[index]``; the guide transform
+    above the node is a solver-driven readout.  SPRING_6DOF (type 0) with zero
+    limits = locked.  Wired into ``node.jointShapes[index]`` /
+    ``node.joints[index]`` and linked to the shapes in
     ``node.bodyShapes[body_a / body_b]`` (joints link bodies by connection).
     """
     joint = cmds.createNode("pmxRigidBodyJoint", name=f"{name}{index}", parent=group)
     guide = cmds.listRelatives(joint, parent=True) or []
     assert_eq(len(guide), 1, f"joint {index} should have one guide parent")
-    cmds.setAttr(f"{guide[0]}.translate", *frame, type="double3")
+    cmds.setAttr(f"{joint}.jointRestTranslate", *frame, type="double3")
+    cmds.setAttr(f"{joint}.jointRestRotate", 0.0, 0.0, 0.0, type="double3")
     for end, body in (("A", body_a), ("B", body_b)):
         source = cmds.listConnections(
             f"{node}.bodyShapes[{body}]", source=True, plugs=True
@@ -153,8 +156,12 @@ def _add_weld_joint(
     cmds.setAttr(f"{joint}.jointLinearStiffness", 0.0, 0.0, 0.0, type="double3")
     cmds.setAttr(f"{joint}.jointAngularStiffness", 0.0, 0.0, 0.0, type="double3")
     cmds.connectAttr(f"{joint}.solver", f"{node}.jointShapes[{index}]")
-    # As pmxRigidBodyConstraint wires it: moving the frame re-runs the solver.
-    cmds.connectAttr(f"{guide[0]}.worldMatrix[0]", f"{joint}.frameMatrix")
+    # As pmxRigidBodyConstraint wires it: the data feeds the solver through the
+    # compound, and the solver drives the guide to the live attachment.
+    cmds.connectAttr(f"{joint}.joint", f"{node}.joints[{index}]")
+    cmds.connectAttr(f"{node}.outJointDisplay[{index}]", f"{joint}.jointDisplay")
+    cmds.connectAttr(f"{node}.outJointTranslate[{index}]", f"{guide[0]}.translate")
+    cmds.connectAttr(f"{node}.outJointRotate[{index}]", f"{guide[0]}.rotate")
     return joint
 
 
@@ -226,10 +233,13 @@ def test_attribute_surface_and_defaults():
         "jointDisplayScale",
         "bodyShapes",
         "jointShapes",
+        "joints",
         "outTranslate",
         "outRotate",
         "outGuideTranslate",
         "outGuideRotate",
+        "outJointTranslate",
+        "outJointRotate",
     ]
     for attr in top_level:
         assert_true(
@@ -270,16 +280,18 @@ def test_attribute_surface_and_defaults():
             f"missing shape attribute {child}",
         )
 
-    # Joint DATA lives on the per-joint pmxRigidBodyJoint nodes (the solver
-    # only exposes the jointShapes message array; the FRAME is the joint
-    # node's DAG transform, not an attribute).
+    # Joint DATA lives on the per-joint pmxRigidBodyJoint nodes and reaches
+    # the solver through the `joints[]` compound; `jointShapes[]` is identity.
     joint = cmds.createNode("pmxRigidBodyJoint", name="attrJoint0", parent=group)
     cmds.connectAttr(f"{joint}.solver", f"{node}.jointShapes[0]")
+    cmds.connectAttr(f"{joint}.joint", f"{node}.joints[0]")
     joint_children = [
         "jointNameLocal",
         "jointNameUniversal",
         "jointBodyA",
         "jointBodyB",
+        "jointRestTranslate",
+        "jointRestRotate",
         "jointLinearMin",
         "jointLinearMax",
         "jointAngularMin",
@@ -677,14 +689,18 @@ def test_paused_frame_edits_rerun_solver():
     _set_anchor(node, 0)
     cmds.setAttr(f"{p1}.bodyMaskGroup0", False)  # fall through the anchor
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
-    joint_frame = cmds.listRelatives(joint, parent=True)[0]
     # Free the weld along Y so the body slides down under gravity.
     cmds.setAttr(f"{joint}.jointLinearMin", 0.0, 1.0, 0.0, type="double3")
     cmds.setAttr(f"{joint}.jointLinearMax", 0.0, -1.0, 0.0, type="double3")
 
     edits = (
         ("joint limit", lambda: cmds.setAttr(f"{joint}.jointAngularMaxZ", 5.0)),
-        ("joint frame", lambda: cmds.setAttr(f"{joint_frame}.translateX", 0.25)),
+        (
+            "joint frame",
+            lambda: cmds.setAttr(
+                f"{joint}.jointRestTranslate", 0.25, 0.5, 0.0, type="double3"
+            ),
+        ),
         ("body friction", lambda: cmds.setAttr(f"{p1}.bodyFriction", 0.4)),
     )
     frame = 1
@@ -787,6 +803,15 @@ def test_joint_bounds_follow_the_hub():
         rest[1] < 0.5 < rest[4],
         f"bounds should hold the hub at the frame y=0.5 ({rest})",
     )
+    # The guide transform is a solver-driven READOUT: at rest it sits on the
+    # authored frame, so the manipulator pivot is on the glyph.
+    guide = cmds.listRelatives(joint, parent=True)[0]
+    rest_guide = cmds.xform(guide, query=True, worldSpace=True, translation=True)
+    assert_true(
+        max(abs(a - b) for a, b in zip(rest_guide, (0.0, 0.5, 0.0), strict=True))
+        < 1e-4,
+        f"joint guide should sit on the rest hub ({rest_guide})",
+    )
 
     # Lift the kinematic anchor by 3: the welded hub rides up to y=3.5.
     lifted = list(_IDENTITY_MATRIX)
@@ -799,26 +824,33 @@ def test_joint_bounds_follow_the_hub():
         moved[1] < 3.5 < moved[4] and moved[4] > rest[4] + 2.5,
         f"bounds should follow the hub to y=3.5 ({moved})",
     )
+    # ... and so does the guide's pivot, instead of staying at the authored
+    # frame (the manipulator must sit on the drawn hub).
+    moved_guide = cmds.xform(guide, query=True, worldSpace=True, translation=True)
+    assert_true(
+        max(abs(a - b) for a, b in zip(moved_guide, (0.0, 3.5, 0.0), strict=True))
+        < 1e-3,
+        f"joint guide should follow the hub to y=3.5 ({moved_guide})",
+    )
     print(
-        f"✓ joint bounds followed the hub: y {rest[1]:.2f}..{rest[4]:.2f} -> "
+        f"✓ joint bounds and guide followed the hub: y {rest[1]:.2f}..{rest[4]:.2f} -> "
         f"{moved[1]:.2f}..{moved[4]:.2f}"
     )
     return True
 
 
-def test_joint_display_cache_refreshes_on_edit():
-    """The joint's cached display data refreshes when it is edited.
+def test_joint_bounds_refresh_on_edit():
+    """A joint's bounds refresh when its limits or the display scale change.
 
-    ``RigidBodyJoint::resolveSolverView`` caches the static half of the joint
-    display (limits, linked bodies, status, hub radius) and refreshes it only
-    when a configuration edit is reported — otherwise every joint would re-read
-    every attribute and its frame matrix on every playback frame.  This guards
-    the invalidation: an edit at a paused frame must reach the bounds, both
-    through a joint attribute (limits) and through the solver's display scale.
+    The glyphs are local geometry at the node's origin (the solver drives the
+    node's transform to attachment A), so the bounding box is static per
+    configuration: the limits are re-read when the node is dirtied, and the hub
+    radius is read live — a scale edit at a paused frame (which runs no
+    solver evaluation) must still widen the bounds.
     """
     setup_test_environment()
     node = _create_node()
-    group = cmds.createNode("transform", name="cacheBodies")
+    group = cmds.createNode("transform", name="boundsEditBodies")
     _connect_time(node)
     _p0, _p1 = _set_welded_chain(node, group)
     joint = cmds.ls(type="pmxRigidBodyJoint")[0]
@@ -839,8 +871,8 @@ def test_joint_display_cache_refreshes_on_edit():
         f"{ranged[3] - ranged[0]:.2f})",
     )
 
-    # The solver's display scale feeds the cached hub radius; doubling it must
-    # widen the bounds too (the hub and its guides grow with it).
+    # The solver's display scale feeds the hub radius; doubling it must widen
+    # the bounds too (the hub and its guides grow with it).
     scale = cmds.getAttr(f"{node}.jointDisplayScale")
     cmds.setAttr(f"{node}.jointDisplayScale", scale * 2.0)
     scaled = cmds.exactWorldBoundingBox(joint)
@@ -1578,8 +1610,8 @@ _TESTS = [
     ),
     ("Joint Bounds Follow the Hub", test_joint_bounds_follow_the_hub),
     (
-        "Joint Display Cache Refreshes on Edit",
-        test_joint_display_cache_refreshes_on_edit,
+        "Joint Bounds Refresh on Edit",
+        test_joint_bounds_refresh_on_edit,
     ),
     (
         "Model Root Move Keeps Guides on Bodies",

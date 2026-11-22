@@ -171,10 +171,13 @@ this regresses:
 
 1. `readInputs()` re-read every body's and joint's ~30 attributes through
    `findPlug` on every frame (9.3 ms of a 16.3 ms compute).  The solver now
-   caches its inputs behind `rigidBodyEditSerial()`.
+   caches its inputs and re-reads them only when the `bodies[]` / `joints[]`
+   data-block inputs arrive dirty — there is no edit serial.
 2. The joint display re-read every joint's attributes and frame per redraw.
-   `RigidBodyJoint::resolveView()` now caches the configuration, refreshed by
-   the config serial, and the frame by its own serial.
+   The glyphs are now local geometry under the solver-driven guide transform,
+   so unselected hubs do not need preparing for a pose change. Display
+   configuration arrives through `jointDisplay`; only a picked joint requests
+   live attachment frames each frame.
 3. **The expensive one:** the solver was evaluated ~5× per frame because reading
    the kinematic anchors re-dirtied it mid-frame.  Each of those evaluations
    re-read all 25 anchors and rewrote all 298 outputs.  The anchors are now a
@@ -198,14 +201,17 @@ Approaches already tried and **rejected with evidence** — do not repeat them:
   always-active kinematic bodies, so Bullet merges them into one island and
   nothing ever sleeps.  Identical poses and identical residual motion with and
   without it.
-- `MRenderItem::setMatrix()` to carry the hub pose so the vertex data could stay
-  static: the item matrix is composed with the node's DAG transform (hubs
-  double-transform and fly off the model) and nothing re-prepares the item
-  without a per-frame dirty (hubs freeze).
-- `setGeometryDrawDirty(obj, /*topologyChanged=*/false)`: VP2 then stops calling
-  `populateGeometry` altogether and the hubs freeze.
 - Disabling cached playback: `pmxRigidBodyNode` is a stateful solver, so Maya's
   Cached Playback drops to Safe Mode by design.
+
+(The hub pose used to be baked into the vertices on every frame because
+`MRenderItem::setMatrix()` "double-transformed the hubs" and
+`setGeometryDrawDirty(..., false)` "froze them".  Both symptoms came from
+trying to carry the pose in the display at all.  The pose is the joint's
+solver-driven DAG transform — the same readout a body guide uses — so the
+display never has to carry it: the vertices are local geometry, no item matrix
+is set, and a playback frame re-prepares nothing.  See *The viewport half*
+below.)
 
 To re-measure:
 
@@ -249,18 +255,20 @@ shows up as a large `solver` regression:
   no invalidation serial.  A bone that also drives a dynamic body's write-back
   cannot feed this array (joint → solver → joint would be a DG cycle); the
   command pins that anchor and warns.
-- JOINT records are still pulled out of band, so they keep the
-  `mmd::maya::rigidBodyEditSerial()` cache (`attributeAffects(input, aSolver)`
-  on the joint node plus a connection change are what invalidate it).
+- The JOINT records are a real input too: `joints[]`, fed by each
+  `pmxRigidBodyJoint`'s `joint` compound (`jointRestTranslate`/`jointRestRotate`
+  and the limits/stiffness), with the same `setDependentsDirty` +
+  `preEvaluation` dirt handling.  `jointShapes[]` stays a message array for
+  identity only — the joint nodes, the body links and the output slots.
 - `compute()` reads the anchors every evaluation and lets `frame()` decide:
   when no input changed, the time is the same and no anchor moved, the world is
   returned untouched.  Skipping this fast path is what made playback pay for
   the world transition several times per frame.
-- `pmxRigidBodyJoint::resolveSolverView()` caches the joint's static display
-  data (limits, body links, status, hub radius) and refreshes the live
-  attachment frames only; its frame is re-read when
-  `mmd::maya::rigidBodyFrameSerial()` moves (a moved joint or model root), so
-  no DG read is needed per joint per frame just to notice a move.
+- Unselected hubs use local geometry under solver-driven transforms (see
+  *The viewport half*). The joint node has no private runtime state. The
+  solver's `outJointDisplay[]` carries radius, activity and local bounds;
+  only configuration edits affect it. Only a picked joint requests live
+  attachment frames for its overlay.
 
 Inside the solver, the remaining per-frame cost is the Bullet step itself plus
 one anchor data-block read per kinematic body — both real simulation work.
@@ -268,47 +276,49 @@ Adding cross-node attribute reads (through `MPlug`) anywhere in `compute()` is
 what to avoid: a single cross-node plug read costs more than the whole
 input-cache bookkeeping.
 
-Both geometry overrides take part in VP2 caching: `requiresGeometryUpdate()`
-returns false for both (the node marks its drawing dirty on every input edit)
-and `requiresUpdateRenderItems()` returns false as well for both. Do not turn
-either back on to "make sure" a change is picked up: mark the drawing dirty
-where the change happens instead.
+VP2 caching is respected by both overrides: `requiresGeometryUpdate()` and
+`requiresUpdateRenderItems()` return false for both, and the node marks the
+drawing dirty where a change happens. `setGeometryDrawDirty(..., false)` still
+requests a geometry update; `false` only says the topology did not change.
+The joint override also implements `isStreamDirty()` and `isIndexingDirty()`:
+existing hub buffers can be reused when selection, overlay pose or colour
+changes. New VP2 stream requirements must still be populated.
 
-One thing that looks like a shortcut but is not: handing VP2 the pose through
-`MRenderItem::setMatrix()` so that the vertex data can stay static. For an item
-in a geometry override that matrix is **composed** with the node's DAG
-transform instead of replacing it (the hubs double-transform and fly off the
-model), and returning `true` from `requiresUpdateRenderItems()` does not by
-itself make VP2 re-prepare the object, so the item matrix is never refreshed and
-the hubs freeze. The pose therefore stays baked into the vertices, and the
-per-evaluation `setGeometryDrawDirty()` in `RigidBodyJoint` is load-bearing.
+A joint's hub is LOCAL geometry at the node's origin, and the solver drives the
+node's transform to the joint's live attachment on body A — exactly the
+readout a body guide uses.  There is no render-item matrix, so a playback frame
+moves the hub, the guides and the bounding box through the ordinary DAG
+transform. The hub vertices are the shared unit mesh scaled to the joint's
+`jointHubRadius` input (the model's rest-link size times `jointDisplayScale`).
+The solver computes that configuration output independently of the Bullet step.
 
 ### The viewport half
 
-A joint's hub is re-baked every frame: its pose is part of the vertex data
-(see the note above on why the render-item matrix cannot carry it), so
-`RigidBodyJoint` marks the drawing dirty on every evaluation. What is left in
-that path is kept free of DG reads and of allocations:
+A joint's hub moves with body A while its vertex data stays local geometry, so
+an unselected hub does not need its override prepared for an ordinary pose
+change. The responsibilities are:
 
-- `updateDG()` reads the joint once through `RigidBodyJoint::resolveSolverView()`
-  and re-classifies the hub only when its config serial moved (see
-  `docs/JointVisualization.md`).
-- `populateGeometry()` bakes the shared unit hub into reused scratch streams,
-  and `fillMeshBuffers()` `memset`s a zeroed UV stream instead of building a
-  temporary `std::vector`.
-- `updateRenderItems()` finds its four render items through the remembered
-  indices and only falls back to a name search when VP2 reordered the list.
+- `updateDG()` runs on an edit, on a solver display change and for a picked
+  joint's per-frame refresh: it reads the joint's own inputs and classifies
+  the hub (`docs/JointVisualization.md`). Only a picked joint resolves the
+  owning solver, pulls `solverStep` and requests its live frames.
+- `populateGeometry()` writes the unit hub scaled to the joint's radius, and
+  fills new or dirty VP2 streams. The override tracks radius changes; hub
+  indexing is constant.
+- `updateRenderItems()` states the four items (colour / draw mode / enable) and
+  never sets an item matrix.
 - `addUIDrawables()` caches Maya's display status (a viewport query) until the
   selection or isolate state changes, instead of asking once per joint per
-  redraw (`rigid_body_display::displayStatusSerial`).
+  redraw (`rigid_body_display::displayStatusSerial`), and skips the overlay's
+  frame math entirely for the joints that are not picked.
+- `boundingBox()` covers the glyphs around the node's origin (the limits plus
+  the hub and guide reach). It reads the node's own `jointBoundsMin` and
+  `jointBoundsMax` inputs. A size edit at a paused frame evaluates the solver's
+  display output without building or advancing the simulation.
 
-The dirty calls keep `setGeometryDrawDirty()`'s default `topologyChanged`
-argument: passing `false` ("only the vertex data changed") reads like exactly
-what a moving hub needs, but VP2 then stops calling `populateGeometry` and the
-hubs freeze at their last pose. A collider is no different.
-
-`pmxRigidBodyShape`'s geometry is pose-independent, so its override is not
-repopulated during playback at all; only its `addUIDrawables()` wire runs.
+`pmxRigidBodyShape`'s geometry is pose-independent for the same reason: its
+override is not repopulated during playback, and only its `addUIDrawables()`
+wire runs.
 
 Maya standalone has no viewport, so none of the display cost above is measured
 by the benchmark. To measure it, run an interactive Maya with a model and a
@@ -336,9 +346,9 @@ Repeat the walk with the display switched off (`pmxRigidBodyJoint.drawMode =
 (`pmxRigidBodyNode.nodeState = 1`) to attribute the cost. Two traps when
 comparing numbers:
 
-- Hiding the joints also stops the physics: the joint override is what pulls
-  `pmxRigidBodyNode.frameMatrix`. Subtract the benchmark's `solver` column to
-  split draw from simulation.
+- Hiding the joints also stops the physics: the joint override reads the
+  joint's `solverStep`, which is what pulls `pmxRigidBodyNode.outStep`.
+  Subtract the benchmark's `solver` column to split draw from simulation.
 - `cmds.playbackOptions` is real-time synced by default, so any "achieved fps"
   measured through `cmds.play()` saturates at the scene frame rate (24) however
   fast the frame really is. Measure a scripted walk instead (as above), or set

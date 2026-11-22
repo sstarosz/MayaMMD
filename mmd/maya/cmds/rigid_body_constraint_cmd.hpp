@@ -5,7 +5,8 @@
  *
  * RigidBodyConstraintCmd — native C++ command for appending PMX joints
  * (rigid-body CONSTRAINTS) to a pmxRigidBodyNode: one pmxRigidBodyJoint node
- * per joint, registered in the solver's ``jointShapes`` array.
+ * per joint, registered in the solver's ``jointShapes`` (identity) and
+ * ``joints`` (data) arrays.
  *
  * WHY C++ (not a Python MPxCommand): identical rationale to ``pmxRigidBody``
  * (see rigid_body_cmd.hpp) — the Python command layer crashes inside

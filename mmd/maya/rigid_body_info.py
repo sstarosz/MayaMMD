@@ -313,7 +313,7 @@ class JointInfo:
     node: str = ""
     """Full DAG path of the data node (the ``pmxRigidBodyJoint``)."""
     guide: str = ""
-    """Full DAG path of the transform that holds the joint frame."""
+    """Full DAG path of the transform that holds the joint's viewport guide."""
     name_local: str = ""
     name_universal: str = ""
     body_a_index: int = -1

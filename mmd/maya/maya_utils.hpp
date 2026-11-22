@@ -18,60 +18,11 @@
 #include <maya/MTransformationMatrix.h>
 #include <maya/MVector.h>
 
-#include <atomic>
-#include <cstdint>
-
 #include "common.hpp"
 #include "physics_math.hpp"
 
 namespace mmd::maya
 {
-// ── Rigid-body edit serial ───────────────────────────────────────────────
-// Bumped whenever a rigid body's or joint's CONFIGURATION is edited (any PMX
-// field, the joint frame, the body/joint wiring).  The solver caches its
-// PMX-verbatim inputs and the joints cache their display data, and both
-// re-read only when this serial moved: re-reading every body's and joint's
-// attributes through the DG on every evaluation was the largest single cost
-// of playback.
-//
-// The per-frame KINEMATIC ANCHORS are not part of this: they are a real input
-// of the solver (`pmxRigidBodyNode.anchorWorlds[]`), so Maya's own dirt carries
-// them and the data block caches the value across the pulls of one frame.
-//
-// One scene-wide counter is enough — edits are user-speed, and a re-read is
-// always correct (it just costs a rebuild's worth of DG reads).  Atomic
-// because Maya evaluates nodes on parallel threads.
-namespace detail
-{
-inline std::atomic<std::uint64_t> rigidBodyEditSerial{0};
-inline std::atomic<std::uint64_t> rigidBodyFrameSerial{0};
-} // namespace detail
-
-[[nodiscard]] inline std::uint64_t rigidBodyEditSerial() noexcept
-{
-    return detail::rigidBodyEditSerial.load(std::memory_order_relaxed);
-}
-
-inline void noteRigidBodyConfigEdit() noexcept
-{
-    detail::rigidBodyEditSerial.fetch_add(1, std::memory_order_relaxed);
-}
-
-// Serial for JOINT FRAME movement only (a moved joint transform, or a moved
-// model root which moves every joint frame with it).  Kept apart from the
-// config serial so a joint display can refresh just its frame — recomputing
-// the frame is a DAG matrix evaluation, while the limits / bodies / hub radius
-// it caches alongside are untouched by a move and must not be re-read.
-[[nodiscard]] inline std::uint64_t rigidBodyFrameSerial() noexcept
-{
-    return detail::rigidBodyFrameSerial.load(std::memory_order_relaxed);
-}
-
-inline void noteRigidBodyFrameEdit() noexcept
-{
-    detail::rigidBodyFrameSerial.fetch_add(1, std::memory_order_relaxed);
-}
-
 // A joint's stored PMX bone index (pmxBoneIndex), or -1.  The bone builder
 // stamps it on every joint, and the DAG IS the PMX bone hierarchy — shared
 // by pmxRigidBody (resolveBone) and pmxRigidBodyNode (readBodyData's message +

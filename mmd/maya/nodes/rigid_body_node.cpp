@@ -12,7 +12,8 @@
  * a RigidBodySimulation::Definition, rebuilds the world when those inputs
  * change or time is scrubbed backwards, steps it when time advances or a
  * kinematic anchor moves, and writes each dynamic body's solved local pose to
- * the outTranslate/outRotate outputs.
+ * the outTranslate/outRotate outputs plus each guide's current pose to the
+ * outGuide... / outJoint... outputs.
  */
 
 #include "rigid_body_node.hpp"
@@ -84,6 +85,11 @@ MObject RigidBodyNode::aTime;
 MObject RigidBodyNode::aGravity;
 MObject RigidBodyNode::aJointDisplayScale;
 MObject RigidBodyNode::aOutStep;
+MObject RigidBodyNode::aOutJointDisplay;
+MObject RigidBodyNode::aOutJointHubRadius;
+MObject RigidBodyNode::aOutJointActive;
+MObject RigidBodyNode::aOutJointBoundsMin;
+MObject RigidBodyNode::aOutJointBoundsMax;
 
 MObject RigidBodyNode::aBodyShapes;
 
@@ -106,6 +112,16 @@ MObject RigidBodyNode::aAnchorWorlds;
 
 MObject RigidBodyNode::aJointShapes;
 
+MObject RigidBodyNode::aJoints;
+MObject RigidBodyNode::aInJointRestTranslate;
+MObject RigidBodyNode::aInJointRestRotate;
+MObject RigidBodyNode::aInJointLinearMin;
+MObject RigidBodyNode::aInJointLinearMax;
+MObject RigidBodyNode::aInJointAngularMin;
+MObject RigidBodyNode::aInJointAngularMax;
+MObject RigidBodyNode::aInJointLinearStiffness;
+MObject RigidBodyNode::aInJointAngularStiffness;
+
 MObject RigidBodyNode::aOutTranslate;
 MObject RigidBodyNode::aOutTranslateX;
 MObject RigidBodyNode::aOutTranslateY;
@@ -123,6 +139,15 @@ MObject RigidBodyNode::aOutGuideRotate;
 MObject RigidBodyNode::aOutGuideRotateX;
 MObject RigidBodyNode::aOutGuideRotateY;
 MObject RigidBodyNode::aOutGuideRotateZ;
+
+MObject RigidBodyNode::aOutJointTranslate;
+MObject RigidBodyNode::aOutJointTranslateX;
+MObject RigidBodyNode::aOutJointTranslateY;
+MObject RigidBodyNode::aOutJointTranslateZ;
+MObject RigidBodyNode::aOutJointRotate;
+MObject RigidBodyNode::aOutJointRotateX;
+MObject RigidBodyNode::aOutJointRotateY;
+MObject RigidBodyNode::aOutJointRotateZ;
 
 // ===========================================================================
 // File-local helpers (pure attribute/plugin reading — no node state)
@@ -483,40 +508,71 @@ bool sameBodyFields(const std::vector<RigidBodySimulation::BodyDefinition>& a,
     return true;
 }
 
-// Read the solver's joint list from its jointShapes[] message array (PMX
-// order — written DENSELY by the builder): each connected pmxRigidBodyJoint
-// node provides one JointDefinition via RigidBodyJoint::readJointDefinition
-// (the FRAME comes from the joint node's DAG transform, in the rigid bodies
-// group's space; the rest from its attributes).  Unconnected slots are
-// skipped, keeping the joint index ==
-// connected-joint order.  The joint's bodies are connections to shape nodes,
-// resolved to body indices through `shapes` (-1 for a missing body).
+// Decode one `joints[]` element (fed by a pmxRigidBodyJoint's `joint`
+// compound) into the core definition.  Angular values arrive in radians,
+// exactly like the joint's angle3 plugs.
+void decodeJoint(MDataHandle element, RigidBodySimulation::JointDefinition& out)
+{
+    out.frameT = readDouble3(element.child(RigidBodyNode::aInJointRestTranslate));
+    out.frameR = readDouble3(element.child(RigidBodyNode::aInJointRestRotate));
+    out.linearMin = readDouble3(element.child(RigidBodyNode::aInJointLinearMin));
+    out.linearMax = readDouble3(element.child(RigidBodyNode::aInJointLinearMax));
+    out.angularMin = readDouble3(element.child(RigidBodyNode::aInJointAngularMin));
+    out.angularMax = readDouble3(element.child(RigidBodyNode::aInJointAngularMax));
+    out.linearStiffness = readDouble3(element.child(RigidBodyNode::aInJointLinearStiffness));
+    out.angularStiffness = readDouble3(element.child(RigidBodyNode::aInJointAngularStiffness));
+}
+
+// Read the solver's joint list from its `joints[]` INPUT (PMX order — written
+// DENSELY by the builder).  Each element carries one PMX-verbatim joint, fed
+// by the connected pmxRigidBodyJoint's `joint` compound
+// (pmxRigidBodyConstraint makes that connection), so this is a data-block
+// read: Maya pushed the values once for the frame and the node's dirty flags
+// decide when to come back.
+//
+// The joint NODES still come from the jointShapes[] message array (identity:
+// the body links are connections, and the output slots must not shift when a
+// joint is deleted).  A slot with no joint data — or no node — stays an
+// INACTIVE placeholder (bodyA/B = -1), keeping the joint index aligned with
+// the array index.  The bodies are connections to shape nodes, resolved to
+// body indices through `shapes` (-1 for a missing body).
 [[nodiscard]] std::vector<RigidBodySimulation::JointDefinition>
-readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
+readJointData(const MObject& node, MDataBlock& dataBlock, const RigidBodyNode::BodyShapes& shapes)
 {
     std::vector<RigidBodySimulation::JointDefinition> out;
     MPlug shapesPlug(node, RigidBodyNode::aJointShapes);
     const unsigned int jointCount = shapesPlug.evaluateNumElements();
-    // Inverted ONCE: this runs on every evaluation and reads every joint of
-    // the model, so a per-joint inverse would dominate the loop.
-    const MMatrix groupWorldInverse = RigidBodyNode::groupWorldMatrix(node).inverse();
+    MStatus stat;
+    MArrayDataHandle data(dataBlock.inputArrayValue(RigidBodyNode::aJoints, &stat));
+    if (stat != MS::kSuccess)
+    {
+        return out;
+    }
     out.reserve(jointCount);
     for (unsigned int i = 0; i < jointCount; ++i)
     {
-        MPlugArray sources;
-        shapesPlug.elementByPhysicalIndex(i).connectedTo(sources, true, false);
-        if (sources.length() == 0)
-        {
-            continue;
-        }
-        const MObject joint = sources[0].node();
         RigidBodySimulation::JointDefinition j;
-        if (!RigidBodyJoint::readJointDefinition(joint, groupWorldInverse, j))
+        bool haveData = false;
+        // jumpToElement fails on a hole (a deleted joint, or a slot that was
+        // never fed); the inactive placeholder above survives.
+        if (data.jumpToElement(i) == MS::kSuccess)
         {
-            continue;
+            MStatus elementStat;
+            MDataHandle element = data.inputValue(&elementStat);
+            if (elementStat == MS::kSuccess)
+            {
+                decodeJoint(element, j);
+                haveData = true;
+            }
         }
-        j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
-        j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));
+        MPlugArray sources;
+        shapesPlug.elementByLogicalIndex(i).connectedTo(sources, true, false);
+        if (haveData && sources.length() != 0U)
+        {
+            const MObject joint = sources[0].node();
+            j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
+            j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));
+        }
         out.push_back(j);
     }
     return out;
@@ -529,10 +585,24 @@ readJointData(const MObject& node, const RigidBodyNode::BodyShapes& shapes)
 
 // True when `plug` is one of the node's output compounds (or an element or
 // child of one) — the only plugs compute() must service.
+MObject outputAttribute(MPlug plug)
+{
+    while (plug.isChild())
+    {
+        plug = plug.parent();
+    }
+    return plug.attribute();
+}
+
 bool isOutputPlug(const MPlug& plug)
 {
-    return plug == RigidBodyNode::aOutTranslate || plug == RigidBodyNode::aOutRotate ||
-           plug == RigidBodyNode::aOutStep || plug.isElement() || plug.isChild();
+    const MObject attribute = outputAttribute(plug);
+    return attribute == RigidBodyNode::aOutTranslate || attribute == RigidBodyNode::aOutRotate ||
+           attribute == RigidBodyNode::aOutGuideTranslate ||
+           attribute == RigidBodyNode::aOutGuideRotate ||
+           attribute == RigidBodyNode::aOutJointTranslate ||
+           attribute == RigidBodyNode::aOutJointRotate ||
+           attribute == RigidBodyNode::aOutJointDisplay || attribute == RigidBodyNode::aOutStep;
 }
 
 // ===========================================================================
@@ -823,7 +893,6 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
     world.bodyShapes = in.bodyShapes;
     world.joints = in.joints;
     world.gravity = in.gravity;
-    world.hubRadius = resolveHubRadius(in.bodies, in.joints);
 
     std::vector<MDagPath> jointPaths;
     resolveBodyWiring(node, world.bodies, jointPaths);
@@ -1071,6 +1140,47 @@ resolveHubRadius(const std::vector<RigidBodySimulation::BodyDefinition>& bodies,
         return advanceWithAnchors(std::move(*world), now, std::move(curAnchors), anchorsMoved);
     }
     return advance(std::move(*world), now, anchors);
+}
+
+// Display configuration is derived directly from the authored inputs. Asking
+// for it never advances or rebuilds the Bullet world.
+MStatus writeJointDisplay(const Inputs& in, MDataBlock& dataBlock)
+{
+    const double radius =
+        resolveHubRadius(in.bodies, in.joints) *
+        std::max(0.05, dataBlock.inputValue(RigidBodyNode::aJointDisplayScale).asDouble());
+    const auto count = static_cast<unsigned int>(in.joints.size());
+    MArrayDataBuilder builder(&dataBlock, RigidBodyNode::aOutJointDisplay, count);
+    namespace display = mmd::core::joint_display;
+    const double pad = std::max(radius, 2.25 * display::guideSizes(radius).radius);
+    for (unsigned int i = 0; i < count; ++i)
+    {
+        const auto& joint = in.joints[i];
+        const auto ranges = display::describe(joint);
+        std::array<double, 3> low{-pad, -pad, -pad};
+        std::array<double, 3> high{pad, pad, pad};
+        for (std::size_t axis = 0; axis < 3; ++axis)
+        {
+            const auto& range = ranges.linear.at(axis);
+            if (range.kind() != display::RangeKind::Free)
+            {
+                low.at(axis) += std::min(range.lower, 0.0);
+                high.at(axis) += std::max(range.upper, 0.0);
+            }
+        }
+        MDataHandle element = builder.addElement(i);
+        element.child(RigidBodyNode::aOutJointHubRadius).setDouble(radius);
+        element.child(RigidBodyNode::aOutJointActive)
+            .setBool(RigidBodySimulation::jointStatus(joint, in.bodies) ==
+                     RigidBodySimulation::JointStatus::eActive);
+        element.child(RigidBodyNode::aOutJointBoundsMin).set3Double(low[0], low[1], low[2]);
+        element.child(RigidBodyNode::aOutJointBoundsMax).set3Double(high[0], high[1], high[2]);
+    }
+    MArrayDataHandle output = dataBlock.outputArrayValue(RigidBodyNode::aOutJointDisplay);
+    output.set(builder);
+    output.setAllClean();
+    dataBlock.outputValue(RigidBodyNode::aOutJointDisplay).setClean();
+    return MS::kSuccess;
 }
 
 // Write each dynamic body's solved local pose to outTranslate/outRotate.
@@ -1381,6 +1491,63 @@ MStatus writeOutputs(const std::optional<World>& world, const MMatrix& groupWorl
     grOut.setAllClean();
     dataBlock.outputValue(RigidBodyNode::aOutGuideTranslate).setClean();
     dataBlock.outputValue(RigidBodyNode::aOutGuideRotate).setClean();
+
+    // Joint guide outputs: every joint's live attachment on body A, in the
+    // group's space.  pmxRigidBodyConstraint connects these to the joint guide
+    // transforms, so the node's pivot follows the drawn hub — exactly like a
+    // body guide.  Written for EVERY index (active or not) so the array stays
+    // dense and aligned with jointShapes[]; a joint with no live attachment
+    // falls back to its rest frame instead of jumping to the origin.
+    const auto jointCount = world ? static_cast<unsigned int>(world->joints.size()) : 0U;
+    MArrayDataBuilder jtBuilder(&dataBlock, RigidBodyNode::aOutJointTranslate, jointCount);
+    MArrayDataBuilder jrBuilder(&dataBlock, RigidBodyNode::aOutJointRotate, jointCount);
+    if (world)
+    {
+        constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+        const MMatrix groupInv = groupWorld.inverse();
+        for (unsigned int i = 0; i < jointCount; ++i)
+        {
+            const RigidBodySimulation::JointDefinition& joint = world->joints[i];
+            Double3 pos = joint.frameT;
+            Double3 rot = joint.frameR;
+            RigidBodySimulation::Pose attachment;
+            if (joint.bodyA >= 0 && joint.bodyB >= 0 &&
+                world->sim.attachmentPose(joint.bodyA, joint.frameT, joint.frameR, attachment))
+            {
+                pos = attachment.pos;
+                quatToEulerXYZDegrees(Double4(attachment.quat.x, attachment.quat.y,
+                                              attachment.quat.z, attachment.quat.w),
+                                      rot);
+            }
+            // Attachment world (row-vector Maya), then into the group's frame
+            // so the driven guide (a child of the group) lands on the hub.
+            const MMatrix jointWorld = mmd::maya::matrixFromTR(pos, rot);
+            const MTransformationMatrix gtm(groupInv * jointWorld);
+            const MVector t = gtm.getTranslation(MSpace::kTransform);
+            const MEulerRotation e = gtm.eulerRotation(); // radians
+
+            MDataHandle jtEl = jtBuilder.addElement(i);
+            jtEl.child(RigidBodyNode::aOutJointTranslateX).setMDistance(MDistance(t.x));
+            jtEl.child(RigidBodyNode::aOutJointTranslateY).setMDistance(MDistance(t.y));
+            jtEl.child(RigidBodyNode::aOutJointTranslateZ).setMDistance(MDistance(t.z));
+
+            MDataHandle jrEl = jrBuilder.addElement(i);
+            jrEl.child(RigidBodyNode::aOutJointRotateX)
+                .setMAngle(MAngle(e.x * kRadToDeg, MAngle::kDegrees));
+            jrEl.child(RigidBodyNode::aOutJointRotateY)
+                .setMAngle(MAngle(e.y * kRadToDeg, MAngle::kDegrees));
+            jrEl.child(RigidBodyNode::aOutJointRotateZ)
+                .setMAngle(MAngle(e.z * kRadToDeg, MAngle::kDegrees));
+        }
+    }
+    MArrayDataHandle jtOut = dataBlock.outputArrayValue(RigidBodyNode::aOutJointTranslate);
+    jtOut.set(jtBuilder);
+    jtOut.setAllClean();
+    MArrayDataHandle jrOut = dataBlock.outputArrayValue(RigidBodyNode::aOutJointRotate);
+    jrOut.set(jrBuilder);
+    jrOut.setAllClean();
+    dataBlock.outputValue(RigidBodyNode::aOutJointTranslate).setClean();
+    dataBlock.outputValue(RigidBodyNode::aOutJointRotate).setClean();
     return MS::kSuccess;
 }
 
@@ -1505,6 +1672,34 @@ MObject makeNumeric(MFnNumericAttribute& fn, const MString& longName, const MStr
     fn.setKeyable(false);
     return attr;
 }
+
+// Angle-triple attribute (like a transform's rotate): stored in radians, shown
+// and set from scripts in the user's UI angle unit.  The joint node's
+// jointAngularMin/Max are the same shape, so a compound connection pairs them.
+MObject makeAngle3Numeric(MFnNumericAttribute& fn, const MString& longName,
+                          const MString& shortName)
+{
+    MStatus stat;
+    MFnUnitAttribute uAttr;
+    std::array<MObject, 3> axes{};
+    const std::array<const char*, 3> suffix{"X", "Y", "Z"};
+    const std::array<const char*, 3> shortSuffix{"x", "y", "z"};
+    for (int i = 0; i < 3; ++i)
+    {
+        const auto index = static_cast<std::size_t>(i);
+        axes.at(index) =
+            uAttr.create(longName + suffix.at(index), shortName + shortSuffix.at(index),
+                         MFnUnitAttribute::kAngle, 0.0, &stat);
+        MMD_CHECK_MSTATUS(stat);
+        uAttr.setStorable(true);
+        uAttr.setKeyable(false);
+    }
+    MObject attr = fn.create(longName, shortName, axes.at(0), axes.at(1), axes.at(2), &stat);
+    MMD_CHECK_MSTATUS(stat);
+    fn.setStorable(true);
+    fn.setKeyable(false);
+    return attr;
+}
 } // namespace
 
 MStatus RigidBodyNode::initialize()
@@ -1558,12 +1753,10 @@ MStatus RigidBodyNode::initialize()
     mMsgAttr.setKeyable(false);
 
     // --- per-joint shape message array (PMX order) ---
-    // Each element connects to a pmxRigidBodyJoint node that holds that
-    // joint's PMX-verbatim data (see rigid_body_joint.{hpp,cpp}); the solver
-    // pulls every joint from its node in readJointData.  The joint's FRAME
-    // is the joint node's DAG transform (joints are static config — moving
-    // the node repositions the constraint), so a config change is detected
-    // by the per-eval re-read + comparison.
+    // Each element connects to a pmxRigidBodyJoint node.  This is IDENTITY,
+    // not data: the joint's body links are resolved from its messages, the
+    // output slots stay aligned, and the joint display asks the node.  The
+    // joint's PMX VALUES arrive through `joints[]` below.
     aJointShapes = mMsgAttr.create("jointShapes", "js", &stat);
     MMD_CHECK_MSTATUS(stat);
     mMsgAttr.setArray(true);
@@ -1572,6 +1765,47 @@ MStatus RigidBodyNode::initialize()
     mMsgAttr.setCached(false);
     mMsgAttr.setStorable(true);
     mMsgAttr.setKeyable(false);
+
+    // --- per-joint simulation inputs, as one compound array (PMX order) ---
+    // Each element is fed by the matching pmxRigidBodyJoint's `joint` compound
+    // (one connectAttr per joint in pmxRigidBodyConstraint).  The children
+    // repeat the joint node's long names because a compound-to-compound
+    // connection pairs them by name; their TYPES must match too (the angular
+    // limits are angle compounds).
+    {
+        MFnCompoundAttribute jointsAttr;
+        aJoints = jointsAttr.create("joints", "jts", &stat);
+        MMD_CHECK_MSTATUS(stat);
+        jointsAttr.setArray(true);
+        jointsAttr.setReadable(true);
+        jointsAttr.setWritable(true);
+        jointsAttr.setStorable(true);
+        jointsAttr.setKeyable(false);
+
+        aInJointRestTranslate =
+            makeNumeric(nAttr, "jointRestTranslate", "jrt", MFnNumericData::k3Double, 0.0);
+        aInJointRestRotate =
+            makeNumeric(nAttr, "jointRestRotate", "jrr", MFnNumericData::k3Double, 0.0);
+        aInJointLinearMin =
+            makeNumeric(nAttr, "jointLinearMin", "jlmn", MFnNumericData::k3Double, 0.0);
+        aInJointLinearMax =
+            makeNumeric(nAttr, "jointLinearMax", "jlmx", MFnNumericData::k3Double, 0.0);
+        aInJointAngularMin = makeAngle3Numeric(nAttr, "jointAngularMin", "jamn");
+        aInJointAngularMax = makeAngle3Numeric(nAttr, "jointAngularMax", "jamx");
+        aInJointLinearStiffness =
+            makeNumeric(nAttr, "jointLinearStiffness", "jlsk", MFnNumericData::k3Double, 0.0);
+        aInJointAngularStiffness =
+            makeNumeric(nAttr, "jointAngularStiffness", "jask", MFnNumericData::k3Double, 0.0);
+
+        jointsAttr.addChild(aInJointRestTranslate);
+        jointsAttr.addChild(aInJointRestRotate);
+        jointsAttr.addChild(aInJointLinearMin);
+        jointsAttr.addChild(aInJointLinearMax);
+        jointsAttr.addChild(aInJointAngularMin);
+        jointsAttr.addChild(aInJointAngularMax);
+        jointsAttr.addChild(aInJointLinearStiffness);
+        jointsAttr.addChild(aInJointAngularStiffness);
+    }
 
     // --- per-body simulation inputs, as one compound array (PMX order) ---
     // Each element is fed by the matching pmxRigidBodyShape's `body` compound
@@ -1766,6 +2000,84 @@ MStatus RigidBodyNode::initialize()
     cAttr.addChild(aOutGuideRotateY);
     cAttr.addChild(aOutGuideRotateZ);
 
+    // --- joint guide outputs: each joint's live attachment on body A ---
+    // Same unit-typed compound pattern as outGuideTranslate/outGuideRotate, so
+    // the connections to the joint guide transform's translate/rotate are
+    // direct.  Written for every joint index.
+    MFnUnitAttribute uJointAttr;
+    aOutJointTranslateX =
+        uJointAttr.create("outJointTranslateX", "ojtx", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutJointTranslateY =
+        uJointAttr.create("outJointTranslateY", "ojty", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutJointTranslateZ =
+        uJointAttr.create("outJointTranslateZ", "ojtz", MFnUnitAttribute::kDistance, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+
+    aOutJointTranslate = cAttr.create("outJointTranslate", "ojtr", &stat);
+    MMD_CHECK_MSTATUS(stat);
+    cAttr.setArray(true);
+    cAttr.setUsesArrayDataBuilder(true);
+    cAttr.setWritable(false);
+    cAttr.setStorable(false);
+    cAttr.addChild(aOutJointTranslateX);
+    cAttr.addChild(aOutJointTranslateY);
+    cAttr.addChild(aOutJointTranslateZ);
+
+    aOutJointRotateX =
+        uJointAttr.create("outJointRotateX", "ojrx", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutJointRotateY =
+        uJointAttr.create("outJointRotateY", "ojry", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    aOutJointRotateZ =
+        uJointAttr.create("outJointRotateZ", "ojrz", MFnUnitAttribute::kAngle, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+
+    aOutJointRotate = cAttr.create("outJointRotate", "ojrt", &stat);
+    MMD_CHECK_MSTATUS(stat);
+    cAttr.setArray(true);
+    cAttr.setUsesArrayDataBuilder(true);
+    cAttr.setWritable(false);
+    cAttr.setStorable(false);
+    cAttr.addChild(aOutJointRotateX);
+    cAttr.addChild(aOutJointRotateY);
+    cAttr.addChild(aOutJointRotateZ);
+
+    // Derived joint display values. The child names match jointDisplay on
+    // pmxRigidBodyJoint so one compound connection carries the whole record.
+    aOutJointHubRadius = nAttr.create("jointHubRadius", "jhr", MFnNumericData::kDouble,
+                                      mmd::core::joint_display::kFallbackHubRadius, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setWritable(false);
+    nAttr.setStorable(false);
+    aOutJointActive = nAttr.create("jointActive", "jac", MFnNumericData::kBoolean, 0.0, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setWritable(false);
+    nAttr.setStorable(false);
+    aOutJointBoundsMin = nAttr.create("jointBoundsMin", "jbmn", MFnNumericData::k3Double,
+                                      -mmd::core::joint_display::kFallbackHubRadius, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setWritable(false);
+    nAttr.setStorable(false);
+    aOutJointBoundsMax = nAttr.create("jointBoundsMax", "jbmx", MFnNumericData::k3Double,
+                                      mmd::core::joint_display::kFallbackHubRadius, &stat);
+    MMD_CHECK_MSTATUS(stat);
+    nAttr.setWritable(false);
+    nAttr.setStorable(false);
+    aOutJointDisplay = cAttr.create("outJointDisplay", "ojd", &stat);
+    MMD_CHECK_MSTATUS(stat);
+    cAttr.setArray(true);
+    cAttr.setUsesArrayDataBuilder(true);
+    cAttr.setWritable(false);
+    cAttr.setStorable(false);
+    cAttr.setHidden(true);
+    cAttr.addChild(aOutJointHubRadius);
+    cAttr.addChild(aOutJointActive);
+    cAttr.addChild(aOutJointBoundsMin);
+    cAttr.addChild(aOutJointBoundsMax);
+
     // --- node attribute registration ---
     stat = addAttribute(aTime);
     MMD_CHECK_MSTATUS(stat);
@@ -1775,9 +2087,13 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutStep);
     MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutJointDisplay);
+    MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyShapes);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointShapes);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aJoints);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aBodyBodies);
     MMD_CHECK_MSTATUS(stat);
@@ -1791,6 +2107,18 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutJointTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = addAttribute(aOutJointRotate);
+    MMD_CHECK_MSTATUS(stat);
+
+    // Display configuration has no dependency on time or animated anchors.
+    for (const MObject& input :
+         {aBodyShapes, aBodyBodies, aJointShapes, aJoints, aJointDisplayScale})
+    {
+        stat = attributeAffects(input, aOutJointDisplay);
+        MMD_CHECK_MSTATUS(stat);
+    }
 
     // Make `time` drive the outputs.
     stat = attributeAffects(aTime, aOutTranslate);
@@ -1805,8 +2133,8 @@ MStatus RigidBodyNode::initialize()
     // Every config input drives the outputs too, so compute() re-runs on a
     // body/joint/gravity edit (config change detection) and on a kinematic
     // bone drag at a fixed time (the anchors are a real input: anchorWorlds[]).
-    // Body and joint config edits arrive through the message arrays: each
-    // shape/joint input affects its own `solver` message plug.
+    // Body and joint config edits arrive through the data-block arrays
+    // (bodies[] / joints[]); the message arrays report identity changes.
     stat = attributeAffects(aGravity, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aGravity, aOutRotate);
@@ -1839,6 +2167,14 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aJointShapes, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutRotate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutGuideTranslate);
+    MMD_CHECK_MSTATUS(stat);
+    stat = attributeAffects(aJoints, aOutGuideRotate);
+    MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorlds, aOutTranslate);
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorlds, aOutRotate);
@@ -1847,11 +2183,33 @@ MStatus RigidBodyNode::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = attributeAffects(aAnchorWorlds, aOutGuideRotate);
     MMD_CHECK_MSTATUS(stat);
-    // The joints redraw only when their solverStep input is dirtied, so
-    // everything they draw from the solver — including the hub size knob and
-    // the per-frame anchors — must reach outStep.
-    for (const MObject& input : {aTime, aGravity, aBodyShapes, aJointShapes, aBodyBodies,
-                                 aAnchorWorlds, aJointDisplayScale})
+    // The joint guides follow the sim too (attachment A moves every step).
+    for (const MObject& input : {
+             aTime,
+             aGravity,
+             aBodyShapes,
+             aJointShapes,
+             aJoints,
+             aBodyBodies,
+             aAnchorWorlds,
+         })
+    {
+        stat = attributeAffects(input, aOutJointTranslate);
+        MMD_CHECK_MSTATUS(stat);
+        stat = attributeAffects(input, aOutJointRotate);
+        MMD_CHECK_MSTATUS(stat);
+    }
+    // Selected overlays need the current simulation snapshot. Display-only
+    // settings reach outJointDisplay instead of dirtying the step output.
+    for (const MObject& input : {
+             aTime,
+             aGravity,
+             aBodyShapes,
+             aJointShapes,
+             aJoints,
+             aBodyBodies,
+             aAnchorWorlds,
+         })
     {
         stat = attributeAffects(input, aOutStep);
         MMD_CHECK_MSTATUS(stat);
@@ -1878,14 +2236,13 @@ void RigidBodyNode::getCacheSetup(const MEvaluationNode& evalNode,
 
 MStatus RigidBodyNode::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
-    // Only element dirts on the body/joint arrays can be "nothing changed":
-    // the kinematic anchors are a real input (anchorWorlds[]) and are read
-    // every evaluation, so a bodyShapes[]/jointShapes[] element dirt is either
-    // a config edit (the edit serial catches it) or a re-bind (inputStale's
-    // slot check catches it) — never per-frame data.  Everything else
-    // (gravity, the arrays themselves, the display scale) is configuration and
-    // needs the inputs read again — except the timeline, the anchors, and the
-    // body records (which are a data-block input).
+    // Only element dirts on the body/joint IDENTITY arrays can be "nothing
+    // changed": the kinematic anchors are a real input (anchorWorlds[]) and are
+    // read every evaluation, so a bodyShapes[]/jointShapes[] element dirt is a
+    // re-bind (inputStale's slot check catches it) — never per-frame data.
+    // Everything else (gravity and the arrays themselves) is
+    // configuration and needs the inputs read again — except the timeline, the
+    // anchors, and the body/joint records (which are data-block inputs).
     const MObject attribute = plug.attribute();
     if (attribute == aBodyBodies)
     {
@@ -1893,11 +2250,16 @@ MStatus RigidBodyNode::setDependentsDirty(const MPlug& plug, MPlugArray& affecte
         mBodiesDirty.store(true, std::memory_order_relaxed);
         return MPxLocatorNode::setDependentsDirty(plug, affected);
     }
-    if (attribute == aTime || attribute == aAnchorWorlds)
+    if (attribute == aJoints)
     {
-        // Per-frame inputs: read every evaluation, never part of the config
-        // cache.  (A bone drag arrives through aAnchorWorlds; the timeline
-        // through aTime.)
+        // The joint records arrived dirty: re-read them from the data block.
+        mJointsDirty.store(true, std::memory_order_relaxed);
+        return MPxLocatorNode::setDependentsDirty(plug, affected);
+    }
+    if (attribute == aTime || attribute == aAnchorWorlds || attribute == aJointDisplayScale)
+    {
+        // Time and anchors are read per simulation evaluation. Display scale
+        // is read only by writeJointDisplay; none belongs in the config cache.
         return MPxLocatorNode::setDependentsDirty(plug, affected);
     }
     if ((attribute == aBodyShapes || attribute == aJointShapes) && plug.isElement())
@@ -1912,20 +2274,17 @@ MStatus RigidBodyNode::setDependentsDirty(const MPlug& plug, MPlugArray& affecte
     }
     else
     {
-        if (attribute == aJointDisplayScale)
-        {
-            // The scale feeds the joints' cached hub radius.
-            mmd::maya::noteRigidBodyConfigEdit();
-        }
+        // Any other input (gravity, the arrays
+        // themselves) is configuration: read the input set again.
         mInputsValid = false;
     }
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }
 
 // The Evaluation Manager can evaluate the node without calling
-// setDependentsDirty (Parallel mode is Maya's default), so the bodies[] dirt is
-// picked up here as well — otherwise a body edit during playback would keep
-// simulating the cached records.
+// setDependentsDirty (Parallel mode is Maya's default), so the bodies[]/joints[]
+// dirt is picked up here as well — otherwise a body or joint edit during
+// playback would keep simulating the cached records.
 MStatus RigidBodyNode::preEvaluation(const MDGContext& context,
                                      const MEvaluationNode& evaluationNode)
 {
@@ -1934,21 +2293,20 @@ MStatus RigidBodyNode::preEvaluation(const MDGContext& context,
     {
         mBodiesDirty.store(true, std::memory_order_relaxed);
     }
+    if (evaluationNode.dirtyPlugExists(aJoints, &stat) && (stat == MS::kSuccess))
+    {
+        mJointsDirty.store(true, std::memory_order_relaxed);
+    }
     return MPxLocatorNode::preEvaluation(context, evaluationNode);
 }
 
-// Whether the cached JOINT inputs must be read again (see the header).
-// An element dirt is only structural when its connection changed — the config
-// edit serial covers field edits, and the per-frame anchors never touch these
-// arrays.  The body records are a data-block input and are handled separately
-// (mBodiesDirty).
+// Whether the whole cached input set must be read again (see the header).
+// An element dirt is only structural when its connection changed — the
+// per-frame anchors never touch these arrays.  The body and joint records are
+// data-block inputs and are handled separately (mBodiesDirty / mJointsDirty).
 bool RigidBodyNode::inputsStale(const MObject& node) const
 {
     if (!mInputsValid || !mWorld)
-    {
-        return true;
-    }
-    if (mInputsSerial != mmd::maya::rigidBodyEditSerial())
     {
         return true;
     }
@@ -1965,7 +2323,8 @@ bool RigidBodyNode::inputsStale(const MObject& node) const
             return true; // re-bound / deleted body
         }
     }
-    // Joints carry no per-frame input: any jointShapes[] dirt is real.
+    // A jointShapes[] element dirt means the joint NODE (or its body links)
+    // changed: re-read the joint records.
     return std::any_of(mJointSlotDirty.cbegin(), mJointSlotDirty.cend(),
                        [](bool dirty) { return dirty; });
 }
@@ -1980,41 +2339,50 @@ MStatus RigidBodyNode::compute(const MPlug& plug, MDataBlock& dataBlock)
         return MS::kUnknownParameter;
     }
 
-    const MTime now = dataBlock.inputValue(aTime).asTime();
-
-    // Pull the message arrays through the data block.  Their VALUES are not
-    // read (body identity and joints are read through their plugs), but the
-    // pull cleans their dirt paths (e.g. shape.solver -> bodyShapes[i]): Maya
-    // stops propagating at a plug that is still dirty, so without it only the
-    // FIRST edit at a paused frame would reach the solver.
+    // Pull the IDENTITY message arrays through the data block.  Their VALUES
+    // are not read (they name the shape/joint nodes), but the pull cleans
+    // their dirt paths (e.g. shape.solver -> bodyShapes[i] / joint.solver ->
+    // jointShapes[i]): Maya stops propagating at a plug that is still dirty,
+    // so without it only the FIRST edit at a paused frame would reach the
+    // solver.
     dataBlock.inputArrayValue(aBodyShapes);
     dataBlock.inputArrayValue(aJointShapes);
 
     // Frame transition: refresh whichever input group went stale, then
     // (re)build or advance the world.  The new world atomically replaces the
-    // old one.  Bodies come from the data block (a real input); joints are
-    // still pulled out of band behind the edit serial.
+    // old one.  Bodies and joints are both real inputs, read from the data
+    // block when their arrays arrive dirty (or when the wiring changed).
     const bool staleInputs = inputsStale(thisMObject());
-    if (mBodiesDirty.exchange(false, std::memory_order_relaxed) || staleInputs)
+    const bool bodiesDirty = mBodiesDirty.exchange(false, std::memory_order_relaxed) || staleInputs;
+    const bool jointsDirty = mJointsDirty.exchange(false, std::memory_order_relaxed) || staleInputs;
+    if (bodiesDirty)
     {
         // BodyShapes is rebuilt from scratch: it is an append-only index.
         mInputs.bodyShapes = RigidBodyNode::BodyShapes();
         mInputs.bodies = readBodyData(thisMObject(), dataBlock, mInputs.bodyShapes);
     }
-    if (staleInputs)
+    if (jointsDirty)
     {
-        mInputs.joints = readJointData(thisMObject(), mInputs.bodyShapes);
+        mInputs.joints = readJointData(thisMObject(), dataBlock, mInputs.bodyShapes);
+    }
+    if (bodiesDirty || jointsDirty)
+    {
         mInputs.gravity = readGravity(dataBlock);
-        mInputsSerial = mmd::maya::rigidBodyEditSerial();
         mInputsValid = true;
         std::fill(mBodySlotDirty.begin(), mBodySlotDirty.end(), false);
         std::fill(mJointSlotDirty.begin(), mJointSlotDirty.end(), false);
     }
+    if (outputAttribute(plug) == aOutJointDisplay)
+    {
+        return writeJointDisplay(mInputs, dataBlock);
+    }
+    const MTime now = dataBlock.inputValue(aTime).asTime();
     // The anchors are a real input, so read them every evaluation: the data
     // block serves the value Maya pushed once for this frame, and frame()
     // early-outs on a repeat pull where nothing moved.
     mWorld = frame(std::move(mWorld), mInputs, thisMObject(), now,
                    readAnchorWorlds(dataBlock, mInputs.bodies.size()));
+
     MDataHandle step = dataBlock.outputValue(aOutStep);
     step.setDouble(now.as(MTime::kSeconds));
     step.setClean();

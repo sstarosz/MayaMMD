@@ -175,56 +175,73 @@ isolated out undrawn until something else refreshed them.
 
 ## Updates during playback
 
-Each joint's hidden `solverStep` input is connected to its solver's
-`outStep` output. This real DG dependency brings every solver step to the
-joints, and reading it makes the solver evaluate before the joint reads the
-simulated poses. The joint node then tells Viewport 2.0 its drawing is out of
-date: from `setDependentsDirty` under DG evaluation, and from `postEvaluation`
-under the Evaluation Manager, which propagates no dirty during playback. The
-hub's pose is baked into its vertex data, so that dirty is what keeps it on
-body A. A camera move costs nothing.
+The joint node stores authored PMX data and exposes solver-driven display
+inputs. It has no private runtime state: no solver pointer, generation counter,
+selection cache or bounds cache. Its Maya callbacks forward input changes to
+the geometry override; its bounding-box callback reads its own bounds inputs.
+
+```mermaid
+flowchart LR
+    Body["Body node: PMX data"] -->|"bodies[]"| Solver["Solver: configuration and simulation"]
+    Joint["Joint node: PMX data"] -->|"joints[]"| Solver
+    Animation["Time and bone anchors"] --> Solver
+    Solver --> Bullet["Bullet world"]
+    Bullet -->|"solved poses"| Solver
+    Solver -->|"outJointTranslate / Rotate"| Guide["Joint guide transform"]
+    Solver -->|"outJointDisplay: configuration only"| Joint
+    Joint -->|"own display inputs"| Override["Geometry override"]
+    Guide -->|"DAG pose"| Viewport["Viewport 2.0"]
+    Override -->|"local hub and selected overlay"| Viewport
+```
+
+The hub is **local geometry at the node's origin**. The solver drives the guide
+to attachment A, so ordinary animation moves its existing geometry through the
+DAG. The hidden `solverStep` input carries `outStep` for a directly selected
+joint's live overlay. Unselected joints do not request live attachment frames.
+
+`outJointDisplay[i]` connects to the joint's hidden `jointDisplay` compound:
+hub radius, active status and local bounds. Only body/joint configuration and
+`jointDisplayScale` affect this output; time and animated anchors do not.
+Computing it does not build or advance Bullet. Configuration changes reach
+the override through ordinary input dirt in DG and Evaluation Manager modes.
 
 At a paused frame the solver also re-runs at once when you drag a bone, edit
-a joint or body attribute, or move a joint's transform: each body and joint
-input feeds its node's `solver` message plug. A joint's transform reaches it
-through the hidden `frameMatrix` input, which `pmxRigidBodyConstraint`
-connects to the transform's `worldMatrix`.
+a joint or body attribute: each body's and joint's values reach the solver
+through a real data connection (`bodies[]` / `joints[]`, compound-to-compound),
+so an edit is ordinary DG dirt and the node re-evaluates immediately. The joint
+guide transform above the node is a **readout**, driven by the solver
+(`outJointTranslate[]` / `outJointRotate[]`), so its channels are locked; edit
+`jointRestTranslate` / `jointRestRotate` to move the constraint.
 
-### What is read per frame (and what is cached)
+### What is read per frame (and what is rebuilt)
 
-Reading a plug through the DG is the expensive part of a redraw, and the
-display path runs for every joint on every playback frame — so the static
-half of what a joint draws is cached and the moving half is not:
+| Data | Refreshed |
+| ---- | --------- |
+| The hub's pose | never by the display — the solver-driven DAG transform carries it |
+| The picked joint's live attachment / body frames | every frame, picked joints only |
+| Hub radius, activity and local bounds | solver configuration output, on edits |
+| Limits, stiffness, draw mode, freedom and guide sizes | override preparation after edits or a selected-overlay refresh |
+| The hub vertices (unit mesh × radius) | first preparation, radius changes or new VP2 stream requirements |
+| Item colour / draw mode / enable | override preparation; does not require rebuilding the hub mesh |
 
-| Data                                              | Refreshed                                        |
-| ------------------------------------------------- | ------------------------------------------------ |
-| Attachment / body frames (they move per step)      | every `updateDG` and every `boundingBox`         |
-| Limits, stiffness, body links, status, hub radius  | only when a config edit is reported              |
-| The joint frame (`frameMatrix`)                    | only when the frame changes (its own serial)     |
-| Draw mode, freedom summary, guide sizes            | only when a config edit is reported              |
+The override owns geometry reuse. `isStreamDirty()` reports radius changes;
+`isIndexingDirty()` stays false because hub topology is fixed. The solver
+computes the model's hub radius from its median rest link and display scale,
+and expands each joint's linear ranges by the hub and symbolic guide reach
+for its local bounds. A bounding-box query sees an edited size without
+advancing the simulation.
 
-A *config edit* is reported by `mmd::maya::noteRigidBodyConfigEdit()`
-(`maya_utils.hpp`): `pmxRigidBodyShape` and `pmxRigidBodyJoint` bump a
-scene-wide serial from `setDependentsDirty` for every plug except the two that
-move without an edit — `solverStep` (every solver step) and `frameMatrix`
-(which has its own `noteRigidBodyFrameEdit()` serial, so a moved frame
-re-reads only the frame: the limits / bodies / hub radius stay cached).
-`pmxRigidBodyNode` uses the config serial to decide whether it has to read the
-joint records again; the body records (`bodies[]`) and the per-frame kinematic
-anchors (`anchorWorlds[]`) are real inputs read through the data block and
-never make the node re-read the joints. Adding a new joint attribute therefore
-still needs no extra bookkeeping (`attributeAffects(input, aSolver)` plus the
-generic serial); a new BODY field must be added to both compounds — the shape's
-`body` and the solver's `bodies[]` — because a compound connection pairs its
-children by name.
+**Re-import required for older scenes:** joints created before the display
+compound was added lack the `outJointDisplay[i]` connection. Re-create those
+joints by re-importing the model; simply loading the scene does not add it.
 
-The geometry override follows the same rule: `SolverView::serial` carries the
-config serial the cached limits were resolved at, and
-`RigidBodyJointGeometryOverride` re-classifies (the `drawMode` plug read, the
-freedom summary and the guide sizes) only when that serial moves. The hub
-itself is re-baked every frame — its attachment moves — but into reused scratch
-streams, straight from the shared unit hub and without the `MPoint * MMatrix`
-homogeneous divide.
+Joint edits reach the solver through the `joint` → `joints[]` compound
+connection, so no edit serial is involved anywhere: the solver re-reads a
+joint's or body's records only when that data-block input arrives dirty
+(`setDependentsDirty` **and** `preEvaluation`, because Parallel evaluation can
+skip the former). Adding a new joint field must be added to both compounds —
+the joint node's `joint` and the solver's `joints[]` — because a compound
+connection pairs its children by name.
 
 ## Jumping in time
 
@@ -242,11 +259,9 @@ re-pinned to the current skeleton pose, exactly as at the rest pose, so the
 frame you land on is self-consistent and identical to evaluating it twice.
 Rewinding always rebuilt for the same reason.
 
-A consequence worth knowing: because the rebuild is triggered by the
-*evaluation* time step, moving a joint's transform in a **script** and
-evaluating the solver with `cmds.dgeval` does not reposition the constraint in
-that same evaluation (the `worldMatrix` → `frameMatrix` dirty cycle only runs
-during DAG evaluation). Do the move, let the viewport update, then evaluate.
+Editing a joint's `jointRestTranslate` / `jointRestRotate` is an ordinary
+input edit on the solver's `joints[]`, so a `cmds.dgeval` (or the next
+viewport evaluation) sees it immediately and rebuilds the world at that frame.
 
 ## Draw modes
 
@@ -272,15 +287,12 @@ hub in that model.
 
 ## Attributes and units
 
-- The joint's transform **is** the joint frame. Move or rotate it to move the
-  constraint. The frame is read in the `{model}_RigidBodies` group's space,
-  the space of the bodies' rest poses, so moving the model root never
-  re-rigs a joint. The group and its `{model}_Bodies` / `{model}_Joints`
-  sub-groups follow the model root only: their transform channels are locked
-  at import. The stored frame is the **authored** frame: once body A moves,
-  the live constraint frame is the hub (where the guides are drawn), which
-  moves with A, while the transform and its manipulators stay where the joint
-  was authored.
+- The joint's **rest frame** is `jointRestTranslate` / `jointRestRotate` on the
+  node, in the bodies' rest space (world at import), so moving the model root
+  never re-rigs a joint. Edit those to move the constraint. The transform above
+  the node is a solver-driven readout of the **live** attachment on body A
+  (`outJointTranslate[]` / `outJointRotate[]`), exactly like a body guide; its
+  translate/rotate channels are locked, and its pivot sits on the drawn hub.
 - A joint is bounded around its live hub, so Frame Selected (F) works on it.
 - `jointBodyA` / `jointBodyB` are **message connections** from the bodies'
   `pmxRigidBodyShape.message`, not indices. The Attribute Editor shows each
@@ -362,7 +374,8 @@ appearance still needs interactive verification.
 | `mmd/core/joint_display.hpp` | the Maya-free display model: the freedom model (per-axis kinds, effective springs, constraint angles, the `Freedom` summary the hub colour encodes), the hub-size policy (`hubRadiusForLinks`, unit-tested), hub-relative sizes, and the motion-range guide geometry as line segments (unit-tested) |
 | `mmd/core/rigid_body_simulation.hpp` | `jointStatus`: whether a joint constrains anything (inactive hubs); `applyShapeSize`: PMX shape_size mapped onto a BodyDefinition |
 | `mmd/maya/nodes/rigid_body_display.*` | everything both overrides share: the palette (every colour, one channel per hue), collider outlines and the A/B role wire, the lit stock shader (OpenPBR on 2026+, Blinn before), selection and isolate-select events handled once per session (including the per-viewport `ViewFilter`, resolved once and shared by every joint in that view), shared shaders, which selected joint outlines a shared hidden body, the render-item vertex-buffer filling (`fillMeshBuffers`) and the UV-sphere builder (`appendSphereMesh`) |
-| `mmd/maya/nodes/rigid_body_joint.hpp` | the joint node; `resolveSolverView` resolves the owning solver, body indices, live attachment frames and hub radius ONCE for both the bounding box and the override |
+| `mmd/maya/nodes/rigid_body_joint.hpp` | the joint node: authored PMX data in `joint`, derived inputs in `jointDisplay`, and stateless Maya callback forwarding; no private runtime members |
+| `mmd/maya/nodes/rigid_body_node.*` | the solver: simulation, guide poses and configuration-only `outJointDisplay[]`; `jointViewportFrames()` supplies a picked joint's live overlay |
 | `mmd/maya/nodes/rigid_body_joint_geometry_override.*` | the VP2 override: the hub mesh (triangles and wire) and the joint-specific drawing on top of the shared display module |
 
 Headless tests cannot show viewport output. After changing the display, check
@@ -371,4 +384,10 @@ it interactively: select and deselect joints, select several, play and rewind
 several viewports, isolate-select and Show All, hide a connected body, and
 look at joints inside cloth (the X-ray ghost). Also delete a body (its
 joints turn hollow) and play until a body presses on a limit (bold needle or
-face).
+face). Two checks are specific to the local-geometry design: **play the
+timeline and confirm the hubs (and a picked joint's overlay and links) follow
+body A frame by frame**, and **drag `jointDisplayScale` on the solver and
+confirm every hub and its bounds resize once the viewport re-evaluates**.
+Profile 400 visible, unselected hubs separately from selected overlays in DG,
+Serial and Parallel modes. Headless tests cover the connections and values,
+but cannot verify VP2 callback counts, buffer reuse or playback FPS.

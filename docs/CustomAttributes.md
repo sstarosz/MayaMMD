@@ -141,6 +141,25 @@ These attributes make the model self-describing for fast root discovery and UI d
 > follows the animation.  The REST pose lives in the shape's
 > `bodyRestTranslate`/`bodyRestRotate` attributes — edit those (or the other
 > body attributes) in the Attribute Editor to change the simulation.
+>
+> Joints follow the same pattern.  Each joint's PMX values — including its
+> FRAME, `jointRestTranslate`/`jointRestRotate` — live in one `joint` compound
+> on the `pmxRigidBodyJoint` node, connected into the solver's `joints[i]`
+> input.  `jointShapes[]` is identity (the joint node, the `jointBodyA`/`B`
+> links, the output slots).  The joint's parent transform is a solver-driven
+> GUIDE to the live attachment on body A
+> (`outJointTranslate[]`/`outJointRotate[]`); its translate/rotate channels are
+> locked.  Edit `jointRestTranslate`/`jointRestRotate` in the Attribute Editor
+> to move the constraint.
+>
+> The solver also connects `outJointDisplay[i]` into the joint's hidden
+> `jointDisplay` compound: `jointHubRadius` (double), `jointActive` (bool),
+> `jointBoundsMin` and `jointBoundsMax` (double3). These derived inputs are
+> non-storable; their connection persists and their values recompute on load.
+> Only configuration edits affect them, and reading them never advances the
+> simulation. `solverStep` remains the time-dependent input used to refresh
+> selected overlays. Older joints need re-importing to acquire the new display
+> connection. See [JointVisualization.md](JointVisualization.md).
 
 ---
 

@@ -5,14 +5,18 @@
  *
  * Native C++ implementation of the ``pmxRigidBodyConstraint`` command (create
  * mode — the default).  Creates ONE PMX joint as a pmxRigidBodyJoint node,
- * registered at the solver's next free ``jointShapes`` index and linked to
- * its two bodies' pmxRigidBodyShape nodes by message connections.
+ * registered at the solver's next free ``jointShapes`` index (identity) and
+ * ``joints`` index (data), and linked to its two bodies'
+ * pmxRigidBodyShape nodes by message connections.  The joint's guide transform
+ * is driven by the solver to the live attachment on body A.
  *
  * Data conversions (Z-flip + MMD radians -> Maya degrees handedness flip)
  * and the reflection applied to the LIMITS:
  *   frame translate = (px, py, -pz)            (Z-flip)
  *   frame rotate    = (-rx, -ry, +rz) degrees  (MMD radians -> Maya degrees)
- *   frame stored in the rigid bodies group's space (the bodies' rest space)
+ *   frame stored in the bodies' rest space (world at import) as
+ *   `jointRestTranslate` / `jointRestRotate`; the guide transform is driven
+ *   to the live attachment on body A
  *   linearMin/Max   = Z component negated + min/max swapped
  *   angularMin/Max  = X/Y negated + min/max swapped, Z unchanged (radians)
  *   stiffness       = verbatim (invariant magnitudes)
@@ -40,7 +44,6 @@
 
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
-#include <maya/MEulerRotation.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnDependencyNode.h>
 #include <maya/MFnTransform.h>
@@ -50,7 +53,7 @@
 #include <maya/MPlugArray.h>
 #include <maya/MStatus.h>
 #include <maya/MSyntax.h>
-#include <maya/MVector.h>
+#include <maya/MTransformationMatrix.h>
 
 #include "maya_utils.hpp"
 #include "nodes/rigid_body_joint.hpp"
@@ -219,6 +222,12 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
         MGlobal::displayError("pmxRigidBodyConstraint: node has no 'jointShapes' array");
         return MS::kFailure;
     }
+    MPlug jointsPlug = fn.findPlug(RigidBodyNode::aJoints, true, &plugStat);
+    if (jointsPlug.isNull())
+    {
+        MGlobal::displayError("pmxRigidBodyConstraint: node has no 'joints' array");
+        return MS::kFailure;
+    }
     // The next free joint index is the array's CURRENT logical element count
     // (evaluateNumElements, NOT numElements — see the body command).
     const int count = static_cast<int>(jointShapesPlug.evaluateNumElements());
@@ -302,10 +311,10 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     // ── Create the per-joint node (pmxRigidBodyJoint) ──
     // One selectable joint per PMX constraint: a plain TRANSFORM holding the
     // locator shape under it (like the per-body guides), parented under the
-    // rigid bodies group.  The TRANSFORM is the joint FRAME (joints are
-    // static config — move/rotate it to reposition the constraint); all
-    // PMX-verbatim joint data lives on the shape.  The solver discovers it
-    // via solver.jointShapes[n].
+    // rigid bodies group.  The TRANSFORM is the joint's viewport GUIDE, driven
+    // to the live attachment on body A; the authored frame and all
+    // PMX-verbatim joint data live on the shape node.  The solver discovers
+    // it via solver.jointShapes[n] and reads its data through solver.joints[n].
     MFnDagNode solverDagFn(solverNode, &plugStat);
     MObject groupObj = solverDagFn.parent(0, &plugStat);
     const MString jointName =
@@ -339,14 +348,19 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
             "pmxRigidBodyConstraint: could not create the pmxRigidBodyJoint node");
         return MS::kFailure;
     }
-    // The joint transform's LOCAL value under the group IS the frame: the
-    // solver measures frames in the group's space, the space of the bodies'
-    // rest poses (RigidBodyJoint::readJointFrame), so wherever the group or
-    // the model root sits, the constraint stays where the PMX puts it.
-    const double kDegToRad = 3.14159265358979323846 / 180.0;
-    jointTf.setTranslation(MVector(frameT.x, frameT.y, frameT.z), MSpace::kTransform);
-    jointTf.setRotation(MEulerRotation(frameR.x * kDegToRad, frameR.y * kDegToRad,
-                                       frameR.z * kDegToRad, MEulerRotation::kXYZ));
+    // ── Place the guide at the rest frame ──
+    // The transform is a READOUT: the command puts it at the rest frame so the
+    // joint shows where the PMX puts it before the first evaluation, and the
+    // solver then drives it to the live attachment on body A
+    // (outJointTranslate/outJointRotate).  The authored frame lives on the
+    // node (jointRestTranslate/Rotate), in the bodies' rest space; converting
+    // through the group's inverse puts the guide in the same world position
+    // whether or not the group is offset.
+    const MTransformationMatrix frameLocal(RigidBodyNode::groupWorldMatrix(solverNode).inverse() *
+                                           mmd::maya::matrixFromTR(frameT, frameR));
+    jointTf.setTranslation(frameLocal.getTranslation(MSpace::kTransform), MSpace::kTransform);
+    // No MEulerRotation overload in this SDK — go through the quaternion.
+    jointTf.setRotation(frameLocal.eulerRotation().asQuaternion(), MSpace::kTransform);
 
     MFnDependencyNode jointFn(jointObj);
     const auto jointPlug = [&jointFn, &plugStat](const MObject& a) -> MPlug
@@ -358,6 +372,8 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
                                 jointPlug(RigidBodyJoint::aJointBodyA));
     mmd::maya::connectOrReplace(MFnDependencyNode(shapeB).findPlug("message", true, &plugStat),
                                 jointPlug(RigidBodyJoint::aJointBodyB));
+    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointRestTranslate), frameT);
+    mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointRestRotate), frameR);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearMin), lmin);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearMax), lmax);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularMin), amin);
@@ -365,19 +381,32 @@ MStatus doCreate(const MArgParser& parser, const MObject& solverNode, int& outIn
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointLinearStiffness), ls);
     mmd::maya::setPlugDouble3(jointPlug(RigidBodyJoint::aJointAngularStiffness), as);
 
-    // Register the joint on the solver: joint.solver -> solver.jointShapes[n]
-    // (PMX order — the solver pulls each joint from its node in readJointData).
+    // Register the joint on the solver twice, for the two kinds of edge:
+    //   joint.solver  -> solver.jointShapes[n]  (IDENTITY: the body links and
+    //                   the output slots resolve through the joint node), and
+    //   joint.joint   -> solver.joints[n]       (DATA: PMX-verbatim values,
+    //                   compound-to-compound, read from the data block).
     mmd::maya::connectOrReplace(jointPlug(RigidBodyJoint::aSolver),
                                 jointShapesPlug.elementByLogicalIndex(n));
-    // Redraw the joint after every solver step: solver.outStep -> joint.solverStep.
+    mmd::maya::connectOrReplace(jointPlug(RigidBodyJoint::aJoint),
+                                jointsPlug.elementByLogicalIndex(n));
+    // Display configuration changes only on edits. The step input refreshes
+    // the selected joint's live overlay; ordinary hubs follow the guide.
+    plugStat = mmd::maya::connectOrReplace(
+        MPlug(solverNode, RigidBodyNode::aOutJointDisplay).elementByLogicalIndex(n),
+        jointPlug(RigidBodyJoint::aJointDisplay));
+    MMD_CHECK_MSTATUS(plugStat);
     mmd::maya::connectOrReplace(MPlug(solverNode, RigidBodyNode::aOutStep),
                                 jointPlug(RigidBodyJoint::aSolverStep));
-    // Re-run the solver when the frame moves: transform.worldMatrix[0] ->
-    // joint.frameMatrix.
-    const MPlug frameWorld =
-        MFnDependencyNode(jointTransform).findPlug("worldMatrix", true, &plugStat);
-    mmd::maya::connectOrReplace(frameWorld.elementByLogicalIndex(0),
-                                jointPlug(RigidBodyJoint::aFrameMatrix));
+    // Drive the guide to the joint's live attachment on body A: the node's
+    // pivot follows the drawn hub, like a body guide follows its collider.
+    MFnDependencyNode jointTransformFn(jointTransform);
+    mmd::maya::connectOrReplace(
+        MPlug(solverNode, RigidBodyNode::aOutJointTranslate).elementByLogicalIndex(n),
+        jointTransformFn.findPlug("translate", true, &plugStat));
+    mmd::maya::connectOrReplace(
+        MPlug(solverNode, RigidBodyNode::aOutJointRotate).elementByLogicalIndex(n),
+        jointTransformFn.findPlug("rotate", true, &plugStat));
 
     outIndex = n;
     return MS::kSuccess;
