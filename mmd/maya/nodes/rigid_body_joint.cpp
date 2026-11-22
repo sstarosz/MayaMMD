@@ -6,67 +6,44 @@
  * RigidBodyJoint — one selectable, movable Maya node per PMX rigid-body joint
  * (see rigid_body_joint.hpp).
  *
- * The node is a plain data holder: every PMX joint field except the FRAME is
- * a storable attribute (no compute() — the solver reads them through its
- * `jointShapes[]` message array).  The node's DAG TRANSFORM is the joint's
- * FRAME — joints are static config, so moving/rotating the node repositions
- * the constraint, and the solver reads the frame straight from the transform
- * in the {model}_RigidBodies group's space (translate + XYZ rotate).  The
- * joint is drawn by RigidBodyJointGeometryOverride (not here); the node only
- * tells VP2 when that drawing is out of date.
+ * The node is a plain data holder: every PMX joint field — the FRAME included,
+ * as `jointRestTranslate` / `jointRestRotate` — is a storable attribute in the
+ * `joint` compound that the solver reads from its `joints[]` input (no
+ * compute()).  The DAG transform above the node is a solver-driven GUIDE to
+ * the joint's live attachment on body A, so the node's pivot sits on the drawn
+ * hub and the glyphs are local geometry under that transform; edit the
+ * rest-frame attributes to move the constraint.  The joint is drawn by
+ * RigidBodyJointGeometryOverride (not here); the node only tells VP2 when that
+ * drawing is out of date. Bounds arrive as solver-driven inputs; all
+ * rendering decisions and caches belong to the override.
  */
 
 #include "rigid_body_joint.hpp"
 
 #include <maya/MDGContext.h>
-#include <maya/MDagPath.h>
-#include <maya/MEulerRotation.h>
-#include <maya/MFnDagNode.h>
-#include <maya/MFnDependencyNode.h>
+#include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnEnumAttribute.h>
-#include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MFnNumericData.h>
-#include <maya/MFnTransform.h>
 #include <maya/MFnTypedAttribute.h>
 #include <maya/MFnUnitAttribute.h>
-#include <maya/MMatrix.h>
 #include <maya/MPlug.h>
 #include <maya/MPoint.h>
 #include <maya/MStatus.h>
-#include <maya/MTransformationMatrix.h>
-#include <maya/MVector.h>
-#include <maya/MViewport2Renderer.h>
 
 #include "joint_display.hpp"
 #include "maya_utils.hpp"
-#include "rigid_body_node.hpp"
-#include "rigid_body_shape.hpp"
-#include "rigid_body_simulation.hpp"
+#include "rigid_body_joint_geometry_override.hpp"
 
 #include <maya/MPlugArray.h>
 
-#include <algorithm>
 #include <array>
 
 using mmd::core::Double3;
-using mmd::core::RigidBodySimulation;
 
 namespace
 {
-void readDouble3(const MPlug& plug, Double3& out)
-{
-    // A missing attribute (never for a pmxRigidBodyJoint, whose type is checked
-    // first) keeps the JointDefinition default: readPlugDouble3 would call
-    // asMDataHandle() on a null plug.
-    if (plug.isNull())
-    {
-        return;
-    }
-    out = mmd::maya::readPlugDouble3(plug);
-}
-
 // Numeric attribute helper: storable, non-keyable, readable+writable.
 [[nodiscard]] MObject makeNumeric(MFnNumericAttribute& fn, const MString& longName,
                                   const MString& shortName, MFnNumericData::Type type,
@@ -133,7 +110,14 @@ const MTypeId RigidBodyJoint::kTypeId(0x0011C107); // unique Maya node type id
 
 MObject RigidBodyJoint::aSolver;
 MObject RigidBodyJoint::aSolverStep;
-MObject RigidBodyJoint::aFrameMatrix;
+MObject RigidBodyJoint::aJointDisplay;
+MObject RigidBodyJoint::aJointHubRadius;
+MObject RigidBodyJoint::aJointActive;
+MObject RigidBodyJoint::aJointBoundsMin;
+MObject RigidBodyJoint::aJointBoundsMax;
+MObject RigidBodyJoint::aJoint;
+MObject RigidBodyJoint::aJointRestTranslate;
+MObject RigidBodyJoint::aJointRestRotate;
 MObject RigidBodyJoint::aJointNameLocal;
 MObject RigidBodyJoint::aJointNameUniversal;
 MObject RigidBodyJoint::aJointBodyA;
@@ -176,13 +160,29 @@ MStatus RigidBodyJoint::initialize()
     nAttr.setKeyable(false);
     nAttr.setHidden(true);
 
+    // Solver-derived display data is not authored PMX data. Configuration
+    // outputs drive this compound; time only drives the guide and solverStep.
+    aJointHubRadius = makeNumeric(nAttr, "jointHubRadius", "jhr", MFnNumericData::kDouble,
+                                  mmd::core::joint_display::kFallbackHubRadius);
+    nAttr.setStorable(false);
+    aJointActive = makeNumeric(nAttr, "jointActive", "jac", MFnNumericData::kBoolean, 0.0);
+    nAttr.setStorable(false);
+    aJointBoundsMin = makeNumeric(nAttr, "jointBoundsMin", "jbmn", MFnNumericData::k3Double,
+                                  -mmd::core::joint_display::kFallbackHubRadius);
+    nAttr.setStorable(false);
+    aJointBoundsMax = makeNumeric(nAttr, "jointBoundsMax", "jbmx", MFnNumericData::k3Double,
+                                  mmd::core::joint_display::kFallbackHubRadius);
+    nAttr.setStorable(false);
     {
-        MFnMatrixAttribute matAttr;
-        aFrameMatrix = matAttr.create("frameMatrix", "fmtx", MFnMatrixAttribute::kDouble, &stat);
+        MFnCompoundAttribute cAttr;
+        aJointDisplay = cAttr.create("jointDisplay", "jdsp", &stat);
         MMD_CHECK_MSTATUS(stat);
-        matAttr.setStorable(false);
-        matAttr.setKeyable(false);
-        matAttr.setHidden(true);
+        cAttr.setStorable(false);
+        cAttr.setHidden(true);
+        cAttr.addChild(aJointHubRadius);
+        cAttr.addChild(aJointActive);
+        cAttr.addChild(aJointBoundsMin);
+        cAttr.addChild(aJointBoundsMax);
     }
 
     // --- joint data ---
@@ -196,6 +196,12 @@ MStatus RigidBodyJoint::initialize()
     MMD_CHECK_MSTATUS(stat);
     mAttr.setStorable(false);
 
+    // The FRAME is authored data here, in the bodies' rest space (world at
+    // import), exactly like bodyRestTranslate/bodyRestRotate: the transform
+    // above the node is driven by the solver, so it cannot hold the frame.
+    aJointRestTranslate =
+        makeNumeric(nAttr, "jointRestTranslate", "jrt", MFnNumericData::k3Double, 0.0);
+    aJointRestRotate = makeNumeric(nAttr, "jointRestRotate", "jrr", MFnNumericData::k3Double, 0.0);
     aJointLinearMin = makeNumeric(nAttr, "jointLinearMin", "jlmn", MFnNumericData::k3Double, 0.0);
     aJointLinearMax = makeNumeric(nAttr, "jointLinearMax", "jlmx", MFnNumericData::k3Double, 0.0);
     aJointAngularMin = makeAngle3(nAttr, "jointAngularMin", "jamn");
@@ -204,6 +210,29 @@ MStatus RigidBodyJoint::initialize()
         makeNumeric(nAttr, "jointLinearStiffness", "jlsk", MFnNumericData::k3Double, 0.0);
     aJointAngularStiffness =
         makeNumeric(nAttr, "jointAngularStiffness", "jask", MFnNumericData::k3Double, 0.0);
+
+    // --- the simulation inputs, as ONE compound the solver consumes ---
+    // pmxRigidBodyConstraint connects this straight into
+    // pmxRigidBodyNode.joints[i], so every field edit (the frame included) is
+    // ordinary DG dirt along a real edge: this node needs no
+    // attributeAffects/message relay, and the solver reads the values from its
+    // data block.  The children keep their flat long names, so
+    // `joint.jointLinearMin` (AE template, physics panel) is unchanged.
+    {
+        MFnCompoundAttribute cAttr;
+        aJoint = cAttr.create("joint", "jnt", &stat);
+        MMD_CHECK_MSTATUS(stat);
+        cAttr.setStorable(true);
+        cAttr.setKeyable(false);
+        cAttr.addChild(aJointRestTranslate);
+        cAttr.addChild(aJointRestRotate);
+        cAttr.addChild(aJointLinearMin);
+        cAttr.addChild(aJointLinearMax);
+        cAttr.addChild(aJointAngularMin);
+        cAttr.addChild(aJointAngularMax);
+        cAttr.addChild(aJointLinearStiffness);
+        cAttr.addChild(aJointAngularStiffness);
+    }
 
     // Viewport draw mode — enum: off / hub / ranges (see the header).
     {
@@ -221,7 +250,7 @@ MStatus RigidBodyJoint::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aSolverStep);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aFrameMatrix);
+    stat = addAttribute(aJointDisplay);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointNameLocal);
     MMD_CHECK_MSTATUS(stat);
@@ -231,37 +260,16 @@ MStatus RigidBodyJoint::initialize()
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aJointBodyB);
     MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointLinearMin);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointLinearMax);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointAngularMin);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointAngularMax);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointLinearStiffness);
-    MMD_CHECK_MSTATUS(stat);
-    stat = addAttribute(aJointAngularStiffness);
+    stat = addAttribute(aJoint);
     MMD_CHECK_MSTATUS(stat);
     stat = addAttribute(aDrawMode);
     MMD_CHECK_MSTATUS(stat);
 
-    // An edit must re-run the solver, which pulls the joint through the
-    // message array (not a data connection): every simulated field, and the
-    // frame (through frameMatrix — the inherited worldMatrix is dirtied by
-    // the DAG, not through attributeAffects), dirties the solver message ->
-    // pmxRigidBodyNode.jointShapes[i] -> its outputs.
-    for (const MObject& input : {
-             aJointBodyA,
-             aJointBodyB,
-             aJointLinearMin,
-             aJointLinearMax,
-             aJointAngularMin,
-             aJointAngularMax,
-             aJointLinearStiffness,
-             aJointAngularStiffness,
-             aFrameMatrix,
-         })
+    // The simulation values reach the solver through the `joint` compound
+    // connection (native dirt), so only the BODY IDENTITY needs a relay: a
+    // re-connected body must dirty the solver's jointShapes[i] so it re-reads
+    // the body indices.
+    for (const MObject& input : {aJointBodyA, aJointBodyB})
     {
         stat = attributeAffects(input, aSolver);
         MMD_CHECK_MSTATUS(stat);
@@ -273,221 +281,35 @@ MStatus RigidBodyJoint::initialize()
 // ===========================================================================
 // Viewport invalidation
 // ===========================================================================
-// Every input can change the drawing (the solver's bodies through solverStep,
-// the frame, the limits, the draw mode), so any dirty plug invalidates it.
 MStatus RigidBodyJoint::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
-    MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
+    RigidBodyJointGeometryOverride::inputChanged(thisMObject(), plug);
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }
 
-// The Evaluation Manager evaluates the node only when an input changed (each
-// solver step reaches solverStep), so every evaluation invalidates it.
-MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
-                                       const MEvaluationNode& evaluationNode,
-                                       PostEvaluationType evalType)
+MStatus RigidBodyJoint::preEvaluation(const MDGContext& context,
+                                      const MEvaluationNode& evaluationNode)
 {
     if (context.isNormal())
     {
-        MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
+        RigidBodyJointGeometryOverride::inputsEvaluated(thisMObject(), evaluationNode);
     }
-    return MPxLocatorNode::postEvaluation(context, evaluationNode, evalType);
+    return MPxLocatorNode::preEvaluation(context, evaluationNode);
 }
 
 // ===========================================================================
 // Bounds
 // ===========================================================================
-// Everything the joint display needs from the owning solver, in one place:
-// both RigidBodyJoint::boundingBox() and the viewport override resolve their
-// solver, frames and hub radius through this.
-RigidBodyJoint::SolverView RigidBodyJoint::resolveSolverView(const MObject& node,
-                                                             bool evaluateSolver)
+bool RigidBodyJoint::isBounded() const
 {
-    SolverView view;
-    // Reading the solverStep input evaluates the owning solver (outStep ->
-    // solverStep), so the world queried below is the current one.  The
-    // bounding box opts out — see the header.
-    if (evaluateSolver)
-    {
-        const MPlug solverStep(node, aSolverStep);
-        if (!solverStep.isNull())
-        {
-            solverStep.asDouble();
-        }
-    }
-
-    MPlugArray destinations;
-    MPlug(node, aSolver).connectedTo(destinations, false, true);
-    if (destinations.length() == 0)
-    {
-        return view;
-    }
-    view.solverObject = destinations[0].node();
-    view.solver = dynamic_cast<RigidBodyNode*>(MFnDependencyNode(view.solverObject).userNode());
-    if (view.solver == nullptr)
-    {
-        return view;
-    }
-
-    if (!readJointDefinition(node, RigidBodyNode::groupWorldMatrix(view.solverObject).inverse(),
-                             view.definition))
-    {
-        return view; // no readable frame: keep the display's "inactive" defaults
-    }
-    view.definition.bodyA = view.solver->bodyIndex(bodyShape(node, aJointBodyA));
-    view.definition.bodyB = view.solver->bodyIndex(bodyShape(node, aJointBodyB));
-    view.active = view.solver->jointStatus(view.definition) ==
-                  mmd::core::RigidBodySimulation::JointStatus::eActive;
-    view.live = view.solver->jointViewportFrames(view.definition, view.bodyAWorld, view.bodyBWorld,
-                                                 view.attachmentA, view.attachmentB);
-
-    const MPlug scale(view.solverObject, RigidBodyNode::aJointDisplayScale);
-    const double displayScale = scale.isNull() ? 1.0 : std::max(0.05, scale.asDouble());
-    const double model = view.solver->hubRadius();
-    view.hubRadius =
-        (model > 0.0 ? model : mmd::core::joint_display::kFallbackHubRadius) * displayScale;
-    return view;
+    return true;
 }
 
-// Everything the joint can draw, in the shape's object space: the hub and its
-// guides around the LIVE attachment on body A, plus attachment B and the body
-// centres a selected joint links.  Without a solver world the hub sits at the
-// frame.
-//
-// The solver is NOT evaluated here: a bounding box is a hint Maya asks for
-// far more often than the solver must run (see resolveSolverView), and one
-// stale-by-an-evaluation hull still contains the drawn hub.  updateDG() is
-// what evaluates the solver, and it is what dirties this drawing.
 MBoundingBox RigidBodyJoint::boundingBox() const
 {
-    using namespace mmd::core::joint_display;
-    const MObject node = thisMObject();
-    MDagPath path;
-    if (MDagPath::getAPathTo(node, path) != MS::kSuccess)
-    {
-        return {};
-    }
-    const MMatrix worldToLocal = path.inclusiveMatrixInverse();
-
-    const SolverView view = resolveSolverView(node, /*evaluateSolver=*/false);
-    const double hub = view.hubRadius;
-    // Without a live world the hub sits at the joint's own transform.
-    const MMatrix& attachmentA = view.live ? view.attachmentA : path.inclusiveMatrix();
-
-    // The symbolic guides reach about 2.25 dial radii from the hub (spring
-    // zigzag, free-axis arrows, the Z dial with its notch and needles); a
-    // translation region adds its physical extent on top.
-    const double pad = std::max(hub, 2.25 * guideSizes(hub).radius);
-    const Ranges ranges = describe(view.definition);
-    MBoundingBox box;
-    for (unsigned int corner = 0; corner < 8; ++corner)
-    {
-        MPoint p;
-        for (unsigned int axis = 0; axis < 3; ++axis)
-        {
-            const Range& range = ranges.linear.at(axis);
-            const bool free = range.kind() == RangeKind::Free;
-            double coordinate = 0.0;
-            if (((corner >> axis) & 1U) != 0U)
-            {
-                coordinate = (free ? 0.0 : std::max(range.upper, 0.0)) + pad;
-            }
-            else
-            {
-                coordinate = (free ? 0.0 : std::min(range.lower, 0.0)) - pad;
-            }
-            p[axis] = coordinate;
-        }
-        box.expand(p * attachmentA * worldToLocal);
-    }
-    if (view.live)
-    {
-        for (const MMatrix* m : {&view.attachmentB, &view.bodyAWorld, &view.bodyBWorld})
-        {
-            box.expand(MPoint::origin * *m * worldToLocal);
-        }
-    }
-    return box;
-}
-
-// ===========================================================================
-// Joint data reading (used by the solver)
-// ===========================================================================
-bool RigidBodyJoint::readJointDefinition(const MObject& node, const MMatrix& groupWorldInverse,
-                                         RigidBodySimulation::JointDefinition& out)
-{
-    if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
-    {
-        return false;
-    }
-    MFnDependencyNode depFn(node);
-    if (depFn.typeId() != kTypeId)
-    {
-        return false;
-    }
-
-    MStatus stat;
-    const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
-    {
-        MPlug p = depFn.findPlug(a, true, &stat);
-        return p;
-    };
-
-    out.bodyA = -1; // connections, resolved by the solver (bodyShape)
-    out.bodyB = -1;
-    readDouble3(plug(aJointLinearMin), out.linearMin);
-    readDouble3(plug(aJointLinearMax), out.linearMax);
-    readDouble3(plug(aJointAngularMin), out.angularMin);
-    readDouble3(plug(aJointAngularMax), out.angularMax);
-    readDouble3(plug(aJointLinearStiffness), out.linearStiffness);
-    readDouble3(plug(aJointAngularStiffness), out.angularStiffness);
-
-    // A joint whose frame cannot be read has no usable constraint placement;
-    // fail instead of handing the solver an origin-centred joint.
-    return readJointFrame(node, groupWorldInverse, out.frameT, out.frameR);
-}
-
-MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
-{
-    MPlugArray sources;
-    MPlug(joint, end).connectedTo(sources, true, false);
-    if (sources.length() == 0)
-    {
-        return MObject::kNullObj;
-    }
-    const MObject shape = sources[0].node();
-    return MFnDependencyNode(shape).typeId() == RigidBodyShape::kTypeId ? shape : MObject::kNullObj;
-}
-
-// The FRAME is the shape's DAG PARENT transform, measured in the
-// {model}_RigidBodies group's space: the bodies' rest poses are attribute
-// values in that space (the PMX model space), so the frame must be too.
-// Reading WORLD instead would move every frame with the model root while the
-// rest poses stay put — each pivot then ends up offset by the root move.
-// Moving/rotating the guide in the viewport repositions the constraint.
-// `groupWorldInverse` is passed in (not inverted here) so the solver, which
-// reads every joint of a model each evaluation, inverts the group matrix once.
-bool RigidBodyJoint::readJointFrame(const MObject& node, const MMatrix& groupWorldInverse,
-                                    Double3& translate, Double3& rotate)
-{
-    if (!node.hasFn(MFn::kDagNode))
-    {
-        return false;
-    }
-    MStatus stat;
-    MFnDagNode dag(node, &stat);
-    const MObject transform = dag.parent(0, &stat);
-    MDagPath path;
-    if (!stat || transform.isNull() || !transform.hasFn(MFn::kTransform) ||
-        MDagPath::getAPathTo(transform, path) != MS::kSuccess)
-    {
-        return false;
-    }
-    const MTransformationMatrix tm(path.inclusiveMatrix() * groupWorldInverse);
-    const MVector t = tm.getTranslation(MSpace::kTransform);
-    const MEulerRotation e = tm.eulerRotation(); // radians, XYZ decomposition
-    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
-    translate = Double3(t.x, t.y, t.z);
-    rotate = Double3(e.x * kRadToDeg, e.y * kRadToDeg, e.z * kRadToDeg);
-    return true;
+    // These are this node's configuration-only inputs. No solver lookup,
+    // pose query, selection state or mutable display cache is needed.
+    const Double3 low = mmd::maya::readPlugDouble3(MPlug(thisMObject(), aJointBoundsMin));
+    const Double3 high = mmd::maya::readPlugDouble3(MPlug(thisMObject(), aJointBoundsMax));
+    return {MPoint(low.x, low.y, low.z), MPoint(high.x, high.y, high.z)};
 }

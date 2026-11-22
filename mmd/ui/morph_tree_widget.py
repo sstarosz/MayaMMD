@@ -1162,25 +1162,48 @@ class MorphTreeWidget(QWidget):
     def _refresh_animated_values(self) -> None:
         """Read current weight values from Maya and update all sliders.
 
-        Queries every attribute in :attr:`_anim_curve_attrs` via
-        ``cmds.getAttr`` — no caching, no manual DG evaluation.
-        Works regardless of what drives the weight (animCurve,
-        pairBlend, expression, custom node, …).
+        Queries every attribute in :attr:`_anim_curve_attrs` — no caching, no
+        manual DG evaluation — so it works regardless of what drives the weight
+        (animCurve, pairBlend, expression, custom node, …).
+
+        This runs on every timeline change, so the reads are batched into a
+        single ``cmds.getAttr`` call: one Maya round trip instead of one per
+        morph (hundreds on a real model), and nothing is read at all while the
+        tab is not on screen.
         """
         if not isValid(self) or self._time_callback is None:
             return
-        if not self._anim_curve_attrs:
+        if not self._anim_curve_attrs or not self.isVisible():
             return
 
-        for attr_path in list(self._anim_curve_attrs):
+        attrs = []
+        for attr_path in self._anim_curve_attrs:
             row = self._rows.get(attr_path)
-            if row is None or not row.is_enabled:
-                continue
-            try:
-                value = cmds.getAttr(attr_path)
-            except Exception:
-                continue
-            row.sync_value(value)
+            if row is not None and row.is_enabled:
+                attrs.append(attr_path)
+        if not attrs:
+            return
+
+        try:
+            values = cmds.getAttr(attrs)
+        except Exception:
+            values = None
+        if not isinstance(values, list) or len(values) != len(attrs):
+            # One unusable plug fails the whole batch: read them one by one.
+            values = []
+            for attr_path in attrs:
+                try:
+                    values.append(cmds.getAttr(attr_path))
+                except Exception:
+                    values.append(None)
+        for attr_path, value in zip(attrs, values):
+            if isinstance(value, (int, float)):
+                self._rows[attr_path].sync_value(float(value))
+
+    def showEvent(self, event: QtCore.QEvent) -> None:
+        """Catch up on the weights that changed while the tab was hidden."""
+        super().showEvent(event)
+        self._refresh_animated_values()
 
     def _do_scrub_update(self) -> None:
         """Run the styling update once per scrub pause (keyframe dots, colours).

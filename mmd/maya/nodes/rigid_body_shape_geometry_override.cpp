@@ -239,6 +239,18 @@ RigidBodyShapeGeometryOverride::RigidBodyShapeGeometryOverride(const MObject& ob
     // Selecting a joint does not dirty its connected bodies (selection is not
     // a DG dependency): rigid_body_display.cpp dirties exactly the bodies whose
     // A/B role changes.
+    //
+    // The shape's inputs are resolved once here: the attributes never change,
+    // so updateDG() only reads values (findPlug per attribute per refresh was
+    // pure DG overhead on every drawn collider).
+    MStatus stat;
+    MFnDependencyNode fn(fShape);
+    fPlugs.type = fn.findPlug(RigidBodyShape::aBodyColliderType, true, &stat);
+    fPlugs.size = fn.findPlug(RigidBodyShape::aBodyShapeSize, true, &stat);
+    fPlugs.group = fn.findPlug(RigidBodyShape::aBodyGroupId, true, &stat);
+    fPlugs.mode = fn.findPlug(RigidBodyShape::aDrawMode, true, &stat);
+    fPlugs.physicsMode = fn.findPlug(RigidBodyShape::aBodyPhysicsMode, true, &stat);
+    fPlugs.enabled = fn.findPlug(RigidBodyShape::aBodyEnabled, true, &stat);
 }
 
 RigidBodyShapeGeometryOverride::~RigidBodyShapeGeometryOverride()
@@ -269,12 +281,20 @@ MHWRender::DrawAPI RigidBodyShapeGeometryOverride::supportedDrawAPIs() const
 
 bool RigidBodyShapeGeometryOverride::requiresGeometryUpdate() const
 {
-    return true;
+    // Only a real shape edit rebuilds the collider (see the header): the
+    // bodies' poses move every frame, and rebuilding 300 meshes for a camera
+    // tumble is exactly the cost this avoids.
+    return false;
 }
 
 bool RigidBodyShapeGeometryOverride::requiresUpdateRenderItems(const MDagPath& /*dagPath*/) const
 {
-    return true;
+    // False like any static item state: the items are re-synced whenever the
+    // object is prepared (RigidBodyShape::setDependentsDirty marks every
+    // input edit, rigid_body_display marks selection-role changes), and
+    // returning true here would force a per-refresh item update — which the
+    // devkit's geometry-override sample explicitly warns defeats VP2 caching.
+    return false;
 }
 
 bool RigidBodyShapeGeometryOverride::hasUIDrawables() const
@@ -287,26 +307,19 @@ bool RigidBodyShapeGeometryOverride::hasUIDrawables() const
 // ===========================================================================
 void RigidBodyShapeGeometryOverride::updateDG()
 {
-    MStatus stat;
-    MFnDependencyNode fn(fShape);
-    const MPlug typePlug = fn.findPlug(RigidBodyShape::aBodyColliderType, true, &stat);
-    const MPlug sizePlug = fn.findPlug(RigidBodyShape::aBodyShapeSize, true, &stat);
-    const MPlug groupPlug = fn.findPlug(RigidBodyShape::aBodyGroupId, true, &stat);
-    const MPlug modePlug = fn.findPlug(RigidBodyShape::aDrawMode, true, &stat);
-    const MPlug pmPlug = fn.findPlug(RigidBodyShape::aBodyPhysicsMode, true, &stat);
-    const MPlug enabledPlug = fn.findPlug(RigidBodyShape::aBodyEnabled, true, &stat);
-
-    if (sizePlug.isNull() || modePlug.isNull())
+    if (fPlugs.size.isNull() || fPlugs.mode.isNull())
     {
         return;
     }
-
-    fState.drawMode = modePlug.asShort();
-    fState.colliderType = typePlug.asShort();
-    fState.size = readPoint3(sizePlug);
-    fState.groupId = groupPlug.isNull() ? 0 : groupPlug.asShort();
-    fState.physicsMode = pmPlug.isNull() ? 0 : pmPlug.asShort();
-    fState.enabled = enabledPlug.isNull() ? true : enabledPlug.asBool();
+    fState.drawMode = fPlugs.mode.asShort();
+    fState.colliderType =
+        fPlugs.type.isNull() ? RigidBodyShape::kColliderBox : fPlugs.type.asShort();
+    fState.size = readPoint3(fPlugs.size);
+    fState.groupId = fPlugs.group.isNull() ? 0 : fPlugs.group.asShort();
+    fState.physicsMode = fPlugs.physicsMode.isNull() ? 0 : fPlugs.physicsMode.asShort();
+    fState.enabled = fPlugs.enabled.isNull() ? true : fPlugs.enabled.asBool();
+    // Selection roles are not a DG dependency of the shape: rigid_body_display
+    // dirties the body when a joint that links it starts/stops being selected.
     fState.jointRoles = mmd::maya::rigid_body_display::bodyRoles(fShape);
 }
 

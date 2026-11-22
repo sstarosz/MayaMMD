@@ -26,14 +26,19 @@
 #include <maya/MMatrix.h>
 #include <maya/MObject.h>
 #include <maya/MObjectHandle.h>
+#include <maya/MPlug.h>
 #include <maya/MPxLocatorNode.h>
 #include <maya/MTime.h>
 #include <maya/MTypeId.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
+
+#include <array>
+#include <atomic>
 
 // The engine header is Bullet-free (the engine itself is a PIMPL), so pulling
 // it in here stays cheap and keeps Bullet an implementation detail.
@@ -75,6 +80,14 @@ class RigidBodyNode : public MPxLocatorNode
 
     // MPxNode overrides
     MStatus compute(const MPlug& plug, MDataBlock& dataBlock) override;
+    // Marks the config inputs stale, and flags a bodies[] dirty so compute()
+    // re-reads the body records from the data block.  The bodies are a real
+    // input, so this never needs a scene-wide serial.
+    MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
+    // The Evaluation Manager can evaluate without calling setDependentsDirty,
+    // so the bodies[] dirt is also picked up here.
+    MStatus preEvaluation(const MDGContext& context,
+                          const MEvaluationNode& evaluationNode) override;
     // This node owns a STATEFUL Bullet world that advances in compute().
     // Cached Playback must NOT treat its outputs as pure functions of its
     // inputs — disable caching so the node is re-evaluated every frame.
@@ -93,9 +106,6 @@ class RigidBodyNode : public MPxLocatorNode
     bool jointViewportFrames(const mmd::core::RigidBodySimulation::JointDefinition& joint,
                              MMatrix& bodyA, MMatrix& bodyB, MMatrix& attachmentA,
                              MMatrix& attachmentB) const;
-    // The hub radius shared by every joint of this model (before the user's
-    // jointDisplayScale); 0 while there is no simulation world.
-    double hubRadius() const { return mWorld ? mWorld->hubRadius : 0.0; }
     // The simulation's body index of a pmxRigidBodyShape (what a joint's
     // jointBodyA/B connection resolves to); -1 when the shape is not one of
     // this solver's bodies or there is no world.
@@ -103,19 +113,14 @@ class RigidBodyNode : public MPxLocatorNode
     {
         return mWorld ? mWorld->bodyShapes.indexOf(shape) : -1;
     }
-    // Whether a joint (bodies resolved with bodyIndex) constrains anything in
-    // this solver's world; eMissingBody when there is no world.
-    mmd::core::RigidBodySimulation::JointStatus
-    jointStatus(const mmd::core::RigidBodySimulation::JointDefinition& joint) const
-    {
-        return mWorld ? mmd::core::RigidBodySimulation::jointStatus(joint, mWorld->bodies)
-                      : mmd::core::RigidBodySimulation::JointStatus::eMissingBody;
-    }
-
+    // The pmxRigidBodyShape connected to one end of a pmxRigidBodyJoint
+    // (`end` = RigidBodyJoint::aJointBodyA / aJointBodyB); null when that end
+    // is unconnected or does not point at a rigid body.  Static: the body
+    // links are identity, independent of which solver owns the joint.
+    static MObject jointBodyShape(const MObject& joint, const MObject& end);
     // World matrix of the solver's DAG parent (the {model}_RigidBodies
-    // group), identity when it has none.  Joint frames are measured in this
-    // space (RigidBodyJoint::readJointFrame) and the guide outputs are
-    // expressed in it.
+    // group), identity when it has none.  Body and joint guide outputs are
+    // expressed in this space (the bodies' rest poses live there).
     static MMatrix groupWorldMatrix(const MObject& solver);
 
     // ------------------------------------------------------------------
@@ -124,33 +129,94 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aTime;
     static MObject aGravity;
 
-    // Viewport-only: the joint glyphs' SIZE multiplier (a plain double, read
-    // by RigidBodyJointGeometryOverride through each joint's `solver` message).
-    // The model's glyph size is otherwise derived from its rest poses
-    // (hubRadius) — this is the user's taste knob, per model.
+    // Viewport-only hub size multiplier, consumed by outJointDisplay. It
+    // never dirties the simulation outputs or rebuilds the Bullet world.
     static MObject aJointDisplayScale;
 
     // Output -> every joint's solverStep: the joints' viewport dependency on
     // the simulation (see RigidBodyJoint::aSolverStep).  Holds the evaluated
     // time in seconds.
     static MObject aOutStep;
+    // Configuration-only display output -> joint.jointDisplay. Authored
+    // changes dirty this output; simulation time and anchors do not.
+    static MObject aOutJointDisplay;
+    static MObject aOutJointHubRadius;
+    static MObject aOutJointActive;
+    static MObject aOutJointBoundsMin;
+    static MObject aOutJointBoundsMax;
 
     // Per-body message array: aBodyShapes[i] -> the pmxRigidBodyShape node
     // for PMX body i (PMX order — one selectable/movable locator per body).
-    // The solver pulls every body's PMX-verbatim data from the connected
-    // shape node via RigidBodyShape::readBodyDefinition — the REST pose from
-    // the shape's bodyRestTranslate/bodyRestRotate attributes (the guide
-    // TRANSFORM is the CURRENT pose, driven by the solver; it is not read).
+    // This edge is IDENTITY, not data: it fixes the shape -> body-index
+    // mapping the joints and the output slots resolve through, and its dirt
+    // reports a re-bind / deleted body (see inputsStale).  The body's
+    // PMX-verbatim VALUES arrive through aBodyBodies below — a real input,
+    // read from the data block, with the rest pose in the shape's
+    // bodyRestTranslate/bodyRestRotate (the guide TRANSFORM is the CURRENT
+    // pose, driven by the solver; it is not read).
     // Unconnected slots remain disabled placeholders to preserve output indices.
     static MObject aBodyShapes;
 
+    // Per-body simulation INPUT: aBodyBodies[i] is connected from a
+    // pmxRigidBodyShape's `body` compound by pmxRigidBody (one connectAttr per
+    // body, expanded to one edge per child).  The element is decoded by
+    // decodeBody() from the data block; the shape's long names are repeated
+    // here because a compound-to-compound connection pairs children by name.
+    static MObject aBodyBodies;
+    static MObject aInEnabled;
+    static MObject aInGroupId;
+    static std::array<MObject, 16> aInMaskGroup;
+    static MObject aInColliderType;
+    static MObject aInShapeSize;
+    static MObject aInRestTranslate;
+    static MObject aInRestRotate;
+    static MObject aInMass;
+    static MObject aInLinearDamping;
+    static MObject aInAngularDamping;
+    static MObject aInRestitution;
+    static MObject aInFriction;
+    static MObject aInPhysicsMode;
+
+    // Per-body kinematic-anchor input: aAnchorWorlds[i] <- the related joint's
+    // worldMatrix[0] (a real DATA connection, wired by pmxRigidBody), read
+    // through the data block.  This is the solver's only per-frame input, and
+    // it lives HERE rather than on the shape so the shape stays authored PMX
+    // data: a bone move dirties this plug, Maya carries it to the outputs, and
+    // the data block caches the value across the solver pulls of one frame.
+    // A body with no related joint stores its pinned rest world here (the
+    // pmxRigidBody command sets the element value); dynamic bodies leave the
+    // element unset — their anchors are never read.
+    //
+    // A bone that ALSO drives a dynamic body's write-back cannot feed this
+    // array: joint.worldMatrix -> anchorWorlds -> outTranslate ->
+    // joint.translate would be a DG cycle, so the command pins the anchor
+    // instead (see pmxRigidBody).
+    static MObject aAnchorWorlds;
+
     // Per-joint message array: aJointShapes[i] -> the pmxRigidBodyJoint node
     // for PMX joint i (PMX order — one selectable/movable locator per joint).
-    // The solver pulls every joint's PMX-verbatim data from the connected
-    // joint node via RigidBodyJoint::readJointDefinition — the joint's FRAME
-    // is the node's DAG transform (joints are static config; moving the node
-    // repositions the constraint).  Unconnected slots are skipped.
+    // This edge is IDENTITY, not data: it fixes the joint -> index mapping and
+    // lets the solver resolve each joint's body links (jointBodyA/B messages)
+    // to body indices.  The joint's PMX-verbatim VALUES — the frame included —
+    // arrive through aJoints below, a real input read from the data block.
+    // Unconnected slots remain placeholders to preserve output indices.
     static MObject aJointShapes;
+
+    // Per-joint simulation INPUT: aJoints[i] is connected from a
+    // pmxRigidBodyJoint's `joint` compound by pmxRigidBodyConstraint (one
+    // connectAttr per joint, expanded to one edge per child).  The element is
+    // decoded by decodeJoint() from the data block; the joint node's long
+    // names are repeated here because a compound-to-compound connection pairs
+    // children by name.
+    static MObject aJoints;
+    static MObject aInJointRestTranslate;
+    static MObject aInJointRestRotate;
+    static MObject aInJointLinearMin;
+    static MObject aInJointLinearMax;
+    static MObject aInJointAngularMin;
+    static MObject aInJointAngularMax;
+    static MObject aInJointLinearStiffness;
+    static MObject aInJointAngularStiffness;
 
     // Outputs: solved local translate/rotate per body (compound arrays).
     // The children are UNIT-TYPED (MFnUnitAttribute kDistance / kAngle) —
@@ -182,6 +248,19 @@ class RigidBodyNode : public MPxLocatorNode
     static MObject aOutGuideRotateY; // kAngle child
     static MObject aOutGuideRotateZ; // kAngle child
 
+    // Joint guide outputs: each joint's live attachment on body A (in the
+    // RigidBodies group's space) — written for EVERY joint index.
+    // pmxRigidBodyConstraint connects them to the joint guide transforms, so
+    // the node's pivot follows the drawn hub (and the constraint).
+    static MObject aOutJointTranslate;
+    static MObject aOutJointTranslateX; // kDistance child
+    static MObject aOutJointTranslateY; // kDistance child
+    static MObject aOutJointTranslateZ; // kDistance child
+    static MObject aOutJointRotate;
+    static MObject aOutJointRotateX; // kAngle child
+    static MObject aOutJointRotateY; // kAngle child
+    static MObject aOutJointRotateZ; // kAngle child
+
     // The connected pmxRigidBodyShape nodes in body order, with a lookup from
     // a shape to its body index (joints link bodies by connection).
     struct BodyShapes
@@ -197,10 +276,21 @@ class RigidBodyNode : public MPxLocatorNode
         [[nodiscard]] long indexOf(const MObject& shape) const;
     };
 
+    // The PMX-verbatim inputs of one evaluation: what the solver reads from
+    // the scene's body/joint nodes.  Not the node's state — compute() keeps a
+    // copy (mInputs) so an unedited frame does not have to read it again.
+    struct Inputs
+    {
+        std::vector<mmd::core::RigidBodySimulation::BodyDefinition> bodies;
+        BodyShapes bodyShapes; // the shape node of each body
+        std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
+        mmd::core::Double3 gravity;
+    };
+
     // The full per-node simulation state: the Bullet world plus the config,
     // wiring, and derived write-back offsets it was built with, bundled and
-    // replaced ATOMICALLY on rebuild.  A plain data record — public only so
-    // the translation-unit frame functions can build / advance it; every
+    // replaced together on rebuild. A plain data record — public only so
+    // the translation-unit frame function can update it; every
     // field is touched exclusively from rigid_body_node.cpp.
     struct World
     {
@@ -209,11 +299,8 @@ class RigidBodyNode : public MPxLocatorNode
         BodyShapes bodyShapes; // the shape node of each body
         std::vector<mmd::core::RigidBodySimulation::JointDefinition> joints;
         mmd::core::Double3 gravity;
-        // One hub radius for the model's joints, from the rest poses
-        // (joint_display::hubRadiusForLinks); recomputed with every rebuild.
-        double hubRadius = 0.0;
         std::vector<MMatrix> k; // write-back offsets (body-indexed; identity for no joint)
-        // The kinematic anchors' RAW world matrices (bodyAnchorWorld, BEFORE the
+        // The kinematic anchors' RAW world matrices (anchorWorlds[i], BEFORE the
         // K^-1 rest offset) from the previous evaluation, in kinematic order.
         // Used to detect a whole-skeleton rigid drag at a paused frame: when
         // every moved anchor shares the same world move, the character was
@@ -233,14 +320,40 @@ class RigidBodyNode : public MPxLocatorNode
         // solved bone world as a joint-local pose.  Invalid for bodies with no
         // connected joint (static colliders).
         std::vector<MDagPath> jointPaths;
+        // Per-anchor constant for the per-frame anchor update (body-indexed;
+        // identity = no rest offset): bodyRest * anchorRest^-1, the raw rigid
+        // attachment.  Resolved at build so the per-frame work is one data
+        // block read and one matrix multiply per anchor, instead of rebuilding
+        // and inverting the rest matrices every frame.
+        std::vector<MMatrix> anchorOffset;
         double lastTime = -1.0;
         MTime::Unit lastTimeUnit = MTime::kFilm;
     };
 
   private:
-    // The simulation state; empty = no bodies (a valid no-op).  compute()
-    // runs a pure frame transition (build or advance) that produces a NEW
-    // World, which atomically replaces this one — the node never mutates
-    // simulation state piecemeal.
+    // Owned simulation state; empty = no bodies (a valid no-op). Playback
+    // updates this world in place. Rebuilds construct a replacement first.
     std::optional<World> mWorld;
+
+    // ── Input cache ───────────────────────────────────────────────────────
+    // The PMX-verbatim inputs are expensive to read, so they are cached:
+    //   * the BODY records come from the `bodies[]` data-block input, re-read
+    //     when that plug arrived dirty (mBodiesDirty, set from both
+    //     setDependentsDirty and preEvaluation),
+    //   * the JOINT records come from the `joints[]` data-block input the same
+    //     way (mJointsDirty), and
+    //   * a bodyShapes[]/jointShapes[] element dirt whose connection no longer
+    //     matches the cached shape (a re-bind or a deleted body) is structural.
+    Inputs mInputs;
+    bool mInputsValid = false;
+    // Set when the data block's bodies[]/joints[] arrived dirty (DG or
+    // Evaluation Manager); compute() re-reads those records then.
+    std::atomic<bool> mBodiesDirty{true};
+    std::atomic<bool> mJointsDirty{true};
+    std::vector<bool> mBodySlotDirty;  // bodyShapes[i] dirtied since the last read
+    std::vector<bool> mJointSlotDirty; // jointShapes[i] dirtied since the last read
+
+    // True when the whole input set must be read again: a reported config
+    // edit, an element whose connection changed, or no cached inputs.
+    [[nodiscard]] bool inputsStale(const MObject& node) const;
 };

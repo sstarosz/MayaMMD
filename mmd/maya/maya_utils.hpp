@@ -95,6 +95,8 @@ inline mmd::core::Double3 readPlugDouble3(const MPlug& plug)
     return out;
 }
 
+// Same handle discipline for a matrix plug (MPlug has no asMatrix): used by
+// pmxRigidBody when it freezes an anchor it has to detach.
 inline MMatrix readPlugMatrix(const MPlug& plug)
 {
     MDataHandle handle = plug.asMDataHandle();

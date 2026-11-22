@@ -9,12 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Simpler solver lifecycle:** the solver keeps ownership of its world during
+  playback. One frame routine replaces three transition helpers, removes repeated
+  movement detection and preserves rebuild, reposition and same-frame behavior.
+
 Added a scene-wide rigid body and joint editor with grouping, filtering, selection sync, deletion, joint diagnostics, collapsible scrolling panels, and improved callback cleanup.
 
 Rigid-body physics: per-body and per-joint viewport guides with joint
 visualization (hubs, motion ranges, A/B links), editable Attribute-Editor
 templates, PMX physics validation, and MMD-matching Spring6Dof simulation
 with a selection-neutral import.
+
+Rigid-body performance: the kinematic anchors moved from the per-body
+`pmxRigidBodyShape` node to a real solver input
+(`pmxRigidBodyNode.anchorWorlds[]`, fed from the related joint's
+`worldMatrix`).  The shape now stores authored PMX data only, a bone move is
+ordinary input dirt instead of a scene-wide serial, and the anchor cache and
+its atomic counter are gone.  A bone that also drives a dynamic body's
+write-back cannot be an anchor source (that would be a dependency cycle), so
+a follow-bone body on such a mixed bone is pinned at the bone and the import
+warns.
+
+The per-body PMX fields are a real solver input too: `pmxRigidBody` connects
+each shape's new `body` compound into `pmxRigidBodyNode.bodies[i]`, so a body
+edit is ordinary dirt and the solver reads the records from its data block
+instead of pulling every attribute out of band.  `pmxRigidBodyShape` now has
+no simulation notification logic at all, and `pmxRigidBodyNode` no longer
+needs a scene-wide serial for body edits.  The compound children keep their
+flat long names, so `bodyMass`, `bodyShapeSize`, … are still addressed
+directly in the Attribute Editor and in scripts.
+
+Joints now use the same data path: each `pmxRigidBodyJoint` publishes its PMX
+fields — the FRAME included, as `jointRestTranslate` / `jointRestRotate` — in
+one `joint` compound that `pmxRigidBodyConstraint` connects into
+`pmxRigidBodyNode.joints[i]`, and the solver reads them from its data block.
+`jointShapes[]` is identity only, and the hidden `frameMatrix` input is gone.
+The joint's guide transform is now a solver-driven readout of the live
+attachment on body A (`outJointTranslate[]` / `outJointRotate[]`), exactly
+like a body guide: the manipulator sits on the drawn hub, its channels are
+locked, and `jointRestTranslate` / `jointRestRotate` are what you edit to move
+the constraint.  **Re-import required:** a scene saved by an earlier build
+holds each joint's frame in its guide transform, and the new rest-frame
+attributes default to zero, so older joint nodes must be re-created
+(re-import the model) rather than loaded and simulated.
 
 Model visibility: a collapsible Visibility section in the tool panel gained
 Mesh / Bones / Rigid Bodies / Joints toggles plus Show All / Hide All for the
@@ -25,6 +62,17 @@ the explicit reset.  Import scaffolding hidden on purpose (`_InheritCtrl`,
 `_MorphCtrl`, IK handles) is never touched.  The toggles live in their own
 module (`mmd/ui/visibility_panel.py`) and drive the containers found by
 `mmd/maya/model_visibility.py`.
+
+Joint display: hubs use local geometry under solver-driven guide transforms.
+Ordinary animation moves that geometry through the DAG; directly selected
+joints refresh their attachment overlays each frame.
+
+- **Simpler joint responsibilities:** `pmxRigidBodyJoint` has no private
+  runtime state. The solver supplies hub radius, activity and bounds through
+  `outJointDisplay[i]` → `jointDisplay`; the override owns drawing and geometry
+  reuse. Display configuration has no time dependency and evaluating it does
+  not advance Bullet. **Re-import required:** previously created joints lack
+  the new display connection, which loading an older scene does not add.
 
 ---
 

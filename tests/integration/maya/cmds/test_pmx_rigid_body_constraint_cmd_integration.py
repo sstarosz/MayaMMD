@@ -144,6 +144,10 @@ def test_append_joint_data():
         2,
         "joint drawMode default (0=Off, 1=Hub, 2=Ranges)",
     )
+    # The simulation values, the frame included, live in the `joint` compound
+    # fed to solver.joints[index].
+    data_source = cmds.listConnections(f"{solver}.joints[0]", source=True, plugs=True)
+    assert_eq(data_source, [f"{base}.joint"], "joints[0] not fed by the joint compound")
     print("✓ joint appended with names/bodyA/bodyB at the next free index")
     return True
 
@@ -161,20 +165,28 @@ def test_frame_conversion():
         rotation=(1.5707963267948966, 0.0, 0.0),  # pi/2 rad on X
     )
     base = _joint_guide_at(solver, 0)
-    # The frame is the joint guide's transform (world space): Z-flip on the
+    joint = _joint_at(solver, 0)
+    # The frame is authored on the node (world space): Z-flip on the
     # translation (z=3 -> -3), and pi/2 rad -> -90 deg on X (handedness flip).
     assert_true(
-        approx_equal_tuple(cmds.getAttr(f"{base}.translate")[0], (1.0, 2.0, -3.0)),
-        f"joint frame translate Z-flip wrong {cmds.getAttr(f'{base}.translate')}",
+        approx_equal_tuple(
+            cmds.getAttr(f"{joint}.jointRestTranslate")[0], (1.0, 2.0, -3.0)
+        ),
+        "joint rest translate Z-flip wrong "
+        f"{cmds.getAttr(f'{joint}.jointRestTranslate')}",
     )
-    frame_rot = cmds.getAttr(f"{base}.rotate")[0]
+    rest_rot = cmds.getAttr(f"{joint}.jointRestRotate")[0]
     assert_true(
-        approx_equal_tuple(frame_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
-        f"joint frame rotate handedness flip wrong {frame_rot}",
+        approx_equal_tuple(rest_rot, (-90.0, 0.0, 0.0), tolerance=1e-3),
+        f"joint rest rotate handedness flip wrong {rest_rot}",
     )
-    print(
-        "✓ MMD joint frame on the guide transform (Z-flip + radians->degrees handedness)"
+    # The guide is placed at the same frame before the first evaluation (and
+    # is driven from there by the solver).
+    assert_true(
+        approx_equal_tuple(cmds.getAttr(f"{base}.translate")[0], (1.0, 2.0, -3.0)),
+        f"joint guide not placed at the rest frame {cmds.getAttr(f'{base}.translate')}",
     )
+    print("✓ MMD joint frame on the node (Z-flip + radians->degrees handedness)")
     return True
 
 
@@ -278,14 +290,14 @@ def test_asymmetric_angular_limits_real_model():
     return True
 
 
-def test_frame_in_group_space():
-    """The joint frame is stored in the rigid bodies group's space.
+def test_frame_in_bodies_rest_space():
+    """The joint frame is stored in the bodies' rest space (world at import).
 
-    The bodies' rest poses are model-space values, and the solver measures
-    joint frames in the group's space to match, so moving the group (or the
-    model root above it) never re-rigs a joint.  A joint at PMX (1,2,3) is
-    stored as the LOCAL transform (1,2,-3) under a group translated to
-    (10,0,0), so it sits at world (11,2,-3) with the model.
+    The bodies' rest poses are model/rest-space values and the Bullet world
+    runs there, so the joint frame is stored as-is.  An offset
+    {model}_RigidBodies group is organization only: the guide is placed (and
+    then driven) at the frame's world position instead of being moved by the
+    group, exactly like a body guide.
     """
     group, solver, _ja, _jb = _make_physics_scene()
     _add_bodies(solver, 2)
@@ -300,20 +312,22 @@ def test_frame_in_group_space():
     base = _joint_guide_at(solver, 0)
     local_pos = cmds.getAttr(f"{base}.translate")[0]
     assert_true(
-        approx_equal_tuple(local_pos, (1.0, 2.0, -3.0)),
-        f"joint local frame should be the PMX frame {local_pos}",
+        approx_equal_tuple(local_pos, (-9.0, 2.0, -3.0)),
+        f"joint guide local position should compensate the group {local_pos}",
     )
     world_pos = cmds.xform(base, query=True, worldSpace=True, translation=True)
     assert_true(
-        approx_equal_tuple(world_pos, (11.0, 2.0, -3.0)),
-        f"joint should move with the group {world_pos}",
+        approx_equal_tuple(world_pos, (1.0, 2.0, -3.0)),
+        f"joint frame should stay in the bodies' rest space {world_pos}",
     )
-    # Moving the frame must re-run the solver: the transform drives frameMatrix.
-    frame_source = cmds.listConnections(
-        f"{_joint_at(solver, 0)}.frameMatrix", source=True, plugs=True
+    assert_true(
+        approx_equal_tuple(
+            cmds.getAttr(f"{_joint_at(solver, 0)}.jointRestTranslate")[0],
+            (1.0, 2.0, -3.0),
+        ),
+        "jointRestTranslate should hold the PMX frame in world space",
     )
-    assert_eq(frame_source, [f"{base}.worldMatrix"], "frameMatrix not wired")
-    print("✓ joint frame is the node's transform in the rigid bodies group's space")
+    print("✓ joint frame stored in the bodies' rest space; guide placed there")
     return True
 
 
@@ -479,6 +493,11 @@ def test_joint_viewport_link_inputs():
     cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
     joint = _joint_at(solver, 0)
 
+    assert_true(
+        cmds.isConnected(f"{solver}.outJointDisplay[0]", f"{joint}.jointDisplay"),
+        "joint display configuration must be a solver-driven input",
+    )
+
     selection = om.MSelectionList()
     selection.add(joint)
     joint_fn = om.MFnDependencyNode(selection.getDependNode(0))
@@ -502,6 +521,139 @@ def test_joint_viewport_link_inputs():
             tuple(pose.child(axis).asMDistance().asCentimeters() for axis in range(3))
         )
     assert_true(positions[0] != positions[1], "link endpoints must be distinct")
+    return True
+
+
+def test_joint_display_configuration_updates():
+    """Display inputs react to repeated paused edits in DG, Serial and Parallel."""
+    from maya.api import OpenMaya as om
+
+    original_mode = cmds.evaluationManager(query=True, mode=True)[0]
+    try:
+        for mode in ("off", "serial", "parallel"):
+            _group, solver, _ja, _jb = _make_physics_scene()
+            cmds.evaluationManager(mode=mode)
+            cmds.connectAttr("time1.outTime", f"{solver}.time")
+            for index, x in enumerate((-2.0, 2.0)):
+                cmds.pmxRigidBody(
+                    solver,
+                    name=f"Display{index}",
+                    position=(x, 0, 0),
+                    physicsMode="physics",
+                )
+            cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
+            joint = _joint_at(solver, 0)
+            body_a = _body_shape_at(solver, 0)
+            body_b = _body_shape_at(solver, 1)
+            cmds.currentTime(1)
+            cmds.getAttr(f"{solver}.outStep")
+            radius = cmds.getAttr(f"{joint}.jointHubRadius")
+            assert_true(radius > 0, f"{mode}: nonzero hub radius")
+            assert_true(cmds.getAttr(f"{joint}.jointActive"), f"{mode}: active joint")
+
+            for scale in (2.0, 0.5, 1.0):
+                cmds.setAttr(f"{solver}.jointDisplayScale", scale)
+                assert_true(
+                    abs(cmds.getAttr(f"{joint}.jointHubRadius") - radius * scale)
+                    < 1e-8,
+                    f"{mode}: scale edit updates the display without a time change",
+                )
+            for enabled in (False, True, False, True):
+                cmds.setAttr(f"{body_b}.bodyEnabled", enabled)
+                assert_eq(cmds.getAttr(f"{joint}.jointActive"), enabled, mode)
+            cmds.connectAttr(f"{body_a}.message", f"{joint}.jointBodyB", force=True)
+            assert_true(
+                not cmds.getAttr(f"{joint}.jointActive"), "same body is inactive"
+            )
+            cmds.connectAttr(f"{body_b}.message", f"{joint}.jointBodyB", force=True)
+            assert_true(
+                cmds.getAttr(f"{joint}.jointActive"), "reconnected joint is active"
+            )
+
+            cmds.setAttr(f"{joint}.jointLinearMin", -2, 0, 0, type="double3")
+            cmds.setAttr(f"{joint}.jointLinearMax", 3, 0, 0, type="double3")
+            selection = om.MSelectionList()
+            selection.add(joint)
+            bounds = om.MFnDagNode(selection.getDagPath(0)).boundingBox
+            assert_true(bounds.min.x < -2 and bounds.max.x > 3, "bounds include limits")
+            before = cmds.getAttr(f"{_joint_guide_at(solver, 0)}.translate")[0]
+            for frame in range(2, 6):
+                cmds.currentTime(frame)
+                cmds.getAttr(f"{solver}.outStep")
+                assert_eq(cmds.getAttr(f"{joint}.jointHubRadius"), radius, mode)
+                assert_true(cmds.getAttr(f"{joint}.jointActive"), mode)
+            after = cmds.getAttr(f"{_joint_guide_at(solver, 0)}.translate")[0]
+            assert_true(after[1] < before[1], f"{mode}: guide follows the falling body")
+            cmds.delete(cmds.listRelatives(body_b, parent=True))
+            assert_true(
+                not cmds.getAttr(f"{joint}.jointActive"), "deleted body is inactive"
+            )
+    finally:
+        cmds.evaluationManager(mode=original_mode)
+    return True
+
+
+def test_joint_display_does_not_drive_simulation():
+    """Display reads leave physics dirty; pose changes leave display inputs clean."""
+    original_mode = cmds.evaluationManager(query=True, mode=True)[0]
+    try:
+        _group, solver, _ja, _jb = _make_physics_scene()
+        cmds.evaluationManager(mode="off")
+        _add_bodies(solver, 2)
+        cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
+        joint = _joint_at(solver, 0)
+        cmds.getAttr(f"{solver}.outStep")
+        cmds.getAttr(f"{joint}.jointHubRadius")
+        cmds.setAttr(f"{solver}.time", 2)
+        assert_true(
+            cmds.isDirty(f"{solver}.outStep", datablock=True), "time dirties physics"
+        )
+        assert_true(
+            not cmds.isDirty(f"{joint}.jointHubRadius"),
+            "time must not dirty the hub's display connection",
+        )
+        cmds.setAttr(f"{solver}.jointDisplayScale", 2)
+        cmds.getAttr(f"{joint}.jointHubRadius")
+        cmds.getAttr(f"{joint}.jointBoundsMin")
+        assert_true(
+            cmds.isDirty(f"{solver}.outStep", datablock=True),
+            "display evaluation must not advance physics",
+        )
+        cmds.getAttr(f"{solver}.outStep")
+        cmds.setAttr(f"{solver}.jointDisplayScale", 3)
+        assert_true(
+            not cmds.isDirty(f"{solver}.outStep", datablock=True),
+            "display scale must not dirty physics",
+        )
+    finally:
+        cmds.evaluationManager(mode=original_mode)
+    return True
+
+
+def test_joint_display_survives_scene_reload():
+    """New display connections persist; their derived values recompute after loading."""
+    import tempfile
+    from pathlib import Path
+
+    _group, solver, _ja, _jb = _make_physics_scene()
+    _add_bodies(solver, 2)
+    cmds.pmxRigidBodyConstraint(solver, bodyA=0, bodyB=1)
+    joint = _joint_at(solver, 0)
+    cmds.setAttr(f"{solver}.jointDisplayScale", 1.5)
+    radius = cmds.getAttr(f"{joint}.jointHubRadius")
+    with tempfile.TemporaryDirectory() as directory:
+        scene = Path(directory) / "joint_display.ma"
+        cmds.file(rename=str(scene))
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        cmds.file(str(scene), open=True, force=True)
+    assert_true(
+        cmds.isConnected(f"{solver}.outJointDisplay[0]", f"{joint}.jointDisplay")
+    )
+    assert_eq(cmds.getAttr(f"{joint}.jointHubRadius"), radius)
+    assert_true(cmds.getAttr(f"{joint}.jointActive"))
+    cmds.setAttr(f"{solver}.jointDisplayScale", 3)
+    assert_eq(cmds.getAttr(f"{joint}.jointHubRadius"), 2 * radius)
     return True
 
 
@@ -645,6 +797,12 @@ def test_joint_gallery_effective_modes():
 # ─────────────────────────────────────────────────────────────────────────
 
 _TESTS = [
+    ("Joint display configuration updates", test_joint_display_configuration_updates),
+    (
+        "Joint display independent of physics",
+        test_joint_display_does_not_drive_simulation,
+    ),
+    ("Joint display survives scene reload", test_joint_display_survives_scene_reload),
     ("Joint gallery effective modes", test_joint_gallery_effective_modes),
     ("Joint viewport link inputs", test_joint_viewport_link_inputs),
     ("Append joint stores data", test_append_joint_data),
@@ -656,7 +814,7 @@ _TESTS = [
         "Asymmetric angular limits (real model)",
         test_asymmetric_angular_limits_real_model,
     ),
-    ("Frame stored in the group's space", test_frame_in_group_space),
+    ("Frame stored in the bodies' rest space", test_frame_in_bodies_rest_space),
     ("Self-constraint rejected", test_self_constraint_rejected),
     ("Auto-increment joint indices", test_auto_increment_indices),
     ("Explicit index validated", test_explicit_index_validation),

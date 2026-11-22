@@ -134,10 +134,10 @@ def build(show_ui=True):
             )
             joint = _shape(solver, "jointShapes", index)
             # Set Maya-space attributes explicitly; command flags convert MMD handedness.
+            # The FRAME is authored on the node (the transform is solver-driven).
             for attr in _LIMITS:
                 _vec_attr(joint, attr, spec.get(attr, (0, 0, 0)))
-            transform = cmds.listRelatives(joint, parent=True, fullPath=True)[0]
-            cmds.setAttr(transform + ".rotate", *map(_angle, spec.get("rotation", (0, 0, 0))), type="double3")
+            cmds.setAttr(joint + ".jointRestRotate", *map(_angle, spec.get("rotation", (0, 0, 0))), type="double3")
             cmds.addAttr(group, longName="description", dataType="string")
             cmds.setAttr(group + ".description", spec["note"], type="string")
             # Gallery time is independent of the user's timeline; Step/Reset controls only these solvers.

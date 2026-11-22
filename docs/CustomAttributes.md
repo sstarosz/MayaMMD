@@ -125,17 +125,41 @@ These attributes make the model self-describing for fast root discovery and UI d
 > Bullet. The root attribute above simply records which solver node the model
 > uses.
 >
-> On the solver node itself, the per-body data is **not** stored as solver
-> attributes: `bodyShapes[]` is a message array connected to one
-> `pmxRigidBodyShape` node per body, and each shape node carries the body's
-> PMX-verbatim fields (`bodyColliderType`, `bodyShapeSize`, `bodyRestTranslate`/
-> `bodyRestRotate`, `bodyGroupId`, `bodyMaskGroup0..15`, `bodyMass`,
-> `bodyPhysicsMode`, …).  The shape's DAG parent transform is the body's
-> viewport GUIDE — the solver drives it to the body's CURRENT pose each frame
+> On the solver node itself, the per-body data is **not** authored: each body
+> lives on its own `pmxRigidBodyShape` node, and the shape publishes its
+> PMX-verbatim fields as one `body` compound (`bodyColliderType`,
+> `bodyShapeSize`, `bodyRestTranslate`/`bodyRestRotate`, `bodyGroupId`,
+> `bodyMaskGroup0..15`, `bodyMass`, `bodyPhysicsMode`, …) that `pmxRigidBody`
+> connects into the solver's `bodies[i]` input.  The compound children keep
+> their flat long names, so `getAttr`/`setAttr` on `shape.bodyMass` (and the
+> Attribute Editor template) work as before.  The solver also keeps a
+> `bodyShapes[]` message array tied to the same nodes — that is identity
+> (joints reference bodies by shape, and the output slots must not shift), not
+> data.  The shape's DAG parent transform is the body's viewport GUIDE — the
+> solver drives it to the body's CURRENT pose each frame
 > (`outGuideTranslate[]`/`outGuideRotate[]` on the solver), so the collider
 > follows the animation.  The REST pose lives in the shape's
 > `bodyRestTranslate`/`bodyRestRotate` attributes — edit those (or the other
 > body attributes) in the Attribute Editor to change the simulation.
+>
+> Joints follow the same pattern.  Each joint's PMX values — including its
+> FRAME, `jointRestTranslate`/`jointRestRotate` — live in one `joint` compound
+> on the `pmxRigidBodyJoint` node, connected into the solver's `joints[i]`
+> input.  `jointShapes[]` is identity (the joint node, the `jointBodyA`/`B`
+> links, the output slots).  The joint's parent transform is a solver-driven
+> GUIDE to the live attachment on body A
+> (`outJointTranslate[]`/`outJointRotate[]`); its translate/rotate channels are
+> locked.  Edit `jointRestTranslate`/`jointRestRotate` in the Attribute Editor
+> to move the constraint.
+>
+> The solver also connects `outJointDisplay[i]` into the joint's hidden
+> `jointDisplay` compound: `jointHubRadius` (double), `jointActive` (bool),
+> `jointBoundsMin` and `jointBoundsMax` (double3). These derived inputs are
+> non-storable; their connection persists and their values recompute on load.
+> Only configuration edits affect them, and reading them never advances the
+> simulation. `solverStep` remains the time-dependent input used to refresh
+> selected overlays. Older joints need re-importing to acquire the new display
+> connection. See [JointVisualization.md](JointVisualization.md).
 
 ---
 

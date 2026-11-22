@@ -250,6 +250,91 @@ def setup_test_environment() -> None:
     cmds.file(new=True, force=True)
 
 
+# Native sources that require a rebuild of MayaMMD.mll before they can be
+# exercised: an older binary cannot contain them.
+_NATIVE_SOURCE_SUFFIXES = (".cpp", ".hpp", ".h")
+
+# Filesystem timestamps have coarse granularity; do not call a build stale for
+# a difference this small.
+_STALE_TOLERANCE_SECONDS = 2.0
+
+
+def _newest_native_source(project_root: str) -> tuple[float, str]:
+    """Return the modification time and path of the newest native source file.
+
+    Scans the C++/C headers and sources under ``mmd/`` plus the root
+    ``CMakeLists.txt``, which is where the ``MayaMMD`` target lists its files.
+    """
+    candidates = [os.path.join(project_root, "CMakeLists.txt")]
+    for directory, _subdirs, files in os.walk(os.path.join(project_root, "mmd")):
+        candidates.extend(
+            os.path.join(directory, name)
+            for name in files
+            if name.endswith(_NATIVE_SOURCE_SUFFIXES)
+        )
+
+    newest: tuple[float, str] = (0.0, "")
+    for path in candidates:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if mtime > newest[0]:
+            newest = (mtime, path)
+    return newest
+
+
+def warn_if_plugin_is_stale(project_root: str, plugin_name: str = "MayaMMD") -> bool:
+    """Warn when the loaded plugin binary predates the native sources.
+
+    The suites load ``MayaMMD.mll`` from ``MAYA_PLUG_IN_PATH`` — the CMake
+    install tree, which only ``cmake --build`` of *that* preset refreshes.
+    Building another preset (``out/build/tidy``) or changing a node without
+    rebuilding leaves an old binary in place, and every attribute or node type
+    the tests demand then fails as if the branch had regressed.
+
+    Args:
+        project_root: Workspace root used to locate the native sources.
+        plugin_name:  Loaded Maya plugin name (default ``"MayaMMD"``).
+
+    Returns:
+        ``True`` when the plugin is older than the newest native source.
+    """
+    plugin_path = cmds.pluginInfo(plugin_name, query=True, path=True) or ""
+    if not plugin_path:
+        return False
+    try:
+        plugin_mtime = os.path.getmtime(plugin_path)
+    except OSError:
+        return False
+
+    source_mtime, source_path = _newest_native_source(project_root)
+    if source_mtime <= plugin_mtime + _STALE_TOLERANCE_SECONDS:
+        return False
+
+    def stamp(value: float) -> str:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(value))
+
+    print(
+        color_text(
+            "\n"
+            "============================================================\n"
+            "  WARNING: the MayaMMD plugin binary is OLDER than the native\n"
+            "  sources it is testing. Native test failures are most likely a\n"
+            "  stale build, not a regression.\n"
+            f"    plugin: {plugin_path}\n"
+            f"            built  {stamp(plugin_mtime)}\n"
+            f"    source: {source_path}\n"
+            f"            edited {stamp(source_mtime)}\n"
+            "  Rebuild the preset the tests load before trusting this run:\n"
+            "    cmake --build out/build/maya2026-release --config Release\n"
+            "============================================================\n",
+            "yellow",
+        )
+    )
+    return True
+
+
 def load_plugin(plugin_name: str = "MayaMMD") -> bool:
     """Load the MayaMMD Maya plugin.
 
@@ -302,6 +387,8 @@ def load_plugin(plugin_name: str = "MayaMMD") -> bool:
         # The C++ plugin (MayaMMD.mll) automatically calls mmd.plugin.initializePlugin(),
         # which registers boneMorphNode and boneBlendShape via findPlugin().
         # No additional Python plugin loading is needed.
+
+        warn_if_plugin_is_stale(project_root, plugin_name)
 
         return True
     except Exception as exc:

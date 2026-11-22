@@ -468,10 +468,14 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
     editorTemplate -beginScrollLayout;
     editorTemplate -suppress "bodyShapes";
     editorTemplate -suppress "jointShapes";
+    editorTemplate -suppress "bodies";
+    editorTemplate -suppress "joints";
     editorTemplate -suppress "outTranslate";
     editorTemplate -suppress "outRotate";
     editorTemplate -suppress "outGuideTranslate";
     editorTemplate -suppress "outGuideRotate";
+    editorTemplate -suppress "outJointTranslate";
+    editorTemplate -suppress "outJointRotate";
     editorTemplate -beginLayout "Solver" -collapse 0;
         editorTemplate -addControl "gravity";
     editorTemplate -endLayout;
@@ -489,8 +493,9 @@ global proc AEpmxRigidBodyNodeTemplate( string $nodeName ) {
 # each pmxRigidBodyShape's ``message``), and an XML template cannot show a
 # connection, so — like the solver — this node uses a MEL template: Body A /
 # Body B are ``attrNavigationControlGrp`` fields that name the connected body
-# and jump to it.  The transform above the shape is the joint frame (its
-# standard Translate / Rotate controls).
+# and jump to it.  The FRAME is authored here too
+# (``jointRestTranslate`` / ``jointRestRotate``); the transform above the shape
+# is driven by the solver to the live attachment, so edit the frame HERE.
 _AE_JOINT_TEMPLATE_MEL = """\
 global proc AEpmxRigidBodyJointBodyNew( string $plug ) {
     string $attr = `plugAttr $plug`;
@@ -511,6 +516,10 @@ global proc AEpmxRigidBodyJointTemplate( string $nodeName ) {
             "AEpmxRigidBodyJointBodyReplace" "jointBodyA";
         editorTemplate -callCustom "AEpmxRigidBodyJointBodyNew"
             "AEpmxRigidBodyJointBodyReplace" "jointBodyB";
+    editorTemplate -endLayout;
+    editorTemplate -beginLayout "Frame (rest)" -collapse 0;
+        editorTemplate -addControl -label "Translate" "jointRestTranslate";
+        editorTemplate -addControl -label "Rotate" "jointRestRotate";
     editorTemplate -endLayout;
     editorTemplate -beginLayout "Limits" -collapse 0;
         editorTemplate -addControl -label "Linear Min" "jointLinearMin";
