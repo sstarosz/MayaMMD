@@ -597,6 +597,22 @@ def test_whole_skeleton_move_rides_dynamic_chain_along():
         abs(after[1] - 6.0) < 0.1,
         f"dynamic body should ride along to y≈6 (got {after[1]:.3f})",
     )
+    for _ in range(3):
+        assert_true(
+            all(
+                abs(a - b) < 1e-6
+                for a, b in zip(_read_output(node, 1), after, strict=True)
+            ),
+            "repeated pulls after repositioning must leave the pose unchanged",
+        )
+    # Move and advance time together: reposition before the physics step.
+    cmds.setAttr(f"{joint_a}.translateY", 10)
+    cmds.currentTime(2)
+    advanced = _read_output(node, 1)
+    assert_true(
+        abs(advanced[1] - 11.0) < 0.1,
+        f"advancing frame must keep the character move (got {advanced[1]:.3f})",
+    )
     print(f"✓ whole-skeleton drag rode dynamic chain to y={after[1]:.3f}")
     return True
 
@@ -724,6 +740,40 @@ def test_paused_frame_edits_rerun_solver():
     print(
         "✓ joint limit, joint frame and body edits re-run the solver at a paused frame"
     )
+    return True
+
+
+def test_time_jumps_rebuild_and_resume():
+    """Rewinds and oversized jumps reset once; subsequent frames step normally."""
+    original_mode = cmds.evaluationManager(query=True, mode=True)[0]
+    try:
+        for mode in ("off", "serial", "parallel"):
+            setup_test_environment()
+            cmds.evaluationManager(mode=mode)
+            node = _create_node()
+            group = cmds.createNode("transform", name="jumpBodies")
+            _connect_time(node)
+            _set_dynamic_body(node, group, 0, rest_y=10.0)
+            cmds.currentTime(1)
+            start = _read_output(node, 0)
+            for frame in range(2, 7):
+                cmds.currentTime(frame)
+                _read_output(node, 0)
+            assert_true(_read_output(node, 0)[1] < start[1], f"{mode}: body falls")
+            for frame in (100, 1):
+                cmds.currentTime(frame)
+                reset = _read_output(node, 0)
+                assert_true(abs(reset[1] - start[1]) < 1e-6, f"{mode}: jump rebuilds")
+                for _ in range(3):
+                    assert_eq(_read_output(node, 0), reset, f"{mode}: repeated pull")
+                for step in range(1, 4):
+                    cmds.currentTime(frame + step)
+                    _read_output(node, 0)
+                assert_true(
+                    _read_output(node, 0)[1] < reset[1], f"{mode}: stepping resumes"
+                )
+    finally:
+        cmds.evaluationManager(mode=original_mode)
     return True
 
 
@@ -1570,6 +1620,7 @@ def test_restitution_limits_and_legacy_scene_values():
 
 
 _TESTS = [
+    ("Time jumps rebuild and resume", test_time_jumps_rebuild_and_resume),
     (
         "Restitution Bounds Preserve Legacy Data",
         test_restitution_limits_and_legacy_scene_values,
