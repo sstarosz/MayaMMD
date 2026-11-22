@@ -19,7 +19,7 @@
  *
  * Simulation steps need no callback: every joint's solverStep input is
  * connected to its solver's outStep, and the joint node marks its drawing
- * dirty after each step (RigidBodyJoint::postEvaluation).
+ * dirty after each step (RigidBodyJoint::preEvaluation).
  *
  * Everything here runs on the main thread (DG preparation and event
  * callbacks).  install()/uninstall() are called from the plugin entry points.

@@ -299,17 +299,6 @@ MStatus RigidBodyJoint::preEvaluation(const MDGContext& context,
     return MPxLocatorNode::preEvaluation(context, evaluationNode);
 }
 
-MStatus RigidBodyJoint::postEvaluation(const MDGContext& context,
-                                       const MEvaluationNode& evaluationNode,
-                                       PostEvaluationType evalType)
-{
-    if (context.isNormal())
-    {
-        RigidBodyJointGeometryOverride::poseChanged(thisMObject());
-    }
-    return MPxLocatorNode::postEvaluation(context, evaluationNode, evalType);
-}
-
 MBoundingBox RigidBodyJoint::boundingBox() const
 {
     // These are this node's configuration-only inputs. No solver lookup,

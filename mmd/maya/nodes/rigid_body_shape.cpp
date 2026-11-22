@@ -288,8 +288,8 @@ MStatus RigidBodyShape::initialize()
 // rebuilding anything).
 MStatus RigidBodyShape::setDependentsDirty(const MPlug& plug, MPlugArray& affected)
 {
-    // Default topologyChanged: see the note in RigidBodyJoint::postEvaluation
-    // about why false leaves the geometry stale.
+    // A shape edit can change the collider's vertex data, so mark it as a
+    // topology change: VP2 must re-run populateGeometry, not just updateDG().
     MHWRender::MRenderer::setGeometryDrawDirty(thisMObject());
     return MPxLocatorNode::setDependentsDirty(plug, affected);
 }

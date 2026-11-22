@@ -89,8 +89,6 @@ class RigidBodyJoint : public MPxLocatorNode
     MStatus setDependentsDirty(const MPlug& plug, MPlugArray& affected) override;
     MStatus preEvaluation(const MDGContext& context,
                           const MEvaluationNode& evaluationNode) override;
-    MStatus postEvaluation(const MDGContext& context, const MEvaluationNode& evaluationNode,
-                           PostEvaluationType evalType) override;
 
     // Registration helpers
     static void* creator();

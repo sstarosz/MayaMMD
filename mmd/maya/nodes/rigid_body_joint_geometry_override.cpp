@@ -279,8 +279,9 @@ void RigidBodyJointGeometryOverride::inputChanged(const MObject& node, const MPl
 void RigidBodyJointGeometryOverride::inputsEvaluated(const MObject& node,
                                                      const MEvaluationNode& evaluationNode)
 {
-    // EM does not call setDependentsDirty during playback. Only configuration
-    // dirt prepares all hubs; postEvaluation handles a picked joint's pose.
+    // EM does not call setDependentsDirty during playback. Configuration dirt
+    // prepares all hubs; the remaining per-evaluation refresh belongs to a
+    // picked joint's overlay (poseChanged).
     for (const MObject& attribute : {
              RigidBodyJoint::aJoint,
              RigidBodyJoint::aJointDisplay,
@@ -296,10 +297,14 @@ void RigidBodyJointGeometryOverride::inputsEvaluated(const MObject& node,
             return;
         }
     }
+    poseChanged(node);
 }
 
 void RigidBodyJointGeometryOverride::poseChanged(const MObject& node)
 {
+    // A step changes only the live attachment frames a picked overlay reads,
+    // never the hub's vertex data: false keeps populateGeometry out of the
+    // per-frame path while still re-running updateDG().
     if (mmd::maya::rigid_body_display::isSelectedJoint(node))
     {
         MHWRender::MRenderer::setGeometryDrawDirty(node, false);
@@ -414,7 +419,7 @@ bool RigidBodyJointGeometryOverride::requiresGeometryUpdate() const
     // True would force a full update (solver queries + buffer upload) on
     // EVERY viewport refresh, camera tumbles included.  Everything the joint
     // draws from outside its node dirties it instead: solver steps and edits
-    // through RigidBodyJoint (setDependentsDirty / postEvaluation), selection
+    // through RigidBodyJoint (setDependentsDirty / preEvaluation), selection
     // and isolate changes through rigid_body_display, hidden bodies through the
     // outline watches.
     return false;
