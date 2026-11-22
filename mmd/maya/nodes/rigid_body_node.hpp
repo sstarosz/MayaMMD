@@ -113,6 +113,11 @@ class RigidBodyNode : public MPxLocatorNode
     {
         return mWorld ? mWorld->bodyShapes.indexOf(shape) : -1;
     }
+    // The pmxRigidBodyShape connected to one end of a pmxRigidBodyJoint
+    // (`end` = RigidBodyJoint::aJointBodyA / aJointBodyB); null when that end
+    // is unconnected or does not point at a rigid body.  Static: the body
+    // links are identity, independent of which solver owns the joint.
+    static MObject jointBodyShape(const MObject& joint, const MObject& end);
     // World matrix of the solver's DAG parent (the {model}_RigidBodies
     // group), identity when it has none.  Body and joint guide outputs are
     // expressed in this space (the bodies' rest poses live there).

@@ -28,6 +28,7 @@
 #include "rigid_body_display.hpp"
 
 #include "rigid_body_joint.hpp"
+#include "rigid_body_node.hpp"
 #include "rigid_body_shape.hpp"
 
 #include <maya/M3dView.h>
@@ -140,8 +141,8 @@ void resolveSelection(State& s)
         joint.joint = MObjectHandle(node);
         joint.solver = MObjectHandle(solver);
         const std::array<MObject, 2> shapes{
-            RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyA),
-            RigidBodyJoint::bodyShape(node, RigidBodyJoint::aJointBodyB),
+            RigidBodyNode::jointBodyShape(node, RigidBodyJoint::aJointBodyA),
+            RigidBodyNode::jointBodyShape(node, RigidBodyJoint::aJointBodyB),
         };
         joint.bodyA = MObjectHandle(shapes.at(0));
         joint.bodyB = MObjectHandle(shapes.at(1));

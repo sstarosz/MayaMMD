@@ -38,6 +38,7 @@
 #include <maya/MFnCompoundAttribute.h>
 #include <maya/MFnDagNode.h>
 #include <maya/MFnData.h>
+#include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMatrixAttribute.h>
 #include <maya/MFnMessageAttribute.h>
@@ -570,8 +571,10 @@ readJointData(const MObject& node, MDataBlock& dataBlock, const RigidBodyNode::B
         if (haveData && sources.length() != 0U)
         {
             const MObject joint = sources[0].node();
-            j.bodyA = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyA));
-            j.bodyB = shapes.indexOf(RigidBodyJoint::bodyShape(joint, RigidBodyJoint::aJointBodyB));
+            j.bodyA =
+                shapes.indexOf(RigidBodyNode::jointBodyShape(joint, RigidBodyJoint::aJointBodyA));
+            j.bodyB =
+                shapes.indexOf(RigidBodyNode::jointBodyShape(joint, RigidBodyJoint::aJointBodyB));
         }
         out.push_back(j);
     }
@@ -1596,6 +1599,18 @@ long RigidBodyNode::BodyShapes::indexOf(const MObject& shape) const
         }
     }
     return -1;
+}
+
+MObject RigidBodyNode::jointBodyShape(const MObject& joint, const MObject& end)
+{
+    MPlugArray sources;
+    MPlug(joint, end).connectedTo(sources, true, false);
+    if (sources.length() == 0)
+    {
+        return MObject::kNullObj;
+    }
+    const MObject shape = sources[0].node();
+    return MFnDependencyNode(shape).typeId() == RigidBodyShape::kTypeId ? shape : MObject::kNullObj;
 }
 
 MMatrix RigidBodyNode::groupWorldMatrix(const MObject& solver)

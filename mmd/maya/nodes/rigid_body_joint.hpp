@@ -81,7 +81,7 @@ class RigidBodyJoint : public MPxLocatorNode
     // transform IS the live attachment on body A, so the box is static per
     // configuration (the limits and the hub radius) and does not follow the
     // pose — the DAG transform does.
-    bool isBounded() const override { return true; }
+    bool isBounded() const override;
     MBoundingBox boundingBox() const override;
 
     // Forward this node's input changes to the drawing implementation in both
@@ -93,10 +93,6 @@ class RigidBodyJoint : public MPxLocatorNode
     // Registration helpers
     static void* creator();
     static MStatus initialize();
-
-    // The pmxRigidBodyShape connected to `end` (aJointBodyA / aJointBodyB);
-    // null when the end is unconnected or not a rigid body.
-    static MObject bodyShape(const MObject& joint, const MObject& end);
 
     // ------------------------------------------------------------------
     // Attributes — the PMX joint data, including the FRAME.  The frame is

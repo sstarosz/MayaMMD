@@ -147,8 +147,8 @@ class RigidBodyJointGeometryOverride : public MHWRender::MPxGeometryOverride
                                   const MHWRender::MFrameContext& frameContext) const;
 
     // The joint's own plugs, resolved once (the attributes never change).  The
-    // bodies are connections, read with RigidBodyJoint::bodyShape; the solver
-    // is the `solver` message destination.
+    // bodies are connections, read with RigidBodyNode::jointBodyShape; the
+    // solver is the `solver` message destination.
     struct Plugs
     {
         MPlug drawMode;

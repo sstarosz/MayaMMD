@@ -483,8 +483,8 @@ void RigidBodyJointGeometryOverride::updateDG()
     {
         resolveSolver();
         const std::array<MObject, 2> bodyShapes{
-            RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA),
-            RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB),
+            RigidBodyNode::jointBodyShape(fJoint, RigidBodyJoint::aJointBodyA),
+            RigidBodyNode::jointBodyShape(fJoint, RigidBodyJoint::aJointBodyB),
         };
         cacheBodyOutlines(bodyShapes);
     }
@@ -521,9 +521,9 @@ void RigidBodyJointGeometryOverride::resolveSolver()
     // reads below are the current frame's.
     fPlugs.solverStep.asDouble();
     fState.definition.bodyA =
-        solver->bodyIndex(RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyA));
+        solver->bodyIndex(RigidBodyNode::jointBodyShape(fJoint, RigidBodyJoint::aJointBodyA));
     fState.definition.bodyB =
-        solver->bodyIndex(RigidBodyJoint::bodyShape(fJoint, RigidBodyJoint::aJointBodyB));
+        solver->bodyIndex(RigidBodyNode::jointBodyShape(fJoint, RigidBodyJoint::aJointBodyB));
     MMatrix bodyA;
     MMatrix bodyB;
     fState.live = solver->jointViewportFrames(fState.definition, bodyA, bodyB,

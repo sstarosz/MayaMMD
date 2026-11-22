@@ -22,7 +22,6 @@
 
 #include <maya/MDGContext.h>
 #include <maya/MFnCompoundAttribute.h>
-#include <maya/MFnDependencyNode.h>
 #include <maya/MFnEnumAttribute.h>
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
@@ -36,7 +35,6 @@
 #include "joint_display.hpp"
 #include "maya_utils.hpp"
 #include "rigid_body_joint_geometry_override.hpp"
-#include "rigid_body_shape.hpp"
 
 #include <maya/MPlugArray.h>
 
@@ -299,6 +297,14 @@ MStatus RigidBodyJoint::preEvaluation(const MDGContext& context,
     return MPxLocatorNode::preEvaluation(context, evaluationNode);
 }
 
+// ===========================================================================
+// Bounds
+// ===========================================================================
+bool RigidBodyJoint::isBounded() const
+{
+    return true;
+}
+
 MBoundingBox RigidBodyJoint::boundingBox() const
 {
     // These are this node's configuration-only inputs. No solver lookup,
@@ -306,19 +312,4 @@ MBoundingBox RigidBodyJoint::boundingBox() const
     const Double3 low = mmd::maya::readPlugDouble3(MPlug(thisMObject(), aJointBoundsMin));
     const Double3 high = mmd::maya::readPlugDouble3(MPlug(thisMObject(), aJointBoundsMax));
     return {MPoint(low.x, low.y, low.z), MPoint(high.x, high.y, high.z)};
-}
-
-// ===========================================================================
-// Joint body connections (used by the display path)
-// ===========================================================================
-MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
-{
-    MPlugArray sources;
-    MPlug(joint, end).connectedTo(sources, true, false);
-    if (sources.length() == 0)
-    {
-        return MObject::kNullObj;
-    }
-    const MObject shape = sources[0].node();
-    return MFnDependencyNode(shape).typeId() == RigidBodyShape::kTypeId ? shape : MObject::kNullObj;
 }
