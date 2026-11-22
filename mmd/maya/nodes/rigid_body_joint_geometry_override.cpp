@@ -177,6 +177,44 @@ void bakeHub(const Mesh& hub, double radius, std::vector<float>& positions,
     return plug.isNull() ? mmd::core::Double3{} : mmd::maya::readPlugDouble3(plug);
 }
 
+// The joint's PMX values, decoded exactly as the solver decodes its `joints[]`
+// input.  The FRAME comes from the rest-space attributes — the DAG transform is
+// the solver-driven guide, not the frame — and bodyA/bodyB stay -1: the bodies
+// are connections (bodyShape), which only the solver can turn into its body
+// indices.  File-local: updateDG() is the only reader, so the joint node stays a
+// plain data holder and its header needs no core type.
+bool readJointDefinition(const MObject& node, mmd::core::RigidBodySimulation::JointDefinition& out)
+{
+    if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
+    {
+        return false;
+    }
+    MFnDependencyNode depFn(node);
+    if (depFn.typeId() != RigidBodyJoint::kTypeId)
+    {
+        return false;
+    }
+
+    MStatus stat;
+    const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
+    {
+        MPlug p = depFn.findPlug(a, true, &stat);
+        return p;
+    };
+
+    out.bodyA = -1;
+    out.bodyB = -1;
+    out.frameT = readDouble3(plug(RigidBodyJoint::aJointRestTranslate));
+    out.frameR = readDouble3(plug(RigidBodyJoint::aJointRestRotate));
+    out.linearMin = readDouble3(plug(RigidBodyJoint::aJointLinearMin));
+    out.linearMax = readDouble3(plug(RigidBodyJoint::aJointLinearMax));
+    out.angularMin = readDouble3(plug(RigidBodyJoint::aJointAngularMin));
+    out.angularMax = readDouble3(plug(RigidBodyJoint::aJointAngularMax));
+    out.linearStiffness = readDouble3(plug(RigidBodyJoint::aJointLinearStiffness));
+    out.angularStiffness = readDouble3(plug(RigidBodyJoint::aJointAngularStiffness));
+    return true;
+}
+
 [[nodiscard]] MPoint toPoint(const mmd::core::Double3& d)
 {
     return {d.x, d.y, d.z};
@@ -417,7 +455,7 @@ void RigidBodyJointGeometryOverride::updateDG()
     // which is what the overlay ownership rules key off.
     fState.picked = mmd::maya::rigid_body_display::isSelectedJoint(fJoint);
     fState.definition = {};
-    if (!RigidBodyJoint::readJointDefinition(fJoint, fState.definition))
+    if (!readJointDefinition(fJoint, fState.definition))
     {
         return;
     }

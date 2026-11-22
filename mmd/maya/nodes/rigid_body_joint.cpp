@@ -37,29 +37,15 @@
 #include "maya_utils.hpp"
 #include "rigid_body_joint_geometry_override.hpp"
 #include "rigid_body_shape.hpp"
-#include "rigid_body_simulation.hpp"
 
 #include <maya/MPlugArray.h>
 
 #include <array>
 
 using mmd::core::Double3;
-using mmd::core::RigidBodySimulation;
 
 namespace
 {
-void readDouble3(const MPlug& plug, Double3& out)
-{
-    // A missing attribute (never for a pmxRigidBodyJoint, whose type is checked
-    // first) keeps the JointDefinition default: readPlugDouble3 would call
-    // asMDataHandle() on a null plug.
-    if (plug.isNull())
-    {
-        return;
-    }
-    out = mmd::maya::readPlugDouble3(plug);
-}
-
 // Numeric attribute helper: storable, non-keyable, readable+writable.
 [[nodiscard]] MObject makeNumeric(MFnNumericAttribute& fn, const MString& longName,
                                   const MString& shortName, MFnNumericData::Type type,
@@ -334,41 +320,8 @@ MBoundingBox RigidBodyJoint::boundingBox() const
 }
 
 // ===========================================================================
-// Joint data reading (used by the display path)
+// Joint body connections (used by the display path)
 // ===========================================================================
-bool RigidBodyJoint::readJointDefinition(const MObject& node,
-                                         RigidBodySimulation::JointDefinition& out)
-{
-    if (node.isNull() || !node.hasFn(MFn::kDependencyNode))
-    {
-        return false;
-    }
-    MFnDependencyNode depFn(node);
-    if (depFn.typeId() != kTypeId)
-    {
-        return false;
-    }
-
-    MStatus stat;
-    const auto plug = [&depFn, &stat](const MObject& a) -> MPlug
-    {
-        MPlug p = depFn.findPlug(a, true, &stat);
-        return p;
-    };
-
-    out.bodyA = -1; // connections, resolved by the solver (bodyShape)
-    out.bodyB = -1;
-    readDouble3(plug(aJointRestTranslate), out.frameT);
-    readDouble3(plug(aJointRestRotate), out.frameR);
-    readDouble3(plug(aJointLinearMin), out.linearMin);
-    readDouble3(plug(aJointLinearMax), out.linearMax);
-    readDouble3(plug(aJointAngularMin), out.angularMin);
-    readDouble3(plug(aJointAngularMax), out.angularMax);
-    readDouble3(plug(aJointLinearStiffness), out.linearStiffness);
-    readDouble3(plug(aJointAngularStiffness), out.angularStiffness);
-    return true;
-}
-
 MObject RigidBodyJoint::bodyShape(const MObject& joint, const MObject& end)
 {
     MPlugArray sources;

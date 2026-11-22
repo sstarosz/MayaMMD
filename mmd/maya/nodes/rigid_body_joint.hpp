@@ -45,8 +45,6 @@
 #include <maya/MPxLocatorNode.h>
 #include <maya/MTypeId.h>
 
-#include "rigid_body_simulation.hpp" // core JointDefinition
-
 // ===========================================================================
 // RigidBodyJoint
 // ===========================================================================
@@ -98,16 +96,6 @@ class RigidBodyJoint : public MPxLocatorNode
     static void* creator();
     static MStatus initialize();
 
-    // Read this node into a core JointDefinition (the display path uses it;
-    // the solver reads the same values from its `joints[]` data-block input).
-    // Everything comes from attributes — the FRAME included, in the bodies'
-    // rest space (world at import), so the DAG transform is NOT read.
-    // bodyA / bodyB stay -1: the bodies are connections (bodyShape), which
-    // only the solver can turn into its body indices
-    // (RigidBodyNode::bodyIndex).  Returns false when `node` is not a
-    // pmxRigidBodyJoint.
-    static bool readJointDefinition(const MObject& node,
-                                    mmd::core::RigidBodySimulation::JointDefinition& out);
     // The pmxRigidBodyShape connected to `end` (aJointBodyA / aJointBodyB);
     // null when the end is unconnected or not a rigid body.
     static MObject bodyShape(const MObject& joint, const MObject& end);
