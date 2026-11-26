@@ -309,6 +309,9 @@ hub in that model.
 
 ## Trying it
 
+For the complete bone → body → solver → bone flow and a gallery with visible
+skeletons, see [Rigid-body architecture](./RigidBodyArchitecture.md).
+
 `scripts/maya/joint_glyph_demo.py` builds a gallery of 18 joints, each showing
 one case (line, plane, box, fixed offsets, free axes, angular limits, springs,
 rotated frames, body modes). It never clears, replaces, or saves your scene:

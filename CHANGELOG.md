@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Physics flow gallery:** added a node/solver architecture overview and an
+  additive Maya demo with visible bones, all nine body-mode pairs, boneless
+  bodies and a parented chain, with independent step/reset controls.
+
 - **Simpler solver lifecycle:** the solver keeps ownership of its world during
   playback. One frame routine replaces three transition helpers, removes repeated
   movement detection and preserves rebuild, reposition and same-frame behavior.

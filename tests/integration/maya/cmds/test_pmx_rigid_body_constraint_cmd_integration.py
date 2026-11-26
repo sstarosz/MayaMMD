@@ -793,10 +793,74 @@ def test_joint_gallery_effective_modes():
     return True
 
 
+def test_rigid_body_flow_gallery():
+    """The teaching gallery preserves scene state and demonstrates actual wiring."""
+    import math
+    import runpy
+    from pathlib import Path
+
+    setup_test_environment()
+    sentinel = cmds.createNode("transform", name="keepMe")
+    cmds.select(sentinel)
+    time = cmds.currentTime(query=True)
+    api = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[4] / "scripts/maya/rigid_body_flow_demo.py"
+        ),
+        run_name="flow_gallery_test",
+    )
+    gallery = api["build"](show_ui=False)
+    assert_eq(len(gallery["cases"]), 12, "flow case count")
+    assert_eq(cmds.ls(selection=True), [sentinel], "selection preserved")
+    for entry in gallery["cases"]:
+        solver = entry["solver"]
+        for index, bone in enumerate(entry["bones"]):
+            mode = entry["modes"][index]
+            assert_eq(
+                cmds.isConnected(
+                    bone + ".worldMatrix[0]", f"{solver}.anchorWorlds[{index}]"
+                ),
+                mode == "followBone",
+                "only followBone supplies live anchors",
+            )
+            for channel, output, expected in (
+                ("translate", "outTranslate", mode == "physics"),
+                ("rotate", "outRotate", mode != "followBone"),
+            ):
+                assert_eq(
+                    cmds.isConnected(
+                        f"{solver}.{output}[{index}]", bone + "." + channel
+                    ),
+                    expected,
+                    f"{mode} {channel} write-back",
+                )
+    hybrid = gallery["cases"][2]["bones"][1]
+    before = cmds.getAttr(hybrid + ".translate")
+    falling = gallery["cases"][10]["solver"] + ".outGuideTranslate[1]"
+    initial_y = cmds.getAttr(falling)[0][1]
+    api["step"](gallery, 30)
+    assert_true(cmds.getAttr(falling)[0][1] < initial_y, "boneless dynamics fall")
+    assert_eq(cmds.getAttr(hybrid + ".translate"), before, "hybrid retains translation")
+    for entry in gallery["cases"]:
+        for index in range(len(entry["bodies"])):
+            pose = cmds.getAttr(f"{entry['solver']}.outGuideTranslate[{index}]")[0]
+            assert_true(all(math.isfinite(v) for v in pose), "finite gallery pose")
+    api["reset"](gallery)
+    assert_true(
+        abs(cmds.getAttr(falling)[0][1] - initial_y) < 1e-4, "reset restores pose"
+    )
+    second = api["build"](show_ui=False)
+    assert_true(second["root"] != gallery["root"], "reruns are independent")
+    assert_true(cmds.objExists(sentinel), "existing scene preserved")
+    assert_eq(cmds.currentTime(query=True), time, "timeline preserved")
+    return True
+
+
 # Test Registry (static — consumed by run_all_integration_tests.py)
 # ─────────────────────────────────────────────────────────────────────────
 
 _TESTS = [
+    ("Rigid body flow gallery", test_rigid_body_flow_gallery),
     ("Joint display configuration updates", test_joint_display_configuration_updates),
     (
         "Joint display independent of physics",

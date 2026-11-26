@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980" role="img" aria-label="Proposed Workbench run detail: header with decision and actions, a summary strip, an accordion of five steps with the Verify step expanded into reviewers and gates, and findings with evidence and fixes.">
+  <defs>
+    <style>
+      .sans { font-family: ui-sans-serif, "Segoe UI", system-ui, sans-serif; }
+      .mono { font-family: ui-monospace, Consolas, "Courier New", monospace; }
+      .h1 { font-size: 17px; font-weight: 600; fill: #1b1f23; }
+      .h2 { font-size: 12.5px; font-weight: 600; fill: #1b1f23; }
+      .lbl { font-size: 9.5px; letter-spacing: 1.2px; fill: #5b6472; }
+      .body { font-size: 11.5px; fill: #1b1f23; }
+      .muted { font-size: 11px; fill: #5b6472; }
+      .small { font-size: 10px; fill: #5b6472; }
+      .ok { fill: #1f7a4d; }
+      .warn { fill: #b45309; }
+      .err { fill: #b42318; }
+      .acc { fill: #2b6cb0; }
+      .card { fill: #ffffff; stroke: #d8dee6; }
+      .divider { stroke: #e6eaef; }
+      .pill { fill: #fff4e5; stroke: #e9b46a; }
+      .btn { fill: #ffffff; stroke: #d8dee6; }
+      .rowhl { fill: #f2f6fb; }
+      .findwarn { fill: #fffaf0; stroke: #e9b46a; }
+      .findnote { fill: #ffffff; stroke: #d8dee6; }
+      .chip { fill: #f4f6f9; stroke: #dde3ea; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="980" fill="#f7f8fa"/>
+  <text class="sans h1" x="24" y="34">Workbench — run detail (proposed)</text>
+  <text class="sans muted" x="24" y="54">Runs is a ledger of workflow runs, newest first. The detail answers four questions: what ran, what it produced, what needs fixing, what to do next.</text>
+
+  <rect class="card" x="24" y="76" width="796" height="880" rx="10"/>
+
+  <text class="sans h1" x="44" y="112">#144  Add model-wide physics display controls</text>
+  <text class="sans muted" x="44" y="134">sstarosz/MayaMMD-Dev · branch issue-144-add-model-wide-physics-display-contr · started 2 h ago</text>
+  <rect class="pill" x="632" y="92" width="168" height="24" rx="12"/>
+  <text class="sans warn" x="644" y="108">! Needs attention (warn)</text>
+
+  <rect class="btn" x="44" y="150" width="86" height="26" rx="7"/><text class="sans body" x="62" y="167">Re-verify</text>
+  <rect class="btn" x="138" y="150" width="94" height="26" rx="7"/><text class="sans body" x="156" y="167">Implement</text>
+  <rect class="btn" x="240" y="150" width="86" height="26" rx="7"/><text class="sans body" x="256" y="167">Open diff</text>
+  <rect class="btn" x="334" y="150" width="112" height="26" rx="7"/><text class="sans body" x="348" y="167">Copy summary</text>
+  <rect class="btn" x="454" y="150" width="70" height="26" rx="7"/><text class="sans body" x="472" y="167">Cancel</text>
+  <text class="sans small" x="540" y="167">Autonomy: branch — commits locally, nothing is pushed without you</text>
+  <line class="divider" x1="44" y1="188" x2="800" y2="188"/>
+
+  <circle class="ok" cx="50" cy="208" r="4"/><text class="sans body" x="62" y="212">Planned 11 files</text>
+  <circle class="ok" cx="190" cy="208" r="4"/><text class="sans body" x="202" y="212">Implemented 11 files (+1680 −24)</text>
+  <circle class="warn" cx="404" cy="208" r="4"/><text class="sans body" x="416" y="212">Verified: 0 blockers · 4 warnings · 14 findings</text>
+  <circle cx="50" cy="230" r="4" fill="#ffffff" stroke="#98a2b3"/><text class="sans muted" x="62" y="234">Not delivered yet (M4) · 2 open questions from planning</text>
+  <line class="divider" x1="44" y1="248" x2="800" y2="248"/>
+
+  <text class="sans lbl" x="44" y="270">STEPS</text>
+  <text class="sans lbl" x="640" y="270">DURATION</text>
+
+  <text class="sans ok" x="48" y="292">✔</text><text class="sans body" x="70" y="292">1  Intake</text>
+  <text class="sans muted" x="180" y="292">development task, all three sections present</text>
+  <text class="sans muted" x="716" y="292">2 s</text><text class="sans muted" x="768" y="292">▸</text>
+
+  <text class="sans ok" x="48" y="322">✔</text><text class="sans body" x="70" y="322">2  Plan</text>
+  <text class="sans muted" x="180" y="322">planner agent · 11 files · 9 risks · 2 questions</text>
+  <text class="sans muted" x="710" y="322">8 min</text><text class="sans muted" x="768" y="322">▸</text>
+
+  <text class="sans ok" x="48" y="352">✔</text><text class="sans body" x="70" y="352">3  Implement</text>
+  <text class="sans muted" x="180" y="352">implementer agent · 11 files · 7 commands · 0 deviations</text>
+  <text class="sans muted" x="708" y="352">15 min</text><text class="sans muted" x="768" y="352">▸</text>
+
+  <rect class="rowhl" x="44" y="360" width="756" height="30" rx="6"/>
+  <text class="sans warn" x="48" y="382">!</text><text class="sans h2" x="70" y="382">4  Verify</text>
+  <text class="sans muted" x="180" y="382">5 reviewers · 4 gates · 0 blockers · 4 warnings</text>
+  <text class="sans muted" x="710" y="382">3 min</text><text class="sans acc" x="768" y="382">▾</text>
+
+  <text class="sans lbl" x="70" y="414">WHAT RAN</text>
+  <text class="sans lbl" x="470" y="414">RESULT</text>
+
+  <text class="sans body" x="70" y="436">Reviewer · Architecture</text>
+  <text class="sans ok" x="470" y="436">pass</text><text class="sans muted" x="530" y="436">0 findings · confidence high</text>
+  <text class="sans body" x="70" y="458">Reviewer · Constraints</text>
+  <text class="sans warn" x="470" y="458">warn</text><text class="sans muted" x="530" y="458">2 findings</text><text class="sans acc" x="768" y="458">▸</text>
+  <text class="sans body" x="70" y="480">Reviewer · Physics</text>
+  <text class="sans warn" x="470" y="480">warn</text><text class="sans muted" x="530" y="480">6 findings</text><text class="sans acc" x="768" y="480">▸</text>
+  <text class="sans body" x="70" y="502">Reviewer · Maya matrix</text>
+  <text class="sans ok" x="470" y="502">pass</text><text class="sans muted" x="530" y="502">0 findings · confidence high</text>
+  <text class="sans body" x="70" y="524">Reviewer · Tests</text>
+  <text class="sans ok" x="470" y="524">pass</text><text class="sans muted" x="530" y="524">4 coverage findings</text><text class="sans acc" x="768" y="524">▸</text>
+
+  <text class="sans body" x="70" y="550">Gate · ruff format --check</text>
+  <text class="mono small" x="220" y="550">python -m ruff format --check mmd tests</text>
+  <text class="sans ok" x="470" y="550">pass</text><text class="sans muted" x="530" y="550">1.0 s</text>
+  <text class="sans body" x="70" y="572">Gate · ruff check</text>
+  <text class="mono small" x="220" y="572">python -m ruff check mmd tests</text>
+  <text class="sans warn" x="470" y="572">fail</text><text class="sans muted" x="530" y="572">0.4 s · advisory in CI</text><text class="sans acc" x="760" y="572">▸ output</text>
+  <text class="sans body" x="70" y="594">Gate · mypy</text>
+  <text class="mono small" x="220" y="594">python -m mypy mmd tests</text>
+  <text class="sans warn" x="470" y="594">fail</text><text class="sans muted" x="530" y="594">7.4 s · advisory in CI</text><text class="sans acc" x="760" y="594">▸ output</text>
+  <text class="sans body" x="70" y="616">Gate · pytest</text>
+  <text class="mono small" x="220" y="616">python -m pytest tests/unit_tests …</text>
+  <text class="sans ok" x="470" y="616">pass</text><text class="sans muted" x="530" y="616">8.3 s · 579 passed</text>
+
+  <line class="divider" x1="44" y1="638" x2="800" y2="638"/>
+  <text class="sans lbl" x="44" y="660">FINDINGS (14)</text>
+  <rect class="chip" x="150" y="646" width="44" height="20" rx="10"/><text class="sans small" x="160" y="660">all 14</text>
+  <rect class="chip" x="200" y="646" width="74" height="20" rx="10"/><text class="sans small" x="210" y="660">blocker 0</text>
+  <rect class="chip" x="280" y="646" width="64" height="20" rx="10"/><text class="sans small" x="290" y="660">warn 4</text>
+  <rect class="chip" x="350" y="646" width="64" height="20" rx="10"/><text class="sans small" x="360" y="660">note 10</text>
+
+  <rect class="findwarn" x="44" y="676" width="756" height="86" rx="8"/>
+  <text class="sans warn" x="58" y="698">!</text>
+  <text class="sans h2" x="72" y="698">Physics · batched scene queries</text>
+  <rect class="chip" x="612" y="684" width="172" height="18" rx="4"/>
+  <text class="mono small" x="620" y="697">mmd/ui/tool_main_widget.py:560</text>
+  <text class="sans body" x="72" y="718">One model-wide click re-reads every model in the scene, so a 700-body model pays ~1100 listConnections twice.</text>
+  <text class="sans acc" x="72" y="738">Fix: classify from batched reads the way rigid_body_info._Columns already does.</text>
+  <text class="sans small" x="72" y="754">warn · found by the Physics reviewer · 3 similar notes in this step</text>
+
+  <rect class="findnote" x="44" y="772" width="756" height="34" rx="8"/>
+  <text class="sans warn" x="58" y="794">!</text>
+  <text class="sans body" x="72" y="794">Constraints · README still describes the old mirroring behaviour</text>
+  <text class="mono small" x="620" y="794">README.md:61</text>
+  <text class="sans muted" x="72" y="826">▸ 10 more notes</text>
+
+  <line class="divider" x1="44" y1="846" x2="800" y2="846"/>
+  <text class="sans muted" x="44" y="870">▸ Details: worktree, branch, base, artifact paths, raw event log</text>
+  <text class="sans small" x="44" y="896">Every claim above is one click from its evidence. Nothing on this screen is a status word without a phrase beside it.</text>
+
+  <text class="sans h2" x="860" y="100">How to read this layout</text>
+
+  <circle class="chip" cx="868" cy="132" r="10"/><text class="sans small" x="864" y="136">1</text>
+  <text class="sans body" x="886" y="130">Header names the task and</text>
+  <text class="sans body" x="886" y="146">the decision in words.</text>
+
+  <circle class="chip" cx="868" cy="180" r="10"/><text class="sans small" x="864" y="184">2</text>
+  <text class="sans body" x="886" y="178">Actions sit where the</text>
+  <text class="sans body" x="886" y="194">decision is made.</text>
+
+  <circle class="chip" cx="868" cy="228" r="10"/><text class="sans small" x="864" y="232">3</text>
+  <text class="sans body" x="886" y="226">Summary strip: counts only,</text>
+  <text class="sans body" x="886" y="242">no log lines.</text>
+
+  <circle class="chip" cx="868" cy="276" r="10"/><text class="sans small" x="864" y="280">4</text>
+  <text class="sans body" x="886" y="274">Steps answer "what ran":</text>
+  <text class="sans body" x="886" y="290">role, output count, duration.</text>
+
+  <circle class="chip" cx="868" cy="324" r="10"/><text class="sans small" x="864" y="328">5</text>
+  <text class="sans body" x="886" y="322">Substeps are the reviewers</text>
+  <text class="sans body" x="886" y="338">and gates, each with its real</text>
+  <text class="sans body" x="886" y="354">command, exit code, duration.</text>
+
+  <circle class="chip" cx="868" cy="392" r="10"/><text class="sans small" x="864" y="396">6</text>
+  <text class="sans body" x="886" y="390">Advisory gates say so, so a</text>
+  <text class="sans body" x="886" y="406">warning is not read as a defect.</text>
+
+  <circle class="chip" cx="868" cy="444" r="10"/><text class="sans small" x="864" y="448">7</text>
+  <text class="sans body" x="886" y="442">Findings first: severity, rule,</text>
+  <text class="sans body" x="886" y="458">evidence file:line, and a fix.</text>
+
+  <circle class="chip" cx="868" cy="496" r="10"/><text class="sans small" x="864" y="500">8</text>
+  <text class="sans body" x="886" y="494">Filters are counts, not verbs,</text>
+  <text class="sans body" x="886" y="510">so the reader knows the total.</text>
+
+  <circle class="chip" cx="868" cy="548" r="10"/><text class="sans small" x="864" y="552">9</text>
+  <text class="sans body" x="886" y="546">Paths and the raw log move</text>
+  <text class="sans body" x="886" y="562">behind one disclosure.</text>
+
+  <line class="divider" x1="860" y1="592" x2="1176" y2="592"/>
+  <text class="sans lbl" x="860" y="616">WHAT THE PANEL MUST BE ABLE TO ANSWER</text>
+  <text class="sans body" x="860" y="640">1  What is this task, and is it stuck?</text>
+  <text class="sans body" x="860" y="664">2  What did each step actually execute?</text>
+  <text class="sans body" x="860" y="688">3  Which files changed, and why each one?</text>
+  <text class="sans body" x="860" y="712">4  Which risks were identified?</text>
+  <text class="sans body" x="860" y="736">5  Why did a reviewer warn, with evidence?</text>
+  <text class="sans body" x="860" y="760">6  Why did a gate fail, and is it advisory?</text>
+  <text class="sans body" x="860" y="784">7  What should I do next — deliver or fix?</text>
+
+  <line class="divider" x1="860" y1="812" x2="1176" y2="812"/>
+  <text class="sans lbl" x="860" y="836">DATA THIS NEEDS</text>
+  <text class="sans muted" x="860" y="860">plan risks / files / questions</text>
+  <text class="sans muted" x="860" y="878">implementer file list with reasons</text>
+  <text class="sans muted" x="860" y="896">findings with evidence + fix</text>
+  <text class="sans muted" x="860" y="914">gate command, exit code, output tail</text>
+  <text class="sans muted" x="860" y="932">per-step durations from the event log</text>
+</svg>
